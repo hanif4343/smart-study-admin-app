@@ -655,19 +655,25 @@ const css = `
   }
   /* ── Mobile Responsive Updates ── */
   @media (max-width: 768px) {
-    .sidebar {
-      width: 70px; /* মোবাইলে সাইডবার ছোট হয়ে যাবে */
-      overflow-x: hidden;
-    }
-    .sidebar-logo-text, .sidebar-section-label, .nav-item span:not(.icon) {
-      display: none; /* মোবাইলে শুধু আইকন দেখাবে, লেখা হাইড হবে */
-    }
-    .main {
-      margin-left: 70px; /* সাইডবার ছোট হওয়ায় মেইন কন্টেন্ট ডানে সরবে */
-    }
-    .topbar {
-      padding: 10px;
-    }
+  .sidebar {
+    display: none; /* মোবাইলে বামের মেনু হাইড থাকবে */
+  }
+  .main {
+    margin-left: 0 !important; /* কন্টেন্ট পুরো স্ক্রিনে ছড়িয়ে যাবে */
+    padding-bottom: 70px; /* নিচের মেনুর জন্য জায়গা রাখা */
+  }
+  .stat-grid {
+    grid-template-columns: repeat(2, 1fr); /* কার্ডগুলো পাশাপাশি ২টা করে আসবে */
+    gap: 10px;
+  }
+  .topbar {
+    padding: 10px 15px;
+  }
+  .topbar-title {
+    font-size: 14px; /* টাইটেল ছোট করা */
+  }
+}
+
     .search-bar {
       width: 150px; /* সার্চ বার ছোট করা */
     }
@@ -921,28 +927,32 @@ function StudentsPage({ push }) {
     return matchSearch && matchTab;
   });
 
-    const activateUser = async (u) => {
-    const confirm = window.confirm(`${u.Name || u.name} কে কি অ্যাক্টিভ করতে চান?`);
-    if (!confirm) return;
+    // আপনার শিটের নাম 'Users' এবং সেখানে Status আপডেট করার লজিক
+const activateUser = async (u) => {
+  if (!window.confirm(`${u.Name || u.name} কে কি অ্যাক্টিভ করতে চান?`)) return;
 
-    push("info", "অ্যাক্টিভ করা হচ্ছে...", "");
-    try {
-      // এখানে আপনার GAS URL এ ডাটা পাঠানো হচ্ছে
-      await fetch(GAS_URL, {
-        method: "POST",
-        mode: "no-cors", 
-        body: JSON.stringify({
-          action: "updateStatus", // আপনার GAS এ এই action হ্যান্ডেলার থাকতে হবে
-          id: u.id || u.Phone, // বা যে ইউনিক আইডি আপনি ব্যবহার করেন
-          status: "active"
-        }),
-      });
-      push("success", "সফল!", "স্টুডেন্ট অ্যাক্টিভ করা হয়েছে।");
-      load(); // লিস্ট রিফ্রেশ করা
-    } catch (e) {
-      push("error", "ব্যর্থ", e.message);
-    }
-  };
+  push("info", "প্রসেস হচ্ছে...", "শিট আপডেট করা হচ্ছে");
+  
+  try {
+    const response = await fetch(GAS_URL, {
+      method: "POST",
+      mode: "no-cors", // ক্রস-অরিজিন ইস্যু এড়াতে
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "updateStatus", // এই নামটি আপনার GAS doPost এ ব্যবহার করবেন
+        phone: u.Phone || u.phone, // ফোন নম্বর দিয়ে স্টুডেন্ট খুঁজে বের করা হবে
+        status: "Active" // নতুন স্ট্যাটাস
+      }),
+    });
+
+    push("success", "সফল!", `${u.Name || u.name} এখন লগইন করতে পারবে।`);
+    // ডাটা রিলোড করুন যাতে তালিকায় আপডেট দেখা যায়
+    load(); 
+  } catch (e) {
+    push("error", "ব্যর্থ", "নেটওয়ার্ক বা শিট আপডেট করতে সমস্যা হয়েছে।");
+  }
+};
+
 
 
   return (
