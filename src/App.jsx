@@ -653,6 +653,37 @@ const css = `
     color: ${COLORS.accent};
     box-shadow: 0 2px 8px #00000040;
   }
+  /* ── Mobile Responsive Updates ── */
+  @media (max-width: 768px) {
+    .sidebar {
+      width: 70px; /* মোবাইলে সাইডবার ছোট হয়ে যাবে */
+      overflow-x: hidden;
+    }
+    .sidebar-logo-text, .sidebar-section-label, .nav-item span:not(.icon) {
+      display: none; /* মোবাইলে শুধু আইকন দেখাবে, লেখা হাইড হবে */
+    }
+    .main {
+      margin-left: 70px; /* সাইডবার ছোট হওয়ায় মেইন কন্টেন্ট ডানে সরবে */
+    }
+    .topbar {
+      padding: 10px;
+    }
+    .search-bar {
+      width: 150px; /* সার্চ বার ছোট করা */
+    }
+    .grid-2, .grid-3 {
+      grid-template-columns: 1fr; /* ২ বা ৩ কলামের গ্রিড মোবাইলে ১ কলাম হয়ে যাবে */
+    }
+    .stat-grid {
+      grid-template-columns: repeat(2, 1fr); /* স্ট্যাট কার্ড ২ কলামে দেখাবে */
+    }
+    .btn span {
+      display: none; /* বাটনের লেখা লুকাবে, শুধু আইকন/টিক দেখাবে */
+    }
+    .btn {
+      padding: 8px;
+    }
+  }
 `;
 
 // ── Logo (base64 encoded reference to uploaded logo) ──
@@ -890,11 +921,29 @@ function StudentsPage({ push }) {
     return matchSearch && matchTab;
   });
 
-  const activateUser = async (u) => {
-    push("info", "প্রসেস হচ্ছে...", "");
-    // In real app: call GAS to update status
-    push("success", "অ্যাক্টিভ করা হয়েছে", u.Name || u.name);
+    const activateUser = async (u) => {
+    const confirm = window.confirm(`${u.Name || u.name} কে কি অ্যাক্টিভ করতে চান?`);
+    if (!confirm) return;
+
+    push("info", "অ্যাক্টিভ করা হচ্ছে...", "");
+    try {
+      // এখানে আপনার GAS URL এ ডাটা পাঠানো হচ্ছে
+      await fetch(GAS_URL, {
+        method: "POST",
+        mode: "no-cors", 
+        body: JSON.stringify({
+          action: "updateStatus", // আপনার GAS এ এই action হ্যান্ডেলার থাকতে হবে
+          id: u.id || u.Phone, // বা যে ইউনিক আইডি আপনি ব্যবহার করেন
+          status: "active"
+        }),
+      });
+      push("success", "সফল!", "স্টুডেন্ট অ্যাক্টিভ করা হয়েছে।");
+      load(); // লিস্ট রিফ্রেশ করা
+    } catch (e) {
+      push("error", "ব্যর্থ", e.message);
+    }
   };
+
 
   return (
     <div className="content">
