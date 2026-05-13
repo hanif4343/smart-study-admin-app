@@ -503,18 +503,17 @@ const css = `
 `;
 
 // ─── API ───
+// GAS doGet — CORS সমস্যা নেই, সব কাজ GET দিয়ে
 const apiFetch = async (params) => {
   const qs = new URLSearchParams(params).toString();
   const r = await fetch(GAS_URL + "?" + qs);
   return r.json();
 };
 
-const apiPost = async (body) => {
-  const r = await fetch(GAS_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+// POST এর বদলে GET দিয়ে action call (CORS fix)
+const apiAction = async (params) => {
+  const qs = new URLSearchParams(params).toString();
+  const r = await fetch(GAS_URL + "?" + qs);
   return r.json();
 };
 
@@ -700,25 +699,15 @@ function SignupsPage({ push }) {
     if (!phone) { push("error", "ফোন নেই", ""); return; }
     setActivating(phone);
     try {
-      // POST to GAS to update the Status column in Users sheet
-      const r = await apiPost({
-        type: "update_explanation",
-        sheet: "Users",
-        id: phone,
-        field: "status",
-        content: "Active"
-      });
-      push("success", "অ্যাক্টিভ করা হয়েছে!", u.Name || u.name || phone);
-      // Also send FCM notification
-      try {
-        await apiPost({
-          type: "broadcast_notification",
-          title: "🎉 আপনার অ্যাকাউন্ট অ্যাক্টিভ হয়েছে!",
-          body: "Smart Study-তে আপনাকে স্বাগতম! এখন পড়াশোনা শুরু করুন।"
-        });
-      } catch (_) {}
-      setUsers(p => p.filter(x => (x.Phone || x.phone) !== phone));
-    } catch (e) { push("error", "ব্যর্থ", e.message); }
+      // GET দিয়ে call — CORS সমস্যা নেই
+      const r = await apiAction({ action: "activateUser", phone });
+      if (r.result === "success") {
+        push("success", "অ্যাক্টিভ করা হয়েছে! ✅", u.Name || u.name || phone);
+        setUsers(p => p.filter(x => (x.Phone || x.phone) !== phone));
+      } else {
+        push("error", "ব্যর্থ হয়েছে", r.error || "Unknown error");
+      }
+    } catch (e) { push("error", "নেটওয়ার্ক সমস্যা", e.message); }
     setActivating(null);
   };
 
@@ -817,19 +806,17 @@ function StudentsPage({ push }) {
     if (!phone) return;
     setActivating(phone);
     try {
-      await apiPost({
-        type: "update_explanation",
-        sheet: "Users",
-        id: phone,
-        field: "status",
-        content: "Active"
-      });
-      push("success", "অ্যাক্টিভ হয়েছে!", u.Name || u.name);
-      setUsers(p => p.map(x => {
-        if ((x.Phone || x.phone) === phone) return { ...x, Status: "Active", status: "Active" };
-        return x;
-      }));
-    } catch (e) { push("error", "ব্যর্থ", e.message); }
+      const r = await apiAction({ action: "activateUser", phone });
+      if (r.result === "success") {
+        push("success", "অ্যাক্টিভ হয়েছে! ✅", u.Name || u.name);
+        setUsers(p => p.map(x => {
+          if ((x.Phone || x.phone) === phone) return { ...x, Status: "Active", status: "Active" };
+          return x;
+        }));
+      } else {
+        push("error", "ব্যর্থ হয়েছে", r.error || "Unknown error");
+      }
+    } catch (e) { push("error", "নেটওয়ার্ক সমস্যা", e.message); }
     setActivating(null);
   };
 
@@ -939,16 +926,17 @@ function ReportsPage({ push }) {
   const resolve = async (r) => {
     setResolving(r.row);
     try {
-      const res = await apiPost({
-        type: "resolve_report",
+      // GET দিয়ে call — CORS fix
+      const res = await apiAction({
+        action: "resolveReport",
         phone: r.phone,
-        subject: r.subject || "প্রশ্নটি",
-        questionId: r.questionId,
+        subject: encodeURIComponent(r.subject || "প্রশ্নটি"),
+        questionId: r.questionId || "",
       });
       push("success", "রিপোর্ট সমাধান হয়েছে ✅", `${r.phone} কে নোটিফাই করা হয়েছে`);
       setReports(p => p.filter(x => x.row !== r.row));
       if (detail?.row === r.row) setDetail(null);
-    } catch (e) { push("error", "ব্যর্থ", e.message); }
+    } catch (e) { push("error", "নেটওয়ার্ক সমস্যা", e.message); }
     setResolving(null);
   };
 
@@ -1032,7 +1020,7 @@ function NotificationsPage({ push }) {
     if (!title || !body) { push("warn", "তথ্য দিন", "Title ও Body দেওয়া দরকার"); return; }
     setSending(true);
     try {
-      const r = await apiPost({ type: "broadcast_notification", title, body });
+      const r = await apiAction({ action: "broadcastNotification", title: encodeURIComponent(title), body: encodeURIComponent(body) });
       push("success", "পাঠানো হয়েছে 🎉", `${r.fcm?.sent || 0} জনকে পাঠানো হয়েছে`);
       setHistory(p => [{ title, body, time: "এখনই" }, ...p]);
       setTitle(""); setBody("");
@@ -1085,7 +1073,7 @@ function NotifyModal({ user, onClose, push }) {
     if (!title || !body) return;
     setSending(true);
     try {
-      await apiPost({ type: "broadcast_notification", title, body });
+      await apiAction({ action: "broadcastNotification", title: encodeURIComponent(title), body: encodeURIComponent(body) });
       push("success", "পাঠানো হয়েছে", `${name} কে নোটিফাই করা হয়েছে`);
       onClose();
     } catch (e) { push("error", "ব্যর্থ", e.message); }
