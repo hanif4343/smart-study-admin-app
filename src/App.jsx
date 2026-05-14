@@ -245,6 +245,83 @@ function MiniBarChart({data,color}){
 }
 
 /* ══════════════════════════════════════════
+   SUBJECT TREE — Subject > Topic > SubTopic
+══════════════════════════════════════════ */
+function SubjectTree({entries,total,color}){
+  const[expanded,setExpanded]=useState({});
+  const toggle=k=>setExpanded(p=>({...p,[k]:!p[k]}));
+
+  return(
+    <>
+      {entries.map(([sub,v])=>{
+        const isOpen=expanded[sub];
+        const topics=v.topics||{};
+        const topicEntries=Object.entries(topics);
+        return(
+          <div key={sub} style={{marginBottom:8}}>
+            {/* Subject row */}
+            <div
+              style={{display:"flex",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}40`,cursor:topicEntries.length>0?"pointer":"default"}}
+              onClick={()=>topicEntries.length>0&&toggle(sub)}
+            >
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:13,display:"flex",alignItems:"center",gap:5}}>
+                  {topicEntries.length>0&&<span style={{fontSize:10,color:C.muted,transition:"transform .2s",display:"inline-block",transform:isOpen?"rotate(90deg)":"rotate(0deg)"}}>▶</span>}
+                  {sub}
+                </div>
+                <div style={{display:"flex",alignItems:"center",marginTop:3}}>
+                  <div className="sbar"><div className="sbar-f" style={{width:pct(v.total,total)+"%",background:color}}/></div>
+                </div>
+                <div style={{fontSize:9,color:C.muted,marginTop:1}}>
+                  MCQ:{v.mcq} · Written:{v.written}
+                  {topicEntries.length>0&&<span> · {topicEntries.length}টি Topic</span>}
+                </div>
+              </div>
+              <div style={{fontWeight:700,color,fontSize:17,minWidth:36,textAlign:"right"}}>{v.total}</div>
+            </div>
+
+            {/* Topics (expanded) */}
+            {isOpen&&topicEntries.map(([topic,tv])=>{
+              const stEntries=Object.entries(tv.subtopics||{});
+              const isTopicOpen=expanded[sub+"__"+topic];
+              return(
+                <div key={topic} style={{marginLeft:14,borderLeft:`2px solid ${color}30`}}>
+                  {/* Topic row */}
+                  <div
+                    style={{display:"flex",alignItems:"center",padding:"7px 0 7px 10px",borderBottom:`1px solid ${C.border}30`,cursor:stEntries.length>0?"pointer":"default"}}
+                    onClick={()=>stEntries.length>0&&toggle(sub+"__"+topic)}
+                  >
+                    <div style={{flex:1}}>
+                      <div style={{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
+                        {stEntries.length>0&&<span style={{fontSize:9,color:C.muted,transition:"transform .2s",display:"inline-block",transform:isTopicOpen?"rotate(90deg)":"rotate(0)"}}>▶</span>}
+                        📂 {topic}
+                      </div>
+                      {stEntries.length>0&&<div style={{fontSize:9,color:C.muted,marginTop:1}}>{stEntries.length}টি SubTopic</div>}
+                    </div>
+                    <div style={{fontWeight:700,color,fontSize:14,minWidth:30,textAlign:"right"}}>{tv.total}</div>
+                  </div>
+
+                  {/* SubTopics (expanded) */}
+                  {isTopicOpen&&stEntries.map(([st,stv])=>(
+                    <div key={st} style={{display:"flex",alignItems:"center",padding:"6px 0 6px 20px",borderBottom:`1px solid ${C.border}20`}}>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:11,color:C.text}}>📄 {st}</div>
+                        <div style={{fontSize:9,color:C.muted,marginTop:1}}>MCQ:{stv.mcq||0} · Written:{stv.written||0}</div>
+                      </div>
+                      <div style={{fontWeight:600,color:C.muted,fontSize:13,minWidth:28,textAlign:"right"}}>{stv.total}</div>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </>
+  );
+}
+
+/* ══════════════════════════════════════════
    DASHBOARD
 ══════════════════════════════════════════ */
 function DashboardPage({push,forceRefresh}){
@@ -321,26 +398,14 @@ function DashboardPage({push,forceRefresh}){
             <button key={v} className={`atab${atab===v?" active":""}`} onClick={()=>setAtab(v)}>{l}</button>
           ))}
         </div>
-        {atab==="quiz"&&(quizE.length===0?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>ডেটা নেই</div>:quizE.map(([s,v])=>(
-          <div key={s} className="srow">
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600}}>{s}</div>
-              <div style={{display:"flex",alignItems:"center",marginTop:3}}><div className="sbar"><div className="sbar-f" style={{width:pct(v.total,quizTotal)+"%",background:C.accent}}/></div></div>
-              <div style={{fontSize:9,color:C.muted,marginTop:1}}>MCQ:{v.mcq} · Written:{v.written}</div>
-            </div>
-            <div style={{fontWeight:700,color:C.accent,fontSize:17,minWidth:32,textAlign:"right"}}>{v.total}</div>
-          </div>
-        )))}
-        {atab==="qbank"&&(qbankE.length===0?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>ডেটা নেই</div>:qbankE.map(([s,v])=>(
-          <div key={s} className="srow">
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600}}>{s}</div>
-              <div style={{display:"flex",alignItems:"center",marginTop:3}}><div className="sbar"><div className="sbar-f" style={{width:pct(v.total,qbTotal)+"%",background:C.green}}/></div></div>
-              <div style={{fontSize:9,color:C.muted,marginTop:1}}>MCQ:{v.mcq} · Written:{v.written}</div>
-            </div>
-            <div style={{fontWeight:700,color:C.green,fontSize:17,minWidth:32,textAlign:"right"}}>{v.total}</div>
-          </div>
-        )))}
+        {atab==="quiz"&&(quizE.length===0
+          ?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>ডেটা নেই</div>
+          :<SubjectTree entries={quizE} total={quizTotal} color={C.accent}/>
+        )}
+        {atab==="qbank"&&(qbankE.length===0
+          ?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>ডেটা নেই</div>
+          :<SubjectTree entries={qbankE} total={qbTotal} color={C.green}/>
+        )}
         {atab==="study"&&(studyE.length===0?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>ডেটা নেই</div>:studyE.map(([s,v])=>(
           <div key={s} className="srow">
             <div style={{flex:1}}>
