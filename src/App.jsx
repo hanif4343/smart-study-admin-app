@@ -685,9 +685,18 @@ function EditResolveModal({report,onClose,onDone,push}){
   const[step,setStep]=useState(1);
   const[qdata,setQdata]=useState(null);
   const[loadingQ,setLoadingQ]=useState(true);
-  const[explanation,setExplanation]=useState("");
   const[saving,setSaving]=useState(false);
   const[notifying,setNotifying]=useState(false);
+
+  // edit fields
+  const[question,setQuestion]=useState("");
+  const[opt1,setOpt1]=useState("");
+  const[opt2,setOpt2]=useState("");
+  const[opt3,setOpt3]=useState("");
+  const[opt4,setOpt4]=useState("");
+  const[correct,setCorrect]=useState("");
+  const[explanation,setExplanation]=useState("");
+  const[technique,setTechnique]=useState("");
 
   useEffect(()=>{
     (async()=>{
@@ -696,7 +705,19 @@ function EditResolveModal({report,onClose,onDone,push}){
         for(const tab of["Quiz","QBank"]){
           try{
             const d=await fetch(GAS_URL+"?"+new URLSearchParams({id:report.questionId,tab}).toString()).then(r=>r.json());
-            if(d.status==="success"){setQdata({...d.data,_tab:tab});setExplanation(d.data.Explanation||d.data.explanation||"");break;}
+            if(d.status==="success"){
+              const q=d.data;
+              setQdata({...q,_tab:tab});
+              setQuestion(q.Question||q.question||"");
+              setOpt1(q.Opt1||q.opt1||q["Option A"]||"");
+              setOpt2(q.Opt2||q.opt2||q["Option B"]||"");
+              setOpt3(q.Opt3||q.opt3||q["Option C"]||"");
+              setOpt4(q.Opt4||q.opt4||q["Option D"]||"");
+              setCorrect(q.Correct||q.correct||"");
+              setExplanation(q.Explanation||q.explanation||"");
+              setTechnique(q.Technique||q.technique||"");
+              break;
+            }
           }catch(_){}
         }
       }
@@ -704,12 +725,34 @@ function EditResolveModal({report,onClose,onDone,push}){
     })();
   },[report.questionId]);
 
+  // একটা field save করে
+  const saveField=async(field,value)=>{
+    if(!qdata||!report.questionId||!value.trim()) return;
+    await apiAction({
+      action:"updateField",
+      sheet:qdata._tab||"Quiz",
+      id:report.questionId,
+      field,
+      content:encodeURIComponent(value),
+    });
+  };
+
   const save=async()=>{
+    if(!qdata){setStep(2);return;}
     setSaving(true);
     try{
-      if(qdata&&report.questionId&&explanation){
-        await apiAction({action:"updateField",sheet:qdata._tab||"Quiz",id:report.questionId,field:"explanation",content:encodeURIComponent(explanation)});
+      // সব field একসাথে save করো
+      const fields=[
+        ["question",question],
+        ["opt1",opt1],["opt2",opt2],["opt3",opt3],["opt4",opt4],
+        ["correct",correct],
+        ["explanation",explanation],
+        ["technique",technique],
+      ];
+      for(const[f,v] of fields){
+        if(v.trim()) await saveField(f,v);
       }
+      push("success","✅ সেভ হয়েছে!","প্রশ্ন আপডেট হয়েছে");
       setStep(2);
     }catch(e){push("error","Save ব্যর্থ",e.message);}
     setSaving(false);
@@ -725,126 +768,95 @@ function EditResolveModal({report,onClose,onDone,push}){
     setNotifying(false);
   };
 
+  const F=({label,val,set,ta,ph})=>(
+    <div className="field">
+      <label>{label}</label>
+      {ta
+        ?<textarea className="ta" value={val} onChange={e=>set(e.target.value)} placeholder={ph||""} style={{minHeight:80}}/>
+        :<input className="input" value={val} onChange={e=>set(e.target.value)} placeholder={ph||""}/>
+      }
+    </div>
+  );
+
   return(
     <div className="overlay" onClick={onClose}>
       <div className="modal" onClick={e=>e.stopPropagation()}>
         <div className="mhandle"/>
         <div className="steps">
-          <div className={`step${step===1?" active":step>1?" done":""}`}>① প্রশ্ন এডিট</div>
+          <div className={`step${step===1?" active":step>1?" done":""}`}>① সব Field এডিট</div>
           <div className={`step${step===2?" active":""}`}>② নোটিফাই</div>
         </div>
+
         {step===1&&<>
-          <div className="mtitle">✏️ প্রশ্ন এডিট</div>
-          <div style={{background:C.panel,borderRadius:10,padding:"9px 11px",marginBottom:12}}>
-            <div style={{fontSize:11,color:C.muted,marginBottom:3}}>📱 {report.phone} · {report.subject}</div>
-            <div className="r-issue" style={{marginTop:0}}>{report.issue||"—"}</div>
+          <div className="mtitle">✏️ প্রশ্ন সম্পূর্ণ এডিট করুন</div>
+
+          {/* রিপোর্টের সমস্যা */}
+          <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:10,padding:"9px 12px",marginBottom:14}}>
+            <div style={{fontSize:10,color:C.red,fontWeight:700,marginBottom:3}}>🚨 রিপোর্ট — {report.phone} · {report.subject}</div>
+            <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{report.issue||"—"}</div>
           </div>
-          {loadingQ?<div className="skel" style={{height:90}}/>:qdata?<>
-            {(qdata.Question||qdata.question)&&<div style={{background:C.panel,borderRadius:9,padding:"9px 11px",marginBottom:10,fontSize:12,lineHeight:1.6}}><div style={{fontSize:10,color:C.muted,marginBottom:3}}>প্রশ্ন #{report.questionId}</div>{qdata.Question||qdata.question}</div>}
-            {(qdata.Correct||qdata.correct)&&<div style={{fontSize:11,background:"#22c55e18",color:C.green,borderRadius:7,padding:"7px 9px",marginBottom:10}}>✅ সঠিক: {qdata.Correct||qdata.correct}</div>}
-            <div className="field"><label>Explanation আপডেট করুন</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:110}} placeholder="সঠিক ব্যাখ্যা লিখুন..."/></div>
-          </>:<div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12}}>প্রশ্ন #{report.questionId||"—"} খুঁজে পাওয়া যায়নি।</div>}
-          <div style={{display:"flex",gap:7}}>
+
+          {loadingQ
+            ?<><div className="skel" style={{height:60}}/><div className="skel"/><div className="skel"/></>
+            :!qdata
+              ?<div style={{textAlign:"center",color:C.muted,padding:"20px 0",fontSize:12}}>
+                প্রশ্ন #{report.questionId||"—"} খুঁজে পাওয়া যায়নি।<br/>
+                <span style={{fontSize:10}}>Sheet সরাসরি দেখুন।</span>
+               </div>
+              :<>
+                <F label="❓ প্রশ্ন" val={question} set={setQuestion} ta ph="প্রশ্নের টেক্সট..."/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                  <F label="A" val={opt1} set={setOpt1} ph="Option A"/>
+                  <F label="B" val={opt2} set={setOpt2} ph="Option B"/>
+                  <F label="C" val={opt3} set={setOpt3} ph="Option C"/>
+                  <F label="D" val={opt4} set={setOpt4} ph="Option D"/>
+                </div>
+                <div className="field">
+                  <label>✅ সঠিক উত্তর</label>
+                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                    {[opt1,opt2,opt3,opt4].filter(Boolean).map((o,i)=>(
+                      <button key={i}
+                        className={`btn ${correct===o?"btn-s":"btn-g"}`}
+                        style={{fontSize:11,padding:"5px 10px"}}
+                        onClick={()=>setCorrect(o)}
+                      >{o.slice(0,20)}{o.length>20?"…":""}</button>
+                    ))}
+                  </div>
+                  <input className="input" style={{marginTop:6}} value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি টাইপ করুন..."/>
+                </div>
+                <F label="📖 Explanation" val={explanation} set={setExplanation} ta ph="সঠিক ব্যাখ্যা লিখুন..."/>
+                <F label="💡 Technique" val={technique} set={setTechnique} ta ph="মনে রাখার কৌশল..."/>
+              </>
+          }
+
+          <div style={{display:"flex",gap:7,marginTop:4}}>
             <button className="btn btn-g" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
-            <button className="btn btn-p" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={save}>{saving?"⏳ সেভ...":"💾 সেভ করুন →"}</button>
+            <button className="btn btn-p" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={save}>
+              {saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করুন →"}
+            </button>
           </div>
         </>}
+
         {step===2&&<>
-          <div className="mtitle">📣 নোটিফাই করুন</div>
-          <div style={{background:"#22c55e12",border:"1px solid #22c55e30",borderRadius:11,padding:"12px",marginBottom:14}}>
-            <div style={{fontSize:13,fontWeight:700,color:C.green,marginBottom:4}}>✅ এডিট সম্পন্ন!</div>
-            <div style={{fontSize:11,color:C.muted}}>এখন স্টুডেন্টকে জানান।</div>
+          <div className="mtitle">📣 স্টুডেন্টকে নোটিফাই করুন</div>
+          <div style={{background:"#22c55e12",border:"1px solid #22c55e30",borderRadius:11,padding:"13px",marginBottom:14}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.green,marginBottom:5}}>✅ প্রশ্ন আপডেট সম্পন্ন!</div>
+            <div style={{fontSize:11,color:C.muted}}>এখন স্টুডেন্টকে জানান যে তাদের রিপোর্ট সমাধান হয়েছে।</div>
           </div>
-          <div style={{background:C.panel,borderRadius:9,padding:"11px 13px",marginBottom:14}}>
-            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>নোটিফিকেশন পাবেন:</div>
-            <div style={{fontWeight:700}}>📱 {report.phone}</div>
-            <div style={{fontSize:11,color:C.accent,marginTop:5}}>"✅ আপনার রিপোর্ট সমাধান হয়েছে!"</div>
+          <div style={{background:C.panel,borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+            <div style={{fontSize:11,color:C.muted,marginBottom:5}}>নোটিফিকেশন পাবেন:</div>
+            <div style={{fontWeight:700,fontSize:14}}>📱 {report.phone}</div>
+            <div style={{fontSize:11,color:C.muted,marginTop:3}}>{report.subject} {report.questionId?"· #"+report.questionId:""}</div>
+            <div style={{fontSize:11,color:C.accent,marginTop:6,lineHeight:1.5}}>"✅ আপনার রিপোর্ট সমাধান হয়েছে! প্রশ্নটি সংশোধন করা হয়েছে।"</div>
           </div>
           <div style={{display:"flex",gap:7}}>
             <button className="btn btn-g" style={{flex:1,justifyContent:"center"}} onClick={()=>onDone(report.row)}>এড়িয়ে যান</button>
-            <button className="btn btn-s" style={{flex:2,justifyContent:"center"}} disabled={notifying} onClick={notify}>{notifying?"⏳ পাঠানো...":"✅ নোটিফাই করুন"}</button>
+            <button className="btn btn-s" style={{flex:2,justifyContent:"center"}} disabled={notifying} onClick={notify}>
+              {notifying?"⏳ পাঠানো হচ্ছে...":"✅ নোটিফাই করুন"}
+            </button>
           </div>
         </>}
       </div>
-    </div>
-  );
-}
-
-/* ══════════════════════════════════════════
-   NOTICE BOARD
-══════════════════════════════════════════ */
-function NoticePage({push,forceRefresh}){
-  const{data:subj,loading}=useSWR({action:"getSubjects"},forceRefresh);
-  const[notices,setNotices]=useState([]);
-  const[loadingN,setLoadingN]=useState(true);
-  const[showForm,setShowForm]=useState(false);
-  const[title,setTitle]=useState("");
-  const[msg,setMsg]=useState("");
-  const[saving,setSaving]=useState(false);
-
-  // Notice গুলো Firebase থেকে load করো
-  useEffect(()=>{
-    (async()=>{
-      setLoadingN(true);
-      try{
-        const d=await fbGet("Notice");
-        if(Array.isArray(d)){
-          setNotices([...d].reverse().slice(0,30));
-        }
-      }catch(_){}
-      setLoadingN(false);
-    })();
-  },[forceRefresh]);
-
-  const save=async()=>{
-    if(!title||!msg){push("warn","তথ্য দিন","Title ও Message দরকার");return;}
-    setSaving(true);
-    try{
-      const ts=new Date().toLocaleString("bn-BD",{timeZone:"Asia/Dhaka"});
-      const r=await apiAction({
-        action:"postNotice",
-        n_title:encodeURIComponent(title),
-        n_msg:encodeURIComponent(msg),
-        timestamp:encodeURIComponent(ts),
-        targetTab:"Notice",
-      });
-      if(r.result==="success"||r.id){
-        push("success","✅ Notice পোস্ট হয়েছে!","");
-        setNotices(p=>[{Date:ts.split(",")[0]||"",Title:title,Message:msg,Timestamp:ts},...p]);
-        setTitle(""); setMsg(""); setShowForm(false);
-        cacheInvalidate("getSubjects");
-      }else push("error","ব্যর্থ",r.error||"Unknown");
-    }catch(e){push("error","সমস্যা",e.message);}
-    setSaving(false);
-  };
-
-  return(
-    <div className="page">
-      <button className="btn btn-p btn-block" style={{marginBottom:14}} onClick={()=>setShowForm(v=>!v)}>
-        {showForm?"✕ বাতিল":"📢 নতুন Notice লিখুন"}
-      </button>
-
-      {showForm&&(
-        <div className="card">
-          <div className="field"><label>শিরোনাম</label><input className="input" placeholder="Notice শিরোনাম..." value={title} onChange={e=>setTitle(e.target.value)}/></div>
-          <div className="field"><label>বার্তা</label><textarea className="ta" placeholder="Notice এর বিস্তারিত বার্তা..." value={msg} onChange={e=>setMsg(e.target.value)}/></div>
-          <button className="btn btn-s btn-block" disabled={saving} onClick={save}>{saving?"⏳ পোস্ট হচ্ছে...":"📢 পোস্ট করুন"}</button>
-        </div>
-      )}
-
-      {loadingN?[...Array(4)].map((_,i)=><div key={i} className="skel"/>):
-       notices.length===0?<div className="empty"><div className="ei">📢</div><p>কোনো Notice নেই</p></div>:
-       notices.map((n,i)=>(
-        <div key={i} className="rc" style={{borderLeft:`2px solid ${i===0?C.accent:C.border}`}}>
-          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
-            <div style={{fontWeight:700,fontSize:13,flex:1}}>{n.Title||n.title||n.n_title||"—"}</div>
-            <div style={{fontSize:10,color:C.muted,whiteSpace:"nowrap"}}>{n.Date||n.date||""}</div>
-          </div>
-          <div style={{fontSize:12,color:C.text,marginTop:7,lineHeight:1.6}}>{n.Message||n.message||n.n_msg||"—"}</div>
-          {n.Timestamp&&<div style={{fontSize:10,color:C.muted,marginTop:5}}>{n.Timestamp}</div>}
-        </div>
-       ))
-      }
     </div>
   );
 }
@@ -1045,7 +1057,6 @@ const NAV=[
   {id:"signups",  icon:"🆕",label:"সাইনআপ",  badge:true},
   {id:"students", icon:"👥",label:"Students"},
   {id:"reports",  icon:"🚨",label:"Reports",  badge:true},
-  {id:"notice",   icon:"📢",label:"Notice"},
   {id:"search",   icon:"🔍",label:"Search"},
   {id:"notifs",   icon:"📣",label:"Notify"},
 ];
@@ -1059,7 +1070,7 @@ export default function App(){
 
   const doRefresh=()=>{
     setSpin(true);
-    cacheInvalidate("getDashboard","getUsers","getSubjects");
+    cacheInvalidate("getDashboard","getUsers");
     setRefreshTick(t=>t+1);
     setTimeout(()=>setSpin(false),1500);
   };
@@ -1095,7 +1106,6 @@ export default function App(){
       <div style={{display:page==="signups"  ?"block":"none"}}><SignupsPage   push={push} forceRefresh={refreshTick}/></div>
       <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} forceRefresh={refreshTick}/></div>
       <div style={{display:page==="reports"  ?"block":"none"}}><ReportsPage   push={push} forceRefresh={refreshTick}/></div>
-      <div style={{display:page==="notice"   ?"block":"none"}}><NoticePage    push={push} forceRefresh={refreshTick}/></div>
       <div style={{display:page==="search"   ?"block":"none"}}><SearchPage    push={push} onStudentDetail={u=>{setSearchDetail(u);}}/></div>
       <div style={{display:page==="notifs"   ?"block":"none"}}><NotificationsPage push={push}/></div>
 
