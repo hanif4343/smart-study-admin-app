@@ -424,7 +424,7 @@ function DashboardPage({push,forceRefresh}){
    SIGNUPS
 ══════════════════════════════════════════ */
 function SignupsPage({push,forceRefresh}){
-  const{data:ud,loading}=useSWR({action:"getUsers"},forceRefresh);
+  const{data:ud,loading}=useSWR({action:"getUsers",lite:"1"},forceRefresh);
   const[removed,setRemoved]=useState([]);
   const[activating,setActivating]=useState(null);
   const pending=(ud?.users||[]).filter(u=>(u.Status||u.status||"").toLowerCase()!=="active"&&!removed.includes(u.Phone||u.phone));
@@ -481,7 +481,7 @@ function SignupsPage({push,forceRefresh}){
    STUDENTS — list + detail view
 ══════════════════════════════════════════ */
 function StudentsPage({push,forceRefresh}){
-  const{data:ud,loading}=useSWR({action:"getUsers"},forceRefresh);
+  const{data:ud,loading}=useSWR({action:"getUsers",lite:"1"},forceRefresh);
   const[overrides,setOverrides]=useState({});
   const[search,setSearch]=useState("");
   const[tab,setTab]=useState("all");
@@ -833,72 +833,59 @@ function EditResolveModal({report,onClose,onDone,push}){
     setNotifying(false);
   };
 
-  const F=({label,val,set,ta,ph})=>(
-    <div className="field">
-      <label>{label}</label>
-      {ta
-        ?<textarea className="ta" value={val} onChange={e=>set(e.target.value)} placeholder={ph||""} style={{minHeight:80}}/>
-        :<input className="input" value={val} onChange={e=>set(e.target.value)} placeholder={ph||""}/>
-      }
-    </div>
-  );
-
+  // overlay click এ close করা যাবে না — keyboard focus হারায়
   return(
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={e=>e.stopPropagation()}>
+    <div className="overlay">
+      <div className="modal">
         <div className="mhandle"/>
         <div className="steps">
-          <div className={`step${step===1?" active":step>1?" done":""}`}>① সব Field এডিট</div>
+          <div className={`step${step===1?" active":step>1?" done":""}`}>① এডিট</div>
           <div className={`step${step===2?" active":""}`}>② নোটিফাই</div>
         </div>
 
         {step===1&&<>
-          <div className="mtitle">✏️ প্রশ্ন সম্পূর্ণ এডিট করুন</div>
-
-          {/* রিপোর্টের সমস্যা */}
-          <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:10,padding:"9px 12px",marginBottom:14}}>
-            <div style={{fontSize:10,color:C.red,fontWeight:700,marginBottom:3}}>🚨 রিপোর্ট — {report.phone} · {report.subject}</div>
-            <div style={{fontSize:12,color:C.text,lineHeight:1.5}}>{report.issue||"—"}</div>
+          <div className="mtitle">✏️ প্রশ্ন এডিট</div>
+          <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:10,padding:"8px 11px",marginBottom:12}}>
+            <div style={{fontSize:10,color:C.red,fontWeight:700,marginBottom:2}}>🚨 {report.phone} · {report.subject}</div>
+            <div style={{fontSize:12,color:C.text}}>{report.issue||"—"}</div>
           </div>
-
           {loadingQ
-            ?<><div className="skel" style={{height:60}}/><div className="skel"/><div className="skel"/></>
+            ?<><div className="skel" style={{height:50}}/><div className="skel"/></>
             :!qdata
-              ?<div style={{textAlign:"center",color:C.muted,padding:"20px 0",fontSize:12}}>
-                প্রশ্ন #{report.questionId||"—"} খুঁজে পাওয়া যায়নি।<br/>
-                <span style={{fontSize:10}}>Sheet সরাসরি দেখুন।</span>
-               </div>
+              ?<div style={{textAlign:"center",color:C.muted,padding:"16px 0",fontSize:12}}>প্রশ্ন #{report.questionId||"—"} পাওয়া যায়নি।</div>
               :<>
-                <F label="❓ প্রশ্ন" val={question} set={setQuestion} ta ph="প্রশ্নের টেক্সট..."/>
+                <div className="field">
+                  <label>❓ প্রশ্ন</label>
+                  <textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:70}}/>
+                </div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  <F label="A" val={opt1} set={setOpt1} ph="Option A"/>
-                  <F label="B" val={opt2} set={setOpt2} ph="Option B"/>
-                  <F label="C" val={opt3} set={setOpt3} ph="Option C"/>
-                  <F label="D" val={opt4} set={setOpt4} ph="Option D"/>
+                  <div className="field"><label>A</label><input className="input" value={opt1} onChange={e=>setOpt1(e.target.value)}/></div>
+                  <div className="field"><label>B</label><input className="input" value={opt2} onChange={e=>setOpt2(e.target.value)}/></div>
+                  <div className="field"><label>C</label><input className="input" value={opt3} onChange={e=>setOpt3(e.target.value)}/></div>
+                  <div className="field"><label>D</label><input className="input" value={opt4} onChange={e=>setOpt4(e.target.value)}/></div>
                 </div>
                 <div className="field">
                   <label>✅ সঠিক উত্তর</label>
-                  <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:6}}>
                     {[opt1,opt2,opt3,opt4].filter(Boolean).map((o,i)=>(
-                      <button key={i}
-                        className={`btn ${correct===o?"btn-s":"btn-g"}`}
-                        style={{fontSize:11,padding:"5px 10px"}}
-                        onClick={()=>setCorrect(o)}
-                      >{o.slice(0,20)}{o.length>20?"…":""}</button>
+                      <button key={i} type="button" className={`btn ${correct===o?"btn-s":"btn-g"}`} style={{fontSize:11,padding:"4px 8px"}} onClick={()=>setCorrect(o)}>{o.slice(0,16)}{o.length>16?"…":""}</button>
                     ))}
                   </div>
-                  <input className="input" style={{marginTop:6}} value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি টাইপ করুন..."/>
+                  <input className="input" value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি লিখুন..."/>
                 </div>
-                <F label="📖 Explanation" val={explanation} set={setExplanation} ta ph="সঠিক ব্যাখ্যা লিখুন..."/>
-                <F label="💡 Technique" val={technique} set={setTechnique} ta ph="মনে রাখার কৌশল..."/>
+                <div className="field">
+                  <label>📖 Explanation</label>
+                  <textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:80}}/>
+                </div>
+                <div className="field">
+                  <label>💡 Technique</label>
+                  <textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:55}}/>
+                </div>
               </>
           }
-
           <div style={{display:"flex",gap:7,marginTop:4}}>
-            <button className="btn btn-g" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
-            <button className="btn btn-p" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={save}>
-              {saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করুন →"}
-            </button>
+            <button type="button" className="btn btn-g" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
+            <button type="button" className="btn btn-p" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={save}>{saving?"⏳...":"💾 সেভ →"}</button>
           </div>
         </>}
 
@@ -1098,7 +1085,7 @@ function NotifyModal({user,onClose,push,inDetail}){
   );
 
   return(
-    <div className="overlay" onClick={onClose}>
+    <div className="overlay">
       <div className="modal" onClick={e=>e.stopPropagation()}>
         <div className="mhandle"/>
         <div className="mtitle">📣 {nm}</div>
