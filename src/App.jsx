@@ -1,242 +1,301 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
-const GAS_URL = "https://script.google.com/macros/s/AKfycbyjF7iFX0H_rFuJgMJYo70DC7KRX1lBXU7m7NoZCwf6VTJfRm6Iyw6hOcN2q_UKbxxgQg/exec";
-const FIREBASE_URL = "https://smartentrydb-default-rtdb.firebaseio.com/";
-const FB_KEY = "CsFdxaWLLU2AT92kxYFPTOhP1ewDR0jzK3hKjqWO";
+/* ══════════════════════════════════════════
+   CONFIG
+══════════════════════════════════════════ */
+const FB   = "https://smartentrydb-default-rtdb.firebaseio.com";
+const FBK  = "CsFdxaWLLU2AT92kxYFPTOhP1ewDR0jzK3hKjqWO";
+const GAS  = "https://script.google.com/macros/s/AKfycbyjF7iFX0H_rFuJgMJYo70DC7KRX1lBXU7m7NoZCwf6VTJfRm6Iyw6hOcN2q_UKbxxgQg/exec";
+const IMGBB= "3f23d9fd6bdfdb694285773f40569906";
 
 const C = {
   bg:"#06080f",card:"#0c1220",border:"#16253d",
-  accent:"#3b82f6",accentGlow:"#3b82f620",
-  green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",
+  accent:"#3b82f6",green:"#22c55e",red:"#ef4444",
+  yellow:"#f59e0b",purple:"#8b5cf6",
   text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c",
 };
 
 /* ══════════════════════════════════════════
-   STALE-WHILE-REVALIDATE CACHE
+   FIREBASE API — সব read/write এখানে
 ══════════════════════════════════════════ */
-const _store={}, _subs={}, _inflight={};
-const FRESH_MS = 30_000;
-const cacheGet = k => _store[k]?.data ?? null;
-const cacheSub = (k,cb) => {
-  if(!_subs[k]) _subs[k]=new Set();
-  _subs[k].add(cb);
-  return ()=>_subs[k].delete(cb);
+const fb = {
+  get: async (path) => {
+    const r = await fetch(`${FB}/${path}.json?auth=${FBK}`);
+    return r.json();
+  },
+  set: async (path, data) => {
+    const r = await fetch(`${FB}/${path}.json?auth=${FBK}`, {
+      method:"PUT", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(data)
+    });
+    return r.json();
+  },
+  patch: async (path, data) => {
+    const r = await fetch(`${FB}/${path}.json?auth=${FBK}`, {
+      method:"PATCH", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(data)
+    });
+    return r.json();
+  },
+  push: async (path, data) => {
+    const r = await fetch(`${FB}/${path}.json?auth=${FBK}`, {
+      method:"POST", headers:{"Content-Type":"application/json"},
+      body: JSON.stringify(data)
+    });
+    return r.json();
+  },
+  del: async (path) => {
+    await fetch(`${FB}/${path}.json?auth=${FBK}`, { method:"DELETE" });
+  },
 };
-const cacheNotify = (k,data) => {
-  _store[k]={data,ts:Date.now()};
-  (_subs[k]||new Set()).forEach(cb=>cb(data));
+
+/* Background GAS sync — user কে block করে না */
+const gasSyncSheet = (tab) => {
+  setTimeout(() => {
+    fetch(`${GAS}?action=syncSheet&tab=${tab}`).catch(()=>{});
+  }, 100);
 };
-const cacheInvalidate = (...pats) => pats.forEach(p=>Object.keys(_store).forEach(k=>{if(k.includes(p))delete _store[k];}));
+const gasAction = async (params) => {
+  const r = await fetch(GAS+"?"+new URLSearchParams(params).toString());
+  return r.json();
+};
 
-async function fetchAndCache(params, force=false) {
-  const key=JSON.stringify(params), now=Date.now(), cached=_store[key];
-  if(!force&&cached&&now-cached.ts<FRESH_MS) return cached.data;
-  if(_inflight[key]) return _inflight[key];
-  const qs=new URLSearchParams(params).toString();
-  _inflight[key]=fetch(GAS_URL+"?"+qs)
-    .then(r=>r.json())
-    .then(data=>{delete _inflight[key];cacheNotify(key,data);return data;})
-    .catch(e=>{delete _inflight[key];throw e;});
-  return _inflight[key];
-}
+/* ══════════════════════════════════════════
+   FIREBASE CACHE — instant load
+   Firebase data memory তে রাখা হয়
+   60s পর background revalidate
+══════════════════════════════════════════ */
+const _cache = {}, _subs = {}, _fly = {};
+const FRESH = 60_000;
 
-function useSWR(params, forceRefresh=0) {
-  const key=JSON.stringify(params);
-  const [data,setData]=useState(()=>cacheGet(key));
-  const [loading,setLoading]=useState(!cacheGet(key));
-  const prev=useRef(0);
+const fbCached = async (path, force=false) => {
+  const now = Date.now();
+  if(!force && _cache[path] && now-_cache[path].ts < FRESH) return _cache[path].data;
+  if(_fly[path]) return _fly[path];
+  _fly[path] = fb.get(path).then(data => {
+    _cache[path] = {data, ts:Date.now()};
+    (_subs[path]||new Set()).forEach(cb=>cb(data));
+    delete _fly[path];
+    return data;
+  }).catch(e=>{delete _fly[path];throw e;});
+  return _fly[path];
+};
+
+const fbInvalidate = (path) => { delete _cache[path]; };
+
+function useFB(path, forceRefresh=0) {
+  const [data, setData] = useState(()=>_cache[path]?.data ?? null);
+  const [loading, setLoading] = useState(!_cache[path]);
+  const prev = useRef(0);
   useEffect(()=>{
-    const unsub=cacheSub(key,d=>{setData(d);setLoading(false);});
-    const force=forceRefresh>prev.current; prev.current=forceRefresh;
-    const stale=cacheGet(key);
-    if(stale&&!force){setData(stale);setLoading(false);fetchAndCache(params,false).catch(()=>{});}
-    else{if(!stale)setLoading(true);fetchAndCache(params,force).catch(()=>setLoading(false));}
-    return unsub;
-  },[key,forceRefresh]);
-  return {data,loading};
+    if(!path) return;
+    if(!_subs[path]) _subs[path] = new Set();
+    const cb = d => { setData(d); setLoading(false); };
+    _subs[path].add(cb);
+    const force = forceRefresh > prev.current; prev.current = forceRefresh;
+    const stale = _cache[path]?.data;
+    if(stale && !force) { setData(stale); setLoading(false); fbCached(path,false).catch(()=>{}); }
+    else { if(!stale) setLoading(true); fbCached(path,force).catch(()=>setLoading(false)); }
+    return () => _subs[path]?.delete(cb);
+  }, [path, forceRefresh]);
+  return {data, loading};
 }
 
-const apiAction = async(params)=>{
-  const r=await fetch(GAS_URL+"?"+new URLSearchParams(params).toString());
-  return r.json();
-};
-const fbGet = async(path)=>{
-  const r=await fetch(`${FIREBASE_URL}${path}.json?auth=${FB_KEY}`);
-  return r.json();
+/* ══════════════════════════════════════════
+   IMGBB UPLOAD
+══════════════════════════════════════════ */
+const uploadImg = async (file) => {
+  const fd = new FormData(); fd.append("image", file);
+  const r = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB}`, {method:"POST",body:fd});
+  const d = await r.json();
+  return d?.data?.url || "";
 };
 
-/* ── Helpers ── */
-const fmt=n=>(n||0).toLocaleString();
-const pct=(a,b)=>b?Math.round((a/b)*100):0;
-const initials=n=>(n||"?").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
-const timeAgo=ts=>{
-  if(!ts)return"—";
-  try{
-    const d=new Date(ts.replace?ts.replace(/(\d{2})-(\d{2})-(\d{4})/,"$3-$2-$1"):ts);
-    const s=Date.now()-d.getTime();
-    if(s<60000)return"এখনই";
-    if(s<3600000)return~~(s/60000)+"মি আগে";
-    if(s<86400000)return~~(s/3600000)+"ঘণ্টা আগে";
-    return~~(s/86400000)+"দিন আগে";
-  }catch{return ts;}
+/* ══════════════════════════════════════════
+   NEXT ID — Firebase থেকে max ID বের করে
+══════════════════════════════════════════ */
+const getNextId = async (tab) => {
+  try {
+    const data = await fb.get(`${tab}`);
+    if(!data || !Array.isArray(data)) return Date.now();
+    const ids = data.map(q => parseInt(q?.ID || q?.id || 0)).filter(Boolean);
+    return ids.length ? Math.max(...ids)+1 : 1001;
+  } catch { return Date.now(); }
 };
+
+/* ══════════════════════════════════════════
+   HELPERS
+══════════════════════════════════════════ */
+const fmt = n => (n||0).toLocaleString();
+const pct = (a,b) => b ? Math.round(a/b*100) : 0;
+const initials = n => (n||"?").split(" ").map(w=>w[0]).join("").toUpperCase().slice(0,2);
+const timeAgo = ts => {
+  if(!ts) return "—";
+  try {
+    const d = new Date(ts.replace ? ts.replace(/(\d{2})-(\d{2})-(\d{4})/,"$3-$2-$1") : ts);
+    const s = Date.now()-d.getTime();
+    if(s<60000) return "এখনই";
+    if(s<3600000) return ~~(s/60000)+"মি আগে";
+    if(s<86400000) return ~~(s/3600000)+"ঘণ্টা আগে";
+    return ~~(s/86400000)+"দিন আগে";
+  } catch { return ts; }
+};
+const now_ts = () => new Date().toLocaleString("bn-BD",{timeZone:"Asia/Dhaka"});
 
 /* ── Toast ── */
 let _tid=0;
-function useToasts(){
-  const[toasts,set]=useState([]);
-  const push=useCallback((type,title,msg="")=>{
+function useToasts() {
+  const [toasts,set] = useState([]);
+  const push = useCallback((type,title,msg="")=>{
     const id=++_tid;
     set(p=>[...p,{id,type,title,msg}]);
     setTimeout(()=>set(p=>p.filter(t=>t.id!==id)),4000);
   },[]);
-  return[toasts,push];
+  return [toasts,push];
 }
 
 /* ══════════════════════════════════════════
    CSS
 ══════════════════════════════════════════ */
-const css=`
+const css = `
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 html,body,#root{background:${C.bg};color:${C.text};font-family:'Noto Sans Bengali','Space Grotesk',sans-serif;min-height:100dvh;max-width:480px;margin:0 auto;overflow-x:hidden}
 ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:${C.border};border-radius:10px}
 .bottom-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:${C.navBg};border-top:1px solid ${C.border};display:flex;z-index:100;padding-bottom:env(safe-area-inset-bottom,8px)}
-.nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 2px 7px;cursor:pointer;border:none;background:transparent;color:${C.muted};font-family:inherit;font-size:9px;font-weight:500;transition:color .15s;position:relative}
+.nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 2px 6px;cursor:pointer;border:none;background:transparent;color:${C.muted};font-family:inherit;font-size:9px;font-weight:500;transition:color .15s;position:relative}
 .nav-btn.active{color:${C.accent}}
-.nav-icon{font-size:19px;line-height:1}
-.nav-badge{position:absolute;top:5px;right:calc(50% - 17px);background:${C.red};color:#fff;font-size:8px;font-weight:700;width:14px;height:14px;border-radius:50%;display:flex;align-items:center;justify-content:center}
-.topbar{background:${C.card};border-bottom:1px solid ${C.border};padding:13px 16px 11px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
-.topbar-title{font-size:16px;font-weight:700}
+.nav-icon{font-size:18px;line-height:1}
+.nav-badge{position:absolute;top:5px;right:calc(50% - 16px);background:${C.red};color:#fff;font-size:8px;font-weight:700;width:14px;height:14px;border-radius:50%;display:flex;align-items:center;justify-content:center}
+.topbar{background:${C.card};border-bottom:1px solid ${C.border};padding:12px 16px 10px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
+.topbar-title{font-size:15px;font-weight:700}
 .topbar-sub{font-size:10px;color:${C.muted};margin-top:1px}
-.icon-btn{width:36px;height:36px;border-radius:10px;background:${C.panel};border:1px solid ${C.border};color:${C.text};font-size:17px;display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .15s}
-.icon-btn:active{transform:scale(.92)}
-.icon-btn.spinning{animation:spin 1s linear infinite}
-.page{padding:14px;padding-bottom:85px;min-height:100dvh}
-.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:11px}
-.stat-card{background:${C.card};border:1px solid ${C.border};border-radius:14px;padding:13px;position:relative;overflow:hidden}
-.stat-card::after{content:attr(data-icon);position:absolute;right:8px;bottom:6px;font-size:26px;opacity:.12}
-.stat-label{font-size:10px;color:${C.muted};font-weight:600;margin-bottom:5px;text-transform:uppercase;letter-spacing:.5px}
-.stat-value{font-size:26px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.icon-btn{width:34px;height:34px;border-radius:9px;background:${C.panel};border:1px solid ${C.border};color:${C.text};font-size:16px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.icon-btn.spin{animation:spin 1s linear infinite}
+.page{padding:13px;padding-bottom:82px;min-height:100dvh}
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.stat-card{background:${C.card};border:1px solid ${C.border};border-radius:13px;padding:12px;position:relative;overflow:hidden}
+.stat-card::after{content:attr(data-icon);position:absolute;right:8px;bottom:6px;font-size:24px;opacity:.12}
+.stat-label{font-size:10px;color:${C.muted};font-weight:600;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+.stat-value{font-size:24px;font-weight:700;line-height:1}
 .sv-blue{color:${C.accent}}.sv-green{color:${C.green}}.sv-red{color:${C.red}}.sv-yellow{color:${C.yellow}}.sv-purple{color:${C.purple}}
 .t-blue{border-top:2px solid ${C.accent}}.t-green{border-top:2px solid ${C.green}}.t-red{border-top:2px solid ${C.red}}.t-yellow{border-top:2px solid ${C.yellow}}.t-purple{border-top:2px solid ${C.purple}}
-.card{background:${C.card};border:1px solid ${C.border};border-radius:14px;padding:14px;margin-bottom:11px}
-.card-title{font-size:11px;font-weight:700;color:${C.muted};text-transform:uppercase;letter-spacing:.8px;margin-bottom:12px}
-.user-row{display:flex;align-items:center;gap:11px;padding:11px 0;border-bottom:1px solid ${C.border}40}
+.card{background:${C.card};border:1px solid ${C.border};border-radius:13px;padding:13px;margin-bottom:10px}
+.card-title{font-size:11px;font-weight:700;color:${C.muted};text-transform:uppercase;letter-spacing:.8px;margin-bottom:11px}
+.user-row{display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid ${C.border}40}
 .user-row:last-child{border-bottom:none}
-.avatar{width:40px;height:40px;border-radius:50%;background:linear-gradient(135deg,${C.accent},${C.purple});display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;color:#fff;flex-shrink:0}
-.avatar.sm{width:32px;height:32px;font-size:11px}
-.avatar.lg{width:56px;height:56px;font-size:20px}
+.avatar{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,${C.accent},${C.purple});display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;flex-shrink:0}
+.avatar.sm{width:30px;height:30px;font-size:11px}
+.avatar.lg{width:52px;height:52px;font-size:18px}
 .user-info{flex:1;min-width:0}
-.user-name{font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.user-meta{font-size:11px;color:${C.muted};margin-top:2px}
-.pill{display:inline-flex;align-items:center;gap:3px;padding:3px 8px;border-radius:20px;font-size:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
+.user-name{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.user-meta{font-size:10px;color:${C.muted};margin-top:1px}
+.pill{display:inline-flex;align-items:center;gap:2px;padding:2px 8px;border-radius:20px;font-size:10px;font-weight:700;white-space:nowrap;flex-shrink:0}
 .p-active{background:#22c55e18;color:${C.green};border:1px solid #22c55e33}
 .p-inactive{background:#ef444418;color:${C.red};border:1px solid #ef444433}
 .p-pending{background:#f59e0b18;color:${C.yellow};border:1px solid #f59e0b33}
-.btn{display:inline-flex;align-items:center;gap:4px;padding:8px 13px;border-radius:10px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;border:none;transition:all .15s;white-space:nowrap}
+.btn{display:inline-flex;align-items:center;gap:4px;padding:7px 12px;border-radius:9px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer;border:none;transition:all .15s;white-space:nowrap}
 .btn:active{transform:scale(.96)}.btn:disabled{opacity:.45;pointer-events:none}
-.btn-p{background:${C.accent};color:#fff}.btn-p:hover{filter:brightness(1.1)}
+.btn-p{background:${C.accent};color:#fff}
 .btn-s{background:#22c55e20;color:${C.green};border:1px solid #22c55e40}.btn-s:not(:disabled):hover{background:${C.green};color:#fff}
-.btn-d{background:#ef444420;color:${C.red};border:1px solid #ef444440}.btn-d:hover{background:${C.red};color:#fff}
+.btn-d{background:#ef444420;color:${C.red};border:1px solid #ef444440}
 .btn-g{background:transparent;color:${C.muted};border:1px solid ${C.border}}.btn-g:hover{background:${C.border};color:${C.text}}
-.btn-block{width:100%;justify-content:center;padding:11px}
-.input,.ta{background:${C.panel};border:1px solid ${C.border};border-radius:10px;padding:10px 12px;color:${C.text};font-family:inherit;font-size:14px;width:100%;outline:none;transition:border-color .2s;-webkit-appearance:none}
-.input:focus,.ta:focus{border-color:${C.accent}}
+.btn-block{width:100%;justify-content:center;padding:10px}
+.input,.ta,.sel{background:${C.panel};border:1px solid ${C.border};border-radius:9px;padding:9px 12px;color:${C.text};font-family:inherit;font-size:13px;width:100%;outline:none;transition:border-color .2s;-webkit-appearance:none}
+.input:focus,.ta:focus,.sel:focus{border-color:${C.accent}}
 .input::placeholder,.ta::placeholder{color:${C.muted}}
-.ta{resize:vertical;min-height:80px}
-.field{margin-bottom:11px}
-.field label{display:block;font-size:10px;font-weight:700;color:${C.muted};letter-spacing:.8px;margin-bottom:5px;text-transform:uppercase}
-.sw{position:relative;margin-bottom:11px}
-.sw .si{position:absolute;left:11px;top:50%;transform:translateY(-50%);font-size:15px;pointer-events:none}
-.sw .input{padding-left:36px}
-.ftabs{display:flex;gap:5px;margin-bottom:12px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
+.ta{resize:vertical;min-height:75px}
+.field{margin-bottom:10px}
+.field label{display:block;font-size:10px;font-weight:700;color:${C.muted};letter-spacing:.8px;margin-bottom:4px;text-transform:uppercase}
+.sw{position:relative;margin-bottom:10px}
+.sw .si{position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:14px;pointer-events:none}
+.sw .input{padding-left:32px}
+.ftabs{display:flex;gap:5px;margin-bottom:11px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}
 .ftabs::-webkit-scrollbar{display:none}
-.ftab{flex-shrink:0;padding:6px 13px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${C.border};background:transparent;color:${C.muted};font-family:inherit;transition:all .15s}
+.ftab{flex-shrink:0;padding:6px 12px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${C.border};background:transparent;color:${C.muted};font-family:inherit;transition:all .15s}
 .ftab.active{background:${C.accent};color:#fff;border-color:${C.accent}}
-.rc{background:${C.panel};border:1px solid ${C.border};border-radius:12px;padding:12px;margin-bottom:9px}
-.r-issue{font-size:12px;color:${C.text};line-height:1.5;background:${C.card};border-radius:8px;padding:8px 10px;margin-top:7px;border-left:2px solid ${C.red}}
-.r-meta{font-size:10px;color:${C.muted};margin-top:4px;display:flex;gap:7px;flex-wrap:wrap}
-.overlay{position:fixed;inset:0;background:#00000094;z-index:200;display:flex;align-items:flex-end;animation:fi .2s}
-.modal{background:${C.card};border:1px solid ${C.border};border-radius:22px 22px 0 0;padding:18px 18px 38px;width:100%;max-height:88dvh;overflow-y:auto;animation:su .25s ease}
-.mhandle{width:34px;height:4px;background:${C.border};border-radius:4px;margin:0 auto 14px}
-.mtitle{font-size:15px;font-weight:700;margin-bottom:14px;display:flex;align-items:center;gap:7px}
-.fullscreen{position:fixed;inset:0;background:${C.bg};z-index:150;overflow-y:auto;animation:fi .2s}
-.fs-header{background:${C.card};border-bottom:1px solid ${C.border};padding:13px 16px;display:flex;align-items:center;gap:12px;position:sticky;top:0;z-index:10}
-.back-btn{width:34px;height:34px;border-radius:9px;background:${C.panel};border:1px solid ${C.border};color:${C.text};font-size:16px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
-.skel{background:linear-gradient(90deg,${C.border},#1a2840,${C.border});background-size:200% 100%;animation:shim 1.4s infinite;border-radius:10px;height:68px;margin-bottom:9px}
-.empty{text-align:center;padding:44px 20px;color:${C.muted}}
-.ei{font-size:38px;margin-bottom:9px;opacity:.25}
-.toasts{position:fixed;top:14px;left:50%;transform:translateX(-50%);width:calc(100% - 28px);max-width:440px;z-index:999;display:flex;flex-direction:column;gap:7px;pointer-events:none}
-.toast{background:${C.card};border:1px solid ${C.border};border-radius:11px;padding:11px 13px;display:flex;gap:9px;align-items:flex-start;animation:ti .3s ease;box-shadow:0 8px 32px #00000080;pointer-events:all}
+.rc{background:${C.panel};border:1px solid ${C.border};border-radius:11px;padding:11px;margin-bottom:8px}
+.r-issue{font-size:12px;color:${C.text};line-height:1.5;background:${C.card};border-radius:7px;padding:7px 9px;margin-top:7px;border-left:2px solid ${C.red}}
+.r-meta{font-size:10px;color:${C.muted};margin-top:4px;display:flex;gap:6px;flex-wrap:wrap}
+.overlay{position:fixed;inset:0;background:#00000094;z-index:200;display:flex;align-items:flex-end}
+.modal{background:${C.card};border:1px solid ${C.border};border-radius:20px 20px 0 0;padding:16px 16px 36px;width:100%;max-height:88dvh;overflow-y:auto;animation:su .22s ease}
+.mhandle{width:32px;height:4px;background:${C.border};border-radius:4px;margin:0 auto 13px}
+.mtitle{font-size:15px;font-weight:700;margin-bottom:13px;display:flex;align-items:center;gap:7px}
+.fullscreen{position:fixed;inset:0;background:${C.bg};z-index:150;overflow-y:auto}
+.fs-header{background:${C.card};border-bottom:1px solid ${C.border};padding:12px 14px;display:flex;align-items:center;gap:11px;position:sticky;top:0;z-index:10}
+.back-btn{width:32px;height:32px;border-radius:8px;background:${C.panel};border:1px solid ${C.border};color:${C.text};font-size:15px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0}
+.skel{background:linear-gradient(90deg,${C.border},#1a2840,${C.border});background-size:200% 100%;animation:shim 1.4s infinite;border-radius:9px;height:64px;margin-bottom:8px}
+.empty{text-align:center;padding:40px 20px;color:${C.muted}}
+.ei{font-size:36px;margin-bottom:8px;opacity:.25}
+.toasts{position:fixed;top:13px;left:50%;transform:translateX(-50%);width:calc(100% - 26px);max-width:440px;z-index:999;display:flex;flex-direction:column;gap:6px;pointer-events:none}
+.toast{background:${C.card};border:1px solid ${C.border};border-radius:11px;padding:10px 12px;display:flex;gap:8px;align-items:flex-start;animation:ti .25s ease;box-shadow:0 8px 28px #00000080;pointer-events:all}
 .toast.success{border-left:3px solid ${C.green}}.toast.error{border-left:3px solid ${C.red}}.toast.warn{border-left:3px solid ${C.yellow}}.toast.info{border-left:3px solid ${C.accent}}
-.t-icon{font-size:17px}.t-body{flex:1}.t-title{font-size:12px;font-weight:700}.t-msg{font-size:11px;color:${C.muted};margin-top:1px}
-.atabs{display:flex;background:${C.panel};border-radius:11px;padding:3px;margin-bottom:12px;gap:3px}
-.atab{flex:1;text-align:center;padding:7px 3px;border-radius:8px;font-size:11px;font-weight:600;cursor:pointer;border:none;background:transparent;color:${C.muted};font-family:inherit;transition:all .2s}
-.atab.active{background:${C.card};color:${C.text};box-shadow:0 2px 8px #00000040}
-.srow{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid ${C.border}40;font-size:12px}
+.t-icon{font-size:16px}.t-body{flex:1}.t-title{font-size:12px;font-weight:700}.t-msg{font-size:11px;color:${C.muted};margin-top:1px}
+.atabs{display:flex;background:${C.panel};border-radius:10px;padding:3px;margin-bottom:11px;gap:3px}
+.atab{flex:1;text-align:center;padding:7px 3px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;border:none;background:transparent;color:${C.muted};font-family:inherit;transition:all .2s}
+.atab.active{background:${C.card};color:${C.text};box-shadow:0 2px 6px #00000040}
+.srow{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid ${C.border}40;font-size:12px}
 .srow:last-child{border-bottom:none}
-.sbar{height:4px;border-radius:4px;background:${C.border};flex:1;margin:4px 7px 0 0;overflow:hidden}
-.sbar-f{height:100%;border-radius:4px;transition:width .6s ease}
-.bcard{background:linear-gradient(135deg,${C.card},#0a1830);border:1px solid ${C.accentGlow};border-radius:14px;padding:14px;margin-bottom:11px}
-.slabel{font-size:10px;font-weight:700;color:${C.muted};letter-spacing:1.2px;text-transform:uppercase;margin:16px 0 9px}
-.nrow{display:flex;gap:9px;align-items:flex-start;padding:10px 0;border-bottom:1px solid ${C.border}40}
+.sbar{height:3px;border-radius:3px;background:${C.border};flex:1;margin:3px 6px 0 0;overflow:hidden}
+.sbar-f{height:100%;border-radius:3px;transition:width .6s ease}
+.slabel{font-size:10px;font-weight:700;color:${C.muted};letter-spacing:1.2px;text-transform:uppercase;margin:14px 0 8px}
+.nrow{display:flex;gap:8px;align-items:flex-start;padding:9px 0;border-bottom:1px solid ${C.border}40}
 .nrow:last-child{border-bottom:none}
-.ndot{width:7px;height:7px;border-radius:50%;margin-top:5px;flex-shrink:0}
-.ndot.n{background:${C.accent};box-shadow:0 0 5px ${C.accent}}
-.ndot.o{background:${C.muted}}
-.ncontent{flex:1}.ntitle{font-size:13px;font-weight:600}.nsub{font-size:11px;color:${C.muted};margin-top:1px}
+.ndot{width:7px;height:7px;border-radius:50%;margin-top:4px;flex-shrink:0}
+.ndot.n{background:${C.accent}}.ndot.o{background:${C.muted}}
+.ncontent{flex:1}.ntitle{font-size:12px;font-weight:600}.nsub{font-size:11px;color:${C.muted};margin-top:1px}
 .ntime{font-size:10px;color:${C.muted};white-space:nowrap}
-.steps{display:flex;margin-bottom:18px}
-.step{flex:1;text-align:center;font-size:10px;font-weight:700;padding:6px 3px;border-bottom:2px solid ${C.border};color:${C.muted};transition:all .2s}
-.step.done{border-color:${C.green};color:${C.green}}
-.step.active{border-color:${C.accent};color:${C.accent}}
-/* mini bar chart */
-.bar-chart{display:flex;align-items:flex-end;gap:3px;height:70px;margin-top:6px}
-.bar-col{display:flex;flex-direction:column;align-items:center;flex:1;gap:3px}
-.bar-rect{width:100%;border-radius:4px 4px 0 0;transition:height .5s ease;min-height:2px}
-.bar-label{font-size:8px;color:${C.muted};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28px;text-align:center}
-/* search result */
-.sr-item{display:flex;align-items:center;gap:10px;padding:10px;background:${C.panel};border:1px solid ${C.border};border-radius:11px;margin-bottom:7px;cursor:pointer;transition:border-color .15s}
+.steps{display:flex;margin-bottom:16px}
+.step{flex:1;text-align:center;font-size:10px;font-weight:700;padding:5px 2px;border-bottom:2px solid ${C.border};color:${C.muted};transition:all .2s}
+.step.done{border-color:${C.green};color:${C.green}}.step.active{border-color:${C.accent};color:${C.accent}}
+.bar-chart{display:flex;align-items:flex-end;gap:2px;height:64px;margin-top:5px}
+.bar-col{display:flex;flex-direction:column;align-items:center;flex:1;gap:2px}
+.bar-rect{width:100%;border-radius:3px 3px 0 0;min-height:2px}
+.bar-label{font-size:7px;color:${C.muted};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:26px;text-align:center}
+.sr-item{display:flex;align-items:center;gap:9px;padding:9px;background:${C.panel};border:1px solid ${C.border};border-radius:10px;margin-bottom:6px;cursor:pointer;transition:border-color .15s}
 .sr-item:hover{border-color:${C.accent}}
-.sr-tag{font-size:9px;font-weight:700;padding:2px 6px;border-radius:8px;background:${C.accentGlow};color:${C.accent};flex-shrink:0}
-/* perf ring */
-.ring-wrap{position:relative;width:72px;height:72px;flex-shrink:0}
+.sr-tag{font-size:9px;font-weight:700;padding:2px 6px;border-radius:7px;background:${C.accent}20;color:${C.accent};flex-shrink:0}
+.ring-wrap{position:relative;width:68px;height:68px;flex-shrink:0}
 .ring-wrap svg{transform:rotate(-90deg)}
-.ring-pct{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700}
+.ring-pct{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
+/* entry form */
+.type-pill{padding:6px 14px;border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;border:1px solid ${C.border};background:transparent;color:${C.muted};font-family:inherit;transition:all .15s;flex-shrink:0}
+.type-pill.active{background:${C.accent};color:#fff;border-color:${C.accent}}
+.img-preview{width:100%;border-radius:9px;margin-top:6px;border:1px solid ${C.border}}
+.correct-chip{padding:4px 10px;border-radius:8px;font-size:11px;font-weight:700;cursor:pointer;border:1px solid ${C.border};background:transparent;color:${C.muted};font-family:inherit;transition:all .15s;white-space:nowrap}
+.correct-chip.active{background:${C.green}20;color:${C.green};border-color:${C.green}40}
 @keyframes spin{to{transform:rotate(360deg)}}
-@keyframes fi{from{opacity:0}to{opacity:1}}
-@keyframes su{from{transform:translateY(38px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes su{from{transform:translateY(36px);opacity:0}to{transform:translateY(0);opacity:1}}
 @keyframes shim{0%{background-position:-200% 0}100%{background-position:200% 0}}
-@keyframes ti{from{transform:translateY(-18px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes ti{from{transform:translateY(-16px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
 `;
 
 /* ══════════════════════════════════════════
    MINI COMPONENTS
 ══════════════════════════════════════════ */
-function PerfRing({val,max,color}){
-  const r=28, circ=2*Math.PI*r, pctVal=max?Math.min(100,Math.round(val/max*100)):0;
-  const dash=circ*(pctVal/100);
+function PerfRing({val,max,color}) {
+  const r=26,circ=2*Math.PI*r,p=max?Math.min(100,Math.round(val/max*100)):0;
   return(
     <div className="ring-wrap">
-      <svg width="72" height="72" viewBox="0 0 72 72">
-        <circle cx="36" cy="36" r={r} fill="none" stroke={C.border} strokeWidth="6"/>
-        <circle cx="36" cy="36" r={r} fill="none" stroke={color} strokeWidth="6"
-          strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"/>
+      <svg width="68" height="68" viewBox="0 0 68 68">
+        <circle cx="34" cy="34" r={r} fill="none" stroke={C.border} strokeWidth="6"/>
+        <circle cx="34" cy="34" r={r} fill="none" stroke={color} strokeWidth="6"
+          strokeDasharray={`${circ*p/100} ${circ}`} strokeLinecap="round"/>
       </svg>
-      <div className="ring-pct" style={{color}}>{pctVal}%</div>
+      <div className="ring-pct" style={{color}}>{p}%</div>
     </div>
   );
 }
 
-function MiniBarChart({data,color}){
-  if(!data||!data.length) return null;
+function MiniBar({data,color}) {
+  if(!data?.length) return null;
   const max=Math.max(...data.map(d=>d.v),1);
   return(
     <div className="bar-chart">
       {data.map((d,i)=>(
         <div key={i} className="bar-col">
-          <div className="bar-rect" style={{height:(d.v/max*60)+"px",background:color,opacity:.85}}/>
+          <div className="bar-rect" style={{height:(d.v/max*58)+"px",background:color,opacity:.85}}/>
           <div className="bar-label">{d.l}</div>
         </div>
       ))}
@@ -244,71 +303,45 @@ function MiniBarChart({data,color}){
   );
 }
 
-/* ══════════════════════════════════════════
-   SUBJECT TREE — Subject > Topic > SubTopic
-══════════════════════════════════════════ */
-function SubjectTree({entries,total,color}){
-  const[expanded,setExpanded]=useState({});
-  const toggle=k=>setExpanded(p=>({...p,[k]:!p[k]}));
-
+function SubjectTree({entries,total,color}) {
+  const [open,setOpen] = useState({});
+  const tog = k => setOpen(p=>({...p,[k]:!p[k]}));
   return(
     <>
       {entries.map(([sub,v])=>{
-        const isOpen=expanded[sub];
-        const topics=v.topics||{};
-        const topicEntries=Object.entries(topics);
+        const tops = Object.entries(v.topics||{});
+        const isOpen = open[sub];
         return(
-          <div key={sub} style={{marginBottom:8}}>
-            {/* Subject row */}
-            <div
-              style={{display:"flex",alignItems:"center",padding:"9px 0",borderBottom:`1px solid ${C.border}40`,cursor:topicEntries.length>0?"pointer":"default"}}
-              onClick={()=>topicEntries.length>0&&toggle(sub)}
-            >
+          <div key={sub} style={{marginBottom:7}}>
+            <div style={{display:"flex",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}40`,cursor:tops.length?"pointer":"default"}} onClick={()=>tops.length&&tog(sub)}>
               <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:13,display:"flex",alignItems:"center",gap:5}}>
-                  {topicEntries.length>0&&<span style={{fontSize:10,color:C.muted,transition:"transform .2s",display:"inline-block",transform:isOpen?"rotate(90deg)":"rotate(0deg)"}}>▶</span>}
+                <div style={{fontWeight:700,fontSize:12,display:"flex",alignItems:"center",gap:4}}>
+                  {tops.length>0&&<span style={{fontSize:9,color:C.muted,display:"inline-block",transform:isOpen?"rotate(90deg)":"none",transition:"transform .2s"}}>▶</span>}
                   {sub}
                 </div>
-                <div style={{display:"flex",alignItems:"center",marginTop:3}}>
-                  <div className="sbar"><div className="sbar-f" style={{width:pct(v.total,total)+"%",background:color}}/></div>
-                </div>
-                <div style={{fontSize:9,color:C.muted,marginTop:1}}>
-                  MCQ:{v.mcq} · Written:{v.written}
-                  {topicEntries.length>0&&<span> · {topicEntries.length}টি Topic</span>}
-                </div>
+                <div style={{display:"flex",alignItems:"center",marginTop:3}}><div className="sbar"><div className="sbar-f" style={{width:pct(v.total,total)+"%",background:color}}/></div></div>
+                <div style={{fontSize:9,color:C.muted,marginTop:1}}>MCQ:{v.mcq} · Written:{v.written}{tops.length?` · ${tops.length}টি Topic`:""}</div>
               </div>
-              <div style={{fontWeight:700,color,fontSize:17,minWidth:36,textAlign:"right"}}>{v.total}</div>
+              <div style={{fontWeight:700,color,fontSize:16,minWidth:32,textAlign:"right"}}>{v.total}</div>
             </div>
-
-            {/* Topics (expanded) */}
-            {isOpen&&topicEntries.map(([topic,tv])=>{
-              const stEntries=Object.entries(tv.subtopics||{});
-              const isTopicOpen=expanded[sub+"__"+topic];
+            {isOpen&&tops.map(([topic,tv])=>{
+              const sts=Object.entries(tv.subtopics||{});
+              const tOpen=open[sub+"__"+topic];
               return(
-                <div key={topic} style={{marginLeft:14,borderLeft:`2px solid ${color}30`}}>
-                  {/* Topic row */}
-                  <div
-                    style={{display:"flex",alignItems:"center",padding:"7px 0 7px 10px",borderBottom:`1px solid ${C.border}30`,cursor:stEntries.length>0?"pointer":"default"}}
-                    onClick={()=>stEntries.length>0&&toggle(sub+"__"+topic)}
-                  >
+                <div key={topic} style={{marginLeft:12,borderLeft:`2px solid ${color}30`}}>
+                  <div style={{display:"flex",alignItems:"center",padding:"6px 0 6px 9px",cursor:sts.length?"pointer":"default"}} onClick={()=>sts.length&&tog(sub+"__"+topic)}>
                     <div style={{flex:1}}>
-                      <div style={{fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                        {stEntries.length>0&&<span style={{fontSize:9,color:C.muted,transition:"transform .2s",display:"inline-block",transform:isTopicOpen?"rotate(90deg)":"rotate(0)"}}>▶</span>}
+                      <div style={{fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:3}}>
+                        {sts.length>0&&<span style={{fontSize:8,color:C.muted,display:"inline-block",transform:tOpen?"rotate(90deg)":"none",transition:"transform .2s"}}>▶</span>}
                         📂 {topic}
                       </div>
-                      {stEntries.length>0&&<div style={{fontSize:9,color:C.muted,marginTop:1}}>{stEntries.length}টি SubTopic</div>}
                     </div>
-                    <div style={{fontWeight:700,color,fontSize:14,minWidth:30,textAlign:"right"}}>{tv.total}</div>
+                    <div style={{fontWeight:700,color,fontSize:13,minWidth:28,textAlign:"right"}}>{tv.total}</div>
                   </div>
-
-                  {/* SubTopics (expanded) */}
-                  {isTopicOpen&&stEntries.map(([st,stv])=>(
-                    <div key={st} style={{display:"flex",alignItems:"center",padding:"6px 0 6px 20px",borderBottom:`1px solid ${C.border}20`}}>
-                      <div style={{flex:1}}>
-                        <div style={{fontSize:11,color:C.text}}>📄 {st}</div>
-                        <div style={{fontSize:9,color:C.muted,marginTop:1}}>MCQ:{stv.mcq||0} · Written:{stv.written||0}</div>
-                      </div>
-                      <div style={{fontWeight:600,color:C.muted,fontSize:13,minWidth:28,textAlign:"right"}}>{stv.total}</div>
+                  {tOpen&&sts.map(([st,stv])=>(
+                    <div key={st} style={{display:"flex",alignItems:"center",padding:"5px 0 5px 18px",borderBottom:`1px solid ${C.border}20`}}>
+                      <div style={{flex:1}}><div style={{fontSize:10,color:C.text}}>📄 {st}</div><div style={{fontSize:9,color:C.muted}}>MCQ:{stv.mcq||0} · Written:{stv.written||0}</div></div>
+                      <div style={{fontWeight:600,color:C.muted,fontSize:12,minWidth:26,textAlign:"right"}}>{stv.total}</div>
                     </div>
                   ))}
                 </div>
@@ -322,152 +355,167 @@ function SubjectTree({entries,total,color}){
 }
 
 /* ══════════════════════════════════════════
-   DASHBOARD
+   DASHBOARD — Firebase direct read
 ══════════════════════════════════════════ */
-function DashboardPage({push,forceRefresh}){
-  const{data:dash,loading:l1}=useSWR({action:"getDashboard"},forceRefresh);
-  const{data:ud,loading:l2}=useSWR({action:"getUsers"},forceRefresh);
-  const[atab,setAtab]=useState("quiz");
+function DashboardPage({push,forceRefresh}) {
+  const {data:quiz,loading:l1}  = useFB("Quiz",  forceRefresh);
+  const {data:qbank,loading:l2} = useFB("QBank", forceRefresh);
+  const {data:study,loading:l3} = useFB("Study", forceRefresh);
+  const {data:users,loading:l4} = useFB("Users", forceRefresh);
+  const {data:reports}           = useFB("Reports",forceRefresh);
+  const {data:summary}           = useFB("Analytics/Summary",forceRefresh);
+  const [atab,setAtab] = useState("quiz");
 
-  const users=ud?.users||[];
-  const total=users.length;
-  const active=users.filter(u=>(u.Status||u.status||"").toLowerCase()==="active").length;
-  const pending=total-active;
-  const reports=dash?.reports?.length||0;
-  const quizTotal=dash?Object.values(dash.quiz||{}).reduce((s,v)=>s+v.total,0):0;
-  const qbTotal=dash?Object.values(dash.qbank||{}).reduce((s,v)=>s+v.total,0):0;
-  const stTotal=dash?Object.values(dash.study||{}).reduce((s,v)=>s+v.total,0):0;
+  const loading = l1||l2||l3||l4;
 
-  if((l1||l2)&&!dash) return(
+  // Users stats
+  const userArr = users ? (Array.isArray(users)?users:Object.values(users)).filter(Boolean) : [];
+  const total   = userArr.length;
+  const active  = userArr.filter(u=>(u.Status||u.status||"").toLowerCase()==="active").length;
+  const pending = total-active;
+
+  // Questions stats with topic breakdown
+  const buildStats = (arr) => {
+    if(!arr) return {total:0,mcq:0,written:0,bySubject:{}};
+    const rows = Array.isArray(arr)?arr:Object.values(arr);
+    const bySubject = {};
+    rows.filter(Boolean).forEach(q=>{
+      const sub  = (q.Subject||q.subject||"Unknown").trim();
+      const typ  = (q.QType||q.qtype||q.Type||"MCQ").toLowerCase();
+      const st   = (q.Sub_topic||q.sub_topic||q.SubTopic||"General").trim();
+      const top  = st.includes(" > ")?st.split(" > ")[0].trim():st;
+      const stFinal = st.includes(" > ")?st.split(" > ")[1].trim():st;
+      const isMCQ = typ!=="written";
+      if(!bySubject[sub]) bySubject[sub]={total:0,mcq:0,written:0,topics:{}};
+      bySubject[sub].total++;
+      if(isMCQ) bySubject[sub].mcq++; else bySubject[sub].written++;
+      if(!bySubject[sub].topics[top]) bySubject[sub].topics[top]={total:0,subtopics:{}};
+      bySubject[sub].topics[top].total++;
+      if(!bySubject[sub].topics[top].subtopics[stFinal]) bySubject[sub].topics[top].subtopics[stFinal]={total:0,mcq:0,written:0};
+      bySubject[sub].topics[top].subtopics[stFinal].total++;
+      if(isMCQ) bySubject[sub].topics[top].subtopics[stFinal].mcq++; else bySubject[sub].topics[top].subtopics[stFinal].written++;
+    });
+    const total2=rows.filter(Boolean).length;
+    const mcq2=rows.filter(Boolean).filter(q=>(q.QType||q.qtype||"MCQ").toLowerCase()!=="written").length;
+    return {total:total2,mcq:mcq2,written:total2-mcq2,bySubject};
+  };
+
+  const qs = buildStats(quiz);
+  const qbs = buildStats(qbank);
+  const stTotal = study?(Array.isArray(study)?study:Object.values(study)).filter(Boolean).length:0;
+  const rptTotal = reports?(Array.isArray(reports)?reports:Object.values(reports)).filter(Boolean).length:0;
+
+  // Daily active chart
+  const days = [...Array(7)].map((_,i)=>{
+    const d=new Date(); d.setDate(d.getDate()-(6-i));
+    const label=`${d.getDate()}/${d.getMonth()+1}`;
+    const count = summary&&typeof summary==="object"?Object.values(summary).filter(u=>{
+      const la=u.lastActive||"";
+      if(!la)return false;
+      try{return new Date(la).toDateString()===d.toDateString();}catch{return false;}
+    }).length:0;
+    return {l:label,v:count};
+  });
+
+  if(loading&&!quiz) return(
     <div className="page">
-      <div className="stat-grid">{[...Array(4)].map((_,i)=><div key={i} className="skel" style={{height:78,borderRadius:14}}/>)}</div>
+      <div className="stat-grid">{[...Array(4)].map((_,i)=><div key={i} className="skel" style={{height:74,borderRadius:13}}/>)}</div>
       {[...Array(3)].map((_,i)=><div key={i} className="skel"/>)}
     </div>
   );
 
-  const quizE=Object.entries(dash?.quiz||{});
-  const qbankE=Object.entries(dash?.qbank||{});
-  const studyE=Object.entries(dash?.study||{});
-
-  // Daily active — last 7 days from users lastActive
-  const days=[];
-  for(let i=6;i>=0;i--){
-    const d=new Date(); d.setDate(d.getDate()-i);
-    const label=`${d.getDate()}/${d.getMonth()+1}`;
-    const count=users.filter(u=>{
-      const la=u._lastActive||"";
-      if(!la)return false;
-      try{
-        const ud2=new Date(la.replace(/(\d{2})-(\d{2})-(\d{4})/,"$3-$2-$1"));
-        return ud2.toDateString()===d.toDateString();
-      }catch{return false;}
-    }).length;
-    days.push({l:label,v:count});
-  }
-
   return(
     <div className="page">
       <div className="stat-grid">
-        <div className="stat-card t-blue"  data-icon="👥"><div className="stat-label">মোট স্টুডেন্ট</div><div className="stat-value sv-blue">{fmt(total)}</div></div>
-        <div className="stat-card t-green" data-icon="✅"><div className="stat-label">অ্যাক্টিভ</div><div className="stat-value sv-green">{fmt(active)}</div></div>
-        <div className="stat-card t-yellow"data-icon="⏳"><div className="stat-label">পেন্ডিং</div><div className="stat-value sv-yellow">{fmt(pending)}</div></div>
-        <div className="stat-card t-red"   data-icon="🚨"><div className="stat-label">রিপোর্ট</div><div className="stat-value sv-red">{fmt(reports)}</div></div>
+        <div className="stat-card t-blue"   data-icon="👥"><div className="stat-label">স্টুডেন্ট</div><div className="stat-value sv-blue">{fmt(total)}</div></div>
+        <div className="stat-card t-green"  data-icon="✅"><div className="stat-label">অ্যাক্টিভ</div><div className="stat-value sv-green">{fmt(active)}</div></div>
+        <div className="stat-card t-yellow" data-icon="⏳"><div className="stat-label">পেন্ডিং</div><div className="stat-value sv-yellow">{fmt(pending)}</div></div>
+        <div className="stat-card t-red"    data-icon="🚨"><div className="stat-label">রিপোর্ট</div><div className="stat-value sv-red">{fmt(rptTotal)}</div></div>
       </div>
       <div className="stat-grid">
-        <div className="stat-card t-blue"  data-icon="❓"><div className="stat-label">Quiz প্রশ্ন</div><div className="stat-value sv-blue">{fmt(quizTotal)}</div></div>
-        <div className="stat-card t-green" data-icon="📚"><div className="stat-label">QBank</div><div className="stat-value sv-green">{fmt(qbTotal)}</div></div>
-        <div className="stat-card t-yellow"data-icon="📖"><div className="stat-label">Study নোট</div><div className="stat-value sv-yellow">{fmt(stTotal)}</div></div>
-        <div className="stat-card t-purple"data-icon="📊"><div className="stat-label">মোট কন্টেন্ট</div><div className="stat-value sv-purple">{fmt(quizTotal+qbTotal+stTotal)}</div></div>
+        <div className="stat-card t-blue"   data-icon="❓"><div className="stat-label">Quiz</div><div className="stat-value sv-blue">{fmt(qs.total)}</div></div>
+        <div className="stat-card t-green"  data-icon="📚"><div className="stat-label">QBank</div><div className="stat-value sv-green">{fmt(qbs.total)}</div></div>
+        <div className="stat-card t-yellow" data-icon="📖"><div className="stat-label">Study</div><div className="stat-value sv-yellow">{fmt(stTotal)}</div></div>
+        <div className="stat-card t-purple" data-icon="📊"><div className="stat-label">মোট</div><div className="stat-value sv-purple">{fmt(qs.total+qbs.total+stTotal)}</div></div>
       </div>
-
-      {/* Daily Active Chart */}
       <div className="card">
-        <div className="card-title">📈 Daily Active Users (৭ দিন)</div>
-        <MiniBarChart data={days} color={C.accent}/>
-        <div style={{display:"flex",justifyContent:"space-between",marginTop:8,fontSize:11,color:C.muted}}>
+        <div className="card-title">📈 Daily Active (৭ দিন)</div>
+        <MiniBar data={days} color={C.accent}/>
+        <div style={{display:"flex",justifyContent:"space-between",marginTop:6,fontSize:10,color:C.muted}}>
           <span>সর্বোচ্চ: <b style={{color:C.accent}}>{Math.max(...days.map(d=>d.v))}</b></span>
           <span>মোট: <b style={{color:C.accent}}>{days.reduce((s,d)=>s+d.v,0)}</b></span>
         </div>
       </div>
-
-      {/* Analytics */}
       <div className="card">
-        <div className="card-title">📊 বিষয়ভিত্তিক Analytics</div>
+        <div className="card-title">📊 Analytics</div>
         <div className="atabs">
-          {[["quiz",`❓ Quiz`],["qbank",`📚 QBank`],["study",`📖 Study`]].map(([v,l])=>(
+          {[["quiz","❓ Quiz"],["qbank","📚 QBank"],["study","📖 Study"]].map(([v,l])=>(
             <button key={v} className={`atab${atab===v?" active":""}`} onClick={()=>setAtab(v)}>{l}</button>
           ))}
         </div>
-        {atab==="quiz"&&(quizE.length===0
-          ?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>ডেটা নেই</div>
-          :<SubjectTree entries={quizE} total={quizTotal} color={C.accent}/>
-        )}
-        {atab==="qbank"&&(qbankE.length===0
-          ?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>ডেটা নেই</div>
-          :<SubjectTree entries={qbankE} total={qbTotal} color={C.green}/>
-        )}
-        {atab==="study"&&(studyE.length===0?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>ডেটা নেই</div>:studyE.map(([s,v])=>(
-          <div key={s} className="srow">
-            <div style={{flex:1}}>
-              <div style={{fontWeight:600}}>{s}</div>
-              <div style={{display:"flex",alignItems:"center",marginTop:3}}><div className="sbar"><div className="sbar-f" style={{width:pct(v.total,stTotal)+"%",background:C.yellow}}/></div></div>
-            </div>
-            <div style={{fontWeight:700,color:C.yellow,fontSize:17,minWidth:32,textAlign:"right"}}>{v.total}</div>
-          </div>
-        )))}
+        {atab==="quiz"&&(Object.keys(qs.bySubject).length===0?<div style={{textAlign:"center",color:C.muted,padding:"12px 0",fontSize:12}}>ডেটা নেই</div>:<SubjectTree entries={Object.entries(qs.bySubject)} total={qs.total} color={C.accent}/>)}
+        {atab==="qbank"&&(Object.keys(qbs.bySubject).length===0?<div style={{textAlign:"center",color:C.muted,padding:"12px 0",fontSize:12}}>ডেটা নেই</div>:<SubjectTree entries={Object.entries(qbs.bySubject)} total={qbs.total} color={C.green}/>)}
+        {atab==="study"&&<div style={{textAlign:"center",color:C.muted,padding:"12px 0",fontSize:12}}>{fmt(stTotal)}টি নোট</div>}
       </div>
     </div>
   );
 }
 
 /* ══════════════════════════════════════════
-   SIGNUPS
+   SIGNUPS — Firebase PendingSignups + Users
 ══════════════════════════════════════════ */
-function SignupsPage({push,forceRefresh}){
-  const{data:ud,loading}=useSWR({action:"getUsers",lite:"1"},forceRefresh);
-  const[removed,setRemoved]=useState([]);
-  const[activating,setActivating]=useState(null);
-  const pending=(ud?.users||[]).filter(u=>(u.Status||u.status||"").toLowerCase()!=="active"&&!removed.includes(u.Phone||u.phone));
+function SignupsPage({push,forceRefresh}) {
+  const {data:pending,loading} = useFB("PendingSignups",forceRefresh);
+  const [activating,setActivating] = useState(null);
+  const [done,setDone] = useState([]);
 
-  const activate=async(u)=>{
-    const phone=u.Phone||u.phone||"";
-    if(!phone) return;
-    setActivating(phone);
-    try{
-      const r=await apiAction({action:"activateUser",phone});
-      if(r.result==="success"){
-        push("success","✅ অ্যাক্টিভ!",u.Name||u.name||phone);
-        setRemoved(p=>[...p,phone]);
-        cacheInvalidate("getUsers"); fetchAndCache({action:"getUsers"},true);
-      }else push("error","ব্যর্থ",r.error||"Unknown");
-    }catch(e){push("error","নেটওয়ার্ক সমস্যা",e.message);}
+  const rows = pending&&typeof pending==="object"
+    ? Object.entries(pending).filter(([k,v])=>v&&!v.approved&&!done.includes(k)).map(([k,v])=>({...v,_key:k}))
+    : [];
+
+  const activate = async(u) => {
+    setActivating(u._key);
+    try {
+      const ph = (u.phone||u.Phone||"").replace(/[.#$\[\]\s]/g,'_');
+      // Firebase directly write
+      await Promise.all([
+        fb.patch(`Users/${ph}`, { Name:u.name||u.Name||"", Phone:u.phone||u.Phone||"", Status:"Active", Role:"Student", approvedAt:new Date().toISOString() }),
+        fb.patch(`PendingSignups/${u._key}`, { approved:true }),
+        fb.set(`Notifications/${ph}/welcome`, { type:"welcome", title:"🎉 অ্যাকাউন্ট অ্যাক্টিভ!", body:"Smart Study-তে স্বাগতম!", time:now_ts(), read:false }),
+      ]);
+      // Background GAS FCM
+      gasAction({ action:"activateUser", phone:u.phone||u.Phone||"" }).catch(()=>{});
+      push("success","✅ অ্যাক্টিভ!",u.name||u.Name||"");
+      setDone(p=>[...p,u._key]);
+      fbInvalidate("PendingSignups"); fbInvalidate("Users");
+    } catch(e) { push("error","ব্যর্থ",e.message); }
     setActivating(null);
   };
 
   return(
     <div className="page">
-      <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:11,padding:"9px 13px",fontSize:12,color:C.red,fontWeight:600,marginBottom:12,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <span>🔔 {pending.length}টি পেন্ডিং</span>
-        {loading&&<span style={{fontSize:10,color:C.muted}}>⏳ আপডেট...</span>}
+      <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:10,padding:"8px 12px",fontSize:12,color:C.red,fontWeight:600,marginBottom:11,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <span>🔔 {rows.length}টি পেন্ডিং</span>
+        {loading&&<span style={{fontSize:10,color:C.muted}}>⏳</span>}
       </div>
-      {loading&&!ud?[...Array(4)].map((_,i)=><div key={i} className="skel"/>):
-       pending.length===0?<div className="empty"><div className="ei">🎉</div><p>সব অ্যাক্টিভ!</p></div>:
-       pending.map((u,i)=>{
-        const nm=u.Name||u.name||"অজানা", ph=u.Phone||u.phone||"—", busy=activating===ph;
+      {loading&&!pending?[...Array(3)].map((_,i)=><div key={i} className="skel"/>):
+       rows.length===0?<div className="empty"><div className="ei">🎉</div><p>সব অ্যাক্টিভ!</p></div>:
+       rows.map((u,i)=>{
+        const nm=u.name||u.Name||"অজানা",ph=u.phone||u.Phone||"—";
         return(
-          <div key={i} className="card" style={{padding:13}}>
-            <div style={{display:"flex",alignItems:"center",gap:11,marginBottom:11}}>
+          <div key={i} className="card" style={{padding:12}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
               <div className="avatar">{initials(nm)}</div>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontWeight:700,fontSize:14}}>{nm}</div>
-                <div style={{fontSize:11,color:C.muted,marginTop:1}}>📱 {ph}</div>
-                {(u.Email||u.email)&&<div style={{fontSize:11,color:C.muted}}>✉️ {u.Email||u.email}</div>}
-                <div style={{fontSize:10,color:C.muted,marginTop:1}}>🕐 {timeAgo(u.Timestamp||u.timestamp)}</div>
+                <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
+                <div style={{fontSize:11,color:C.muted}}>📱 {ph}</div>
+                {u.email&&<div style={{fontSize:11,color:C.muted}}>✉️ {u.email}</div>}
+                <div style={{fontSize:10,color:C.muted}}>🕐 {timeAgo(u.createdAt||u.timestamp)}</div>
               </div>
               <span className="pill p-pending">⏳ পেন্ডিং</span>
             </div>
             <button className="btn btn-s btn-block" disabled={!!activating} onClick={()=>activate(u)}>
-              {busy?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
+              {activating===u._key?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
             </button>
           </div>
         );
@@ -478,43 +526,54 @@ function SignupsPage({push,forceRefresh}){
 }
 
 /* ══════════════════════════════════════════
-   STUDENTS — list + detail view
+   STUDENTS
 ══════════════════════════════════════════ */
-function StudentsPage({push,forceRefresh}){
-  const{data:ud,loading}=useSWR({action:"getUsers",lite:"1"},forceRefresh);
-  const[overrides,setOverrides]=useState({});
-  const[search,setSearch]=useState("");
-  const[tab,setTab]=useState("all");
-  const[notify,setNotify]=useState(null);
-  const[detail,setDetail]=useState(null);
-  const[activating,setActivating]=useState(null);
+function StudentsPage({push,forceRefresh}) {
+  const {data:usersRaw,loading} = useFB("Users",forceRefresh);
+  const {data:summary}           = useFB("Analytics/Summary");
+  const [overrides,setOverrides] = useState({});
+  const [search,setSearch] = useState("");
+  const [tab,setTab] = useState("all");
+  const [detail,setDetail] = useState(null);
+  const [notify,setNotify] = useState(null);
+  const [activating,setActivating] = useState(null);
 
-  const users=(ud?.users||[]).map(u=>{
-    const ph=u.Phone||u.phone||"";
-    return overrides[ph]?{...u,Status:overrides[ph],status:overrides[ph]}:u;
+  const users = usersRaw
+    ? (Array.isArray(usersRaw)?usersRaw:Object.entries(usersRaw).map(([k,v])=>({...v,_key:k}))).filter(Boolean)
+    : [];
+
+  const enriched = users.map(u=>{
+    const ph = (u.Phone||u.phone||"").replace(/^'+/,"").replace(/^0+/,"");
+    const s = summary&&Object.entries(summary).find(([k])=>k.replace(/_/g,"").replace(/^0+/,"")===ph);
+    const stats = s?s[1]:{};
+    const ov = overrides[u.Phone||u.phone||u._key];
+    return {...u,...stats, Status:ov||u.Status||u.status||"Inactive"};
   });
-  const filtered=users.filter(u=>{
-    const nm=(u.Name||u.name||"").toLowerCase(), ph=(u.Phone||u.phone||"").toLowerCase();
-    const st=(u.Status||u.status||"").toLowerCase(), q=search.toLowerCase();
+
+  const filtered = enriched.filter(u=>{
+    const nm=(u.Name||u.name||"").toLowerCase();
+    const ph=(u.Phone||u.phone||"").toLowerCase();
+    const st=(u.Status||u.status||"").toLowerCase();
+    const q=search.toLowerCase();
     return(!q||nm.includes(q)||ph.includes(q))&&(tab==="all"||st===tab);
   });
 
-  const activate=async(u)=>{
+  const activate = async(u) => {
     const phone=u.Phone||u.phone||"";
-    if(!phone)return;
+    if(!phone) return;
     setActivating(phone);
-    try{
-      const r=await apiAction({action:"activateUser",phone});
-      if(r.result==="success"){
-        push("success","✅ অ্যাক্টিভ!",u.Name||u.name);
-        setOverrides(p=>({...p,[phone]:"Active"}));
-        cacheInvalidate("getUsers"); fetchAndCache({action:"getUsers"},true);
-      }else push("error","ব্যর্থ",r.error);
-    }catch(e){push("error","সমস্যা",e.message);}
+    try {
+      const ph = phone.replace(/[.#$\[\]\s]/g,'_');
+      await fb.patch(`Users/${ph}`, {Status:"Active"});
+      fbInvalidate("Users");
+      setOverrides(p=>({...p,[phone]:"Active"}));
+      gasAction({action:"activateUser",phone}).catch(()=>{});
+      push("success","✅ অ্যাক্টিভ!",u.Name||u.name);
+    } catch(e) { push("error","ব্যর্থ",e.message); }
     setActivating(null);
   };
 
-  if(detail) return <StudentDetailPage user={detail} onBack={()=>setDetail(null)} push={push}/>;
+  if(detail) return <StudentDetail user={detail} onBack={()=>setDetail(null)} push={push}/>;
 
   return(
     <div className="page">
@@ -524,39 +583,39 @@ function StudentsPage({push,forceRefresh}){
           <button key={v} className={`ftab${tab===v?" active":""}`} onClick={()=>setTab(v)}>{l}</button>
         ))}
       </div>
-      <div style={{fontSize:11,color:C.muted,marginBottom:9}}>{filtered.length} জন</div>
-      {loading&&!ud?[...Array(5)].map((_,i)=><div key={i} className="skel"/>):
+      <div style={{fontSize:11,color:C.muted,marginBottom:8}}>{filtered.length} জন</div>
+      {loading&&!usersRaw?[...Array(4)].map((_,i)=><div key={i} className="skel"/>):
        filtered.length===0?<div className="empty"><div className="ei">👤</div><p>কেউ নেই</p></div>:
        filtered.map((u,i)=>{
         const nm=u.Name||u.name||"অজানা",ph=u.Phone||u.phone||"—";
-        const st=(u.Status||u.status||"inactive").toLowerCase(), busy=activating===ph;
-        const correct=parseInt(u._totalCorrect)||0, wrong=parseInt(u._totalWrong)||0;
-        const total2=correct+wrong, acc=total2?Math.round(correct/total2*100):0;
+        const st=(u.Status||u.status||"inactive").toLowerCase();
+        const c=parseInt(u.totalCorrect)||0,w=parseInt(u.totalWrong)||0;
+        const tot=c+w,acc=tot?Math.round(c/tot*100):0;
         return(
-          <div key={i} className="card" style={{padding:12,cursor:"pointer"}} onClick={()=>setDetail(u)}>
-            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:9}}>
+          <div key={i} className="card" style={{padding:11,cursor:"pointer"}} onClick={()=>setDetail(u)}>
+            <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:8}}>
               <div className="avatar">{initials(nm)}</div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
-                <div style={{fontSize:11,color:C.muted}}>📱 {ph}</div>
+                <div style={{fontSize:10,color:C.muted}}>📱 {ph}</div>
               </div>
               <div style={{textAlign:"right"}}>
                 <span className={`pill p-${st==="active"?"active":"inactive"}`}>{st==="active"?"✅":"🔴"} {st==="active"?"অ্যাক্টিভ":"ইনঅ্যাক্টিভ"}</span>
-                {total2>0&&<div style={{fontSize:10,color:acc>=70?C.green:acc>=40?C.yellow:C.red,marginTop:3,fontWeight:700}}>{acc}% accuracy</div>}
+                {tot>0&&<div style={{fontSize:9,color:acc>=70?C.green:acc>=40?C.yellow:C.red,marginTop:2,fontWeight:700}}>{acc}%</div>}
               </div>
             </div>
-            <div style={{display:"flex",gap:7,marginBottom:9}}>
-              {[[C.green,correct,"✅ সঠিক"],[C.red,wrong,"❌ ভুল"],[C.accent,parseInt(u._totalMinutes)||0,"⏱ মিনিট"]].map(([cl,val,lb])=>(
-                <div key={lb} style={{textAlign:"center",flex:1,background:C.panel,borderRadius:8,padding:"6px 2px"}}>
+            <div style={{display:"flex",gap:6,marginBottom:8}}>
+              {[[C.green,c,"✅"],[C.red,w,"❌"],[C.accent,parseInt(u.totalMinutes)||0,"⏱"]].map(([cl,val,ic])=>(
+                <div key={ic} style={{textAlign:"center",flex:1,background:C.panel,borderRadius:7,padding:"5px 2px"}}>
                   <div style={{color:cl,fontWeight:700,fontSize:13}}>{val}</div>
-                  <div style={{color:C.muted,fontSize:9}}>{lb}</div>
+                  <div style={{color:C.muted,fontSize:9}}>{ic}</div>
                 </div>
               ))}
             </div>
-            <div style={{display:"flex",gap:7}} onClick={e=>e.stopPropagation()}>
-              {st!=="active"&&<button className="btn btn-s" style={{flex:1,justifyContent:"center",fontSize:11}} disabled={!!activating} onClick={()=>activate(u)}>{busy?"⏳":"✅ অ্যাক্টিভ"}</button>}
+            <div style={{display:"flex",gap:6}} onClick={e=>e.stopPropagation()}>
+              {st!=="active"&&<button className="btn btn-s" style={{flex:1,justifyContent:"center",fontSize:11}} disabled={!!activating} onClick={()=>activate(u)}>{activating===ph?"⏳":"✅ অ্যাক্টিভ"}</button>}
               <button className="btn btn-g" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setNotify(u)}>📣 নোটিফাই</button>
-              <button className="btn btn-p" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setDetail(u)}>👁 বিস্তারিত</button>
+              <button className="btn btn-p" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setDetail(u)}>👁</button>
             </div>
           </div>
         );
@@ -567,59 +626,25 @@ function StudentsPage({push,forceRefresh}){
   );
 }
 
-/* ── Student Detail Fullscreen Page ── */
-function StudentDetailPage({user,onBack,push}){
-  const[fbData,setFbData]=useState(null);
-  const[loading,setLoading]=useState(true);
+/* ── Student Detail ── */
+function StudentDetail({user,onBack,push}) {
   const nm=user.Name||user.name||"অজানা";
   const ph=(user.Phone||user.phone||"").replace(/^'+/,"");
-  const phNorm=ph.replace(/^0+/,"");
+  const phKey=ph.replace(/[.#$\[\]\s]/g,'_');
   const st=(user.Status||user.status||"inactive").toLowerCase();
+  const {data:timeData} = useFB(`Analytics/Time/${phKey.replace(/^0+/,"")}`);
+  const {data:subjData} = useFB(`Analytics/Subject/${phKey.replace(/^0+/,"")}`);
 
-  useEffect(()=>{
-    (async()=>{
-      setLoading(true);
-      try{
-        // Firebase থেকে Analytics data
-        const summary=await fbGet(`Analytics/Summary`);
-        const timeData=await fbGet(`Analytics/Time`);
-        const subjectData=await fbGet(`Analytics/Subject`);
-        // phone match
-        let matched=null, timeMatched=null, subjectMatched=null;
-        const tryMatch=(obj,k)=>{
-          if(!obj||typeof obj!=="object") return null;
-          const kn=k.replace(/^0+/,"");
-          for(const key of Object.keys(obj)){
-            const kk=key.replace(/_/g,"").replace(/^0+/,"");
-            if(kk===kn||key.replace(/^0+/,"")===kn) return obj[key];
-          }
-          return null;
-        };
-        matched=tryMatch(summary,phNorm);
-        timeMatched=tryMatch(timeData,phNorm);
-        subjectMatched=tryMatch(subjectData,phNorm);
-        // daily time breakdown
-        const dailyTime=[];
-        if(timeMatched&&typeof timeMatched==="object"){
-          const sorted=Object.entries(timeMatched).sort(([a],[b])=>a.localeCompare(b)).slice(-7);
-          sorted.forEach(([date,mins])=>dailyTime.push({l:date.slice(5),v:parseInt(mins)||0}));
-        }
-        setFbData({matched,dailyTime,subjectMatched});
-      }catch(e){}
-      setLoading(false);
-    })();
-  },[phNorm]);
+  const c=parseInt(user.totalCorrect)||0,w=parseInt(user.totalWrong)||0,tot=c+w;
+  const acc=tot?Math.round(c/tot*100):0;
+  const mins=parseInt(user.totalMinutes)||0;
+  const quizzes=parseInt(user.totalQuizzes)||0;
 
-  const correct=parseInt(user._totalCorrect)||fbData?.matched?.totalCorrect||0;
-  const wrong=parseInt(user._totalWrong)||fbData?.matched?.totalWrong||0;
-  const totalQ=correct+wrong;
-  const acc=totalQ?Math.round(correct/totalQ*100):0;
-  const mins=parseInt(user._totalMinutes)||0;
-  const quizzes=parseInt(user._totalQuizzes)||fbData?.matched?.totalQuizzes||0;
+  const dailyTime = timeData&&typeof timeData==="object"
+    ? Object.entries(timeData).sort(([a],[b])=>a.localeCompare(b)).slice(-7).map(([d,v])=>({l:d.slice(5),v:parseInt(v)||0}))
+    : [];
 
-  // subject breakdown
-  const subj=fbData?.subjectMatched;
-  const subjEntries=subj&&typeof subj==="object"?Object.entries(subj):[];
+  const subjEntries = subjData&&typeof subjData==="object" ? Object.entries(subjData) : [];
 
   return(
     <div className="fullscreen">
@@ -627,213 +652,184 @@ function StudentDetailPage({user,onBack,push}){
         <button className="back-btn" onClick={onBack}>←</button>
         <div className="avatar">{initials(nm)}</div>
         <div style={{flex:1,minWidth:0}}>
-          <div style={{fontWeight:700,fontSize:15,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nm}</div>
-          <div style={{fontSize:11,color:C.muted}}>📱 {ph}</div>
+          <div style={{fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nm}</div>
+          <div style={{fontSize:10,color:C.muted}}>📱 {ph}</div>
         </div>
-        <span className={`pill p-${st==="active"?"active":"inactive"}`}>{st==="active"?"✅ অ্যাক্টিভ":"🔴 ইনঅ্যাক্টিভ"}</span>
+        <span className={`pill p-${st==="active"?"active":"inactive"}`}>{st==="active"?"✅":"🔴"}</span>
       </div>
-
-      <div style={{padding:"14px 14px 80px"}}>
-        {/* Accuracy Ring + Stats */}
+      <div style={{padding:"12px 12px 70px"}}>
         <div className="card">
-          <div style={{display:"flex",alignItems:"center",gap:14}}>
-            <PerfRing val={correct} max={totalQ} color={acc>=70?C.green:acc>=40?C.yellow:C.red}/>
+          <div style={{display:"flex",alignItems:"center",gap:12}}>
+            <PerfRing val={c} max={tot} color={acc>=70?C.green:acc>=40?C.yellow:C.red}/>
             <div style={{flex:1}}>
-              <div style={{fontSize:20,fontWeight:700,color:acc>=70?C.green:acc>=40?C.yellow:C.red,marginBottom:4}}>{acc}% Accuracy</div>
-              <div style={{fontSize:12,color:C.muted}}>সঠিক: <b style={{color:C.green}}>{correct}</b> &nbsp; ভুল: <b style={{color:C.red}}>{wrong}</b></div>
-              <div style={{fontSize:12,color:C.muted,marginTop:2}}>মোট প্রশ্ন: <b style={{color:C.text}}>{totalQ}</b> &nbsp; Quiz: <b style={{color:C.accent}}>{quizzes}</b></div>
+              <div style={{fontSize:18,fontWeight:700,color:acc>=70?C.green:acc>=40?C.yellow:C.red,marginBottom:3}}>{acc}% Accuracy</div>
+              <div style={{fontSize:11,color:C.muted}}>✅ {c} &nbsp; ❌ {w} &nbsp; 🎯 {tot} প্রশ্ন</div>
+              <div style={{fontSize:11,color:C.muted,marginTop:2}}>📋 {quizzes}টি Quiz</div>
             </div>
           </div>
         </div>
-
-        {/* Time & Activity */}
         <div className="stat-grid">
-          <div className="stat-card t-purple" data-icon="⏱"><div className="stat-label">মোট সময়</div><div className="stat-value sv-purple" style={{fontSize:20}}>{mins<60?mins+"মি":~~(mins/60)+"ঘণ্টা"}</div></div>
-          <div className="stat-card t-blue"   data-icon="📅"><div className="stat-label">শেষ সক্রিয়</div><div style={{fontSize:13,fontWeight:700,marginTop:6,color:C.accent}}>{timeAgo(user._lastActive||user.Timestamp)}</div></div>
+          <div className="stat-card t-purple" data-icon="⏱"><div className="stat-label">মোট সময়</div><div className="stat-value sv-purple" style={{fontSize:18}}>{mins<60?mins+"মি":~~(mins/60)+"ঘণ্টা"}</div></div>
+          <div className="stat-card t-blue"   data-icon="📅"><div className="stat-label">শেষ সক্রিয়</div><div style={{fontSize:12,fontWeight:700,marginTop:5,color:C.accent}}>{timeAgo(user.lastActive||user.Timestamp)}</div></div>
         </div>
-
-        {/* Daily Study Time */}
-        {loading?<div className="skel"/>:
-          fbData?.dailyTime?.length>0&&(
-            <div className="card">
-              <div className="card-title">⏱ দৈনিক পড়ার সময় (মিনিট)</div>
-              <MiniBarChart data={fbData.dailyTime} color={C.purple}/>
-            </div>
-          )
-        }
-
-        {/* Subject Performance */}
-        {loading?<div className="skel"/>:
-          subjEntries.length>0&&(
-            <div className="card">
-              <div className="card-title">📚 বিষয়ভিত্তিক Performance</div>
-              {subjEntries.map(([sub,sv])=>{
-                const c=sv.correct||0, w=sv.wrong||0, tot=c+w;
-                const a=tot?Math.round(c/tot*100):0;
-                return(
-                  <div key={sub} className="srow">
-                    <div style={{flex:1}}>
-                      <div style={{fontWeight:600,fontSize:13}}>{sub}</div>
-                      <div style={{display:"flex",alignItems:"center",marginTop:3}}>
-                        <div className="sbar"><div className="sbar-f" style={{width:a+"%",background:a>=70?C.green:a>=40?C.yellow:C.red}}/></div>
-                      </div>
-                      <div style={{fontSize:9,color:C.muted,marginTop:1}}>✅{c} ❌{w} · {tot}টি প্রশ্ন</div>
-                    </div>
-                    <div style={{fontWeight:700,fontSize:15,color:a>=70?C.green:a>=40?C.yellow:C.red,minWidth:36,textAlign:"right"}}>{a}%</div>
+        {dailyTime.length>0&&<div className="card"><div className="card-title">⏱ দৈনিক সময় (মিনিট)</div><MiniBar data={dailyTime} color={C.purple}/></div>}
+        {subjEntries.length>0&&(
+          <div className="card">
+            <div className="card-title">📚 বিষয়ভিত্তিক</div>
+            {subjEntries.map(([sub,sv])=>{
+              const sc=sv.correct||0,sw=sv.wrong||0,stot=sc+sw,sa=stot?Math.round(sc/stot*100):0;
+              return(
+                <div key={sub} className="srow">
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:600,fontSize:12}}>{sub}</div>
+                    <div style={{display:"flex",alignItems:"center",marginTop:2}}><div className="sbar"><div className="sbar-f" style={{width:sa+"%",background:sa>=70?C.green:sa>=40?C.yellow:C.red}}/></div></div>
+                    <div style={{fontSize:9,color:C.muted}}>✅{sc} ❌{sw}</div>
                   </div>
-                );
-              })}
-            </div>
-          )
-        }
-
-        {/* User Info */}
+                  <div style={{fontWeight:700,fontSize:14,color:sa>=70?C.green:sa>=40?C.yellow:C.red,minWidth:32,textAlign:"right"}}>{sa}%</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
         <div className="card">
-          <div className="card-title">👤 ব্যক্তিগত তথ্য</div>
-          {[
-            ["📱 ফোন", ph],
-            ["✉️ ইমেইল", user.Email||user.email||"—"],
-            ["🎓 ধরন", user.Type||user.type||"Student"],
-            ["📅 যোগদান", user.Timestamp||user.timestamp||"—"],
-          ].map(([l,v])=>(
-            <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}40`,fontSize:13}}>
-              <span style={{color:C.muted}}>{l}</span>
-              <span style={{fontWeight:600,maxWidth:"60%",textAlign:"right"}}>{v}</span>
+          <div className="card-title">👤 তথ্য</div>
+          {[["📱",ph],["✉️",user.Email||user.email||"—"],["🎓",user.Type||user.type||"Student"],["📅",user.Timestamp||user.createdAt||"—"]].map(([l,v])=>(
+            <div key={l} style={{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:`1px solid ${C.border}40`,fontSize:12}}>
+              <span style={{color:C.muted}}>{l}</span><span style={{fontWeight:600,maxWidth:"65%",textAlign:"right"}}>{v}</span>
             </div>
           ))}
         </div>
-
-        <NotifyModal user={user} onClose={onBack} push={push} inDetail/>
+        <NotifyModal user={user} onClose={onBack} push={push} inline/>
       </div>
     </div>
   );
 }
 
 /* ══════════════════════════════════════════
-   REPORTS
+   REPORTS — Firebase direct
 ══════════════════════════════════════════ */
-function ReportsPage({push,forceRefresh}){
-  const{data:dash,loading}=useSWR({action:"getDashboard"},forceRefresh);
-  const[localDone,setLocalDone]=useState([]);
-  const[editing,setEditing]=useState(null);
-  const reports=(dash?.reports||[]).filter(r=>!localDone.includes(r.row));
+function ReportsPage({push,forceRefresh}) {
+  const {data:reportsRaw,loading} = useFB("Reports",forceRefresh);
+  const [done,setDone] = useState([]);
+  const [editing,setEditing] = useState(null);
+
+  const reports = reportsRaw
+    ? (Array.isArray(reportsRaw)?reportsRaw:Object.entries(reportsRaw).map(([k,v])=>({...v,_key:k}))).filter(Boolean).filter(r=>!done.includes(r._key||r.row)).slice(-30).reverse()
+    : [];
 
   return(
     <div className="page">
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
-        <div style={{fontSize:12,color:C.muted}}>{reports.length}টি রিপোর্ট পেন্ডিং</div>
-        {loading&&<span style={{fontSize:10,color:C.muted}}>⏳ আপডেট...</span>}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:11}}>
+        <div style={{fontSize:11,color:C.muted}}>{reports.length}টি রিপোর্ট</div>
+        {loading&&<span style={{fontSize:10,color:C.muted}}>⏳</span>}
       </div>
-      {loading&&!dash?[...Array(4)].map((_,i)=><div key={i} className="skel"/>):
+      {loading&&!reportsRaw?[...Array(3)].map((_,i)=><div key={i} className="skel"/>):
        reports.length===0?<div className="empty"><div className="ei">📋</div><p>কোনো রিপোর্ট নেই! 🎉</p></div>:
        reports.map((r,i)=>(
         <div key={i} className="rc">
-          <div style={{fontWeight:700,fontSize:13}}>{r.subject||"অজানা"}</div>
+          <div style={{fontWeight:700,fontSize:13}}>{r.Subject||r.subject||"অজানা"}</div>
           <div className="r-meta">
-            <span>📱 {r.phone||"—"}</span>
-            {r.subtopic&&<span>📌 {r.subtopic}</span>}
-            {r.questionId&&<span style={{color:C.accent}}>#{r.questionId}</span>}
-            <span>{timeAgo(r.time)}</span>
+            <span>📱 {r.Phone||r.phone||"—"}</span>
+            {(r.SubTopic||r.subtopic)&&<span>📌 {r.SubTopic||r.subtopic}</span>}
+            {(r.QuestionID||r.questionId)&&<span style={{color:C.accent}}>#{r.QuestionID||r.questionId}</span>}
+            <span>{timeAgo(r.timestamp||r.time)}</span>
           </div>
-          <div className="r-issue">{r.issue||r.question||"বিস্তারিত নেই"}</div>
-          {r.question&&r.question!==r.issue&&<div style={{fontSize:11,color:C.muted,marginTop:5,paddingLeft:7,lineHeight:1.5}}>❓ {r.question.slice(0,120)}{r.question.length>120?"…":""}</div>}
-          <button className="btn btn-p btn-block" style={{marginTop:9}} onClick={()=>setEditing(r)}>✏️ এডিট করুন ও সমাধান দিন</button>
+          <div className="r-issue">{r.Issue||r.issue||r.Question||r.question||"বিস্তারিত নেই"}</div>
+          <button className="btn btn-p btn-block" style={{marginTop:8}} onClick={()=>setEditing(r)}>✏️ এডিট ও সমাধান</button>
         </div>
        ))
       }
-      {editing&&<EditResolveModal report={editing} onClose={()=>setEditing(null)} onDone={row=>{setLocalDone(p=>[...p,row]);setEditing(null);cacheInvalidate("getDashboard");fetchAndCache({action:"getDashboard"},true);}} push={push}/>}
+      {editing&&<ReportEditModal report={editing} onClose={()=>setEditing(null)} onDone={key=>{setDone(p=>[...p,key]);setEditing(null);fbInvalidate("Reports");}} push={push}/>}
     </div>
   );
 }
 
-function EditResolveModal({report,onClose,onDone,push}){
-  const[step,setStep]=useState(1);
-  const[qdata,setQdata]=useState(null);
-  const[loadingQ,setLoadingQ]=useState(true);
-  const[saving,setSaving]=useState(false);
-  const[notifying,setNotifying]=useState(false);
+function ReportEditModal({report,onClose,onDone,push}) {
+  const [step,setStep] = useState(1);
+  const [qdata,setQdata] = useState(null);
+  const [loadQ,setLoadQ] = useState(true);
+  const [saving,setSaving] = useState(false);
+  const [notifying,setNotifying] = useState(false);
+  const qid = report.QuestionID||report.questionId||"";
+  const tab = report.Subject||report.subject||"Quiz";
 
-  // edit fields
-  const[question,setQuestion]=useState("");
-  const[opt1,setOpt1]=useState("");
-  const[opt2,setOpt2]=useState("");
-  const[opt3,setOpt3]=useState("");
-  const[opt4,setOpt4]=useState("");
-  const[correct,setCorrect]=useState("");
-  const[explanation,setExplanation]=useState("");
-  const[technique,setTechnique]=useState("");
+  const [question,setQuestion] = useState("");
+  const [opt1,setOpt1] = useState("");
+  const [opt2,setOpt2] = useState("");
+  const [opt3,setOpt3] = useState("");
+  const [opt4,setOpt4] = useState("");
+  const [correct,setCorrect] = useState("");
+  const [explanation,setExplanation] = useState("");
+  const [technique,setTechnique] = useState("");
 
   useEffect(()=>{
     (async()=>{
-      setLoadingQ(true);
-      if(report.questionId){
-        for(const tab of["Quiz","QBank"]){
-          try{
-            const d=await fetch(GAS_URL+"?"+new URLSearchParams({id:report.questionId,tab}).toString()).then(r=>r.json());
-            if(d.status==="success"){
-              const q=d.data;
-              setQdata({...q,_tab:tab});
-              setQuestion(q.Question||q.question||"");
-              setOpt1(q.Opt1||q.opt1||q["Option A"]||"");
-              setOpt2(q.Opt2||q.opt2||q["Option B"]||"");
-              setOpt3(q.Opt3||q.opt3||q["Option C"]||"");
-              setOpt4(q.Opt4||q.opt4||q["Option D"]||"");
-              setCorrect(q.Correct||q.correct||"");
-              setExplanation(q.Explanation||q.explanation||"");
-              setTechnique(q.Technique||q.technique||"");
-              break;
-            }
-          }catch(_){}
+      setLoadQ(true);
+      if(!qid){setLoadQ(false);return;}
+      for(const t of["Quiz","QBank"]) {
+        try {
+          const data = await fb.get(t);
+          const arr = Array.isArray(data)?data:Object.values(data||{});
+          const q = arr.find(x=>x&&(x.ID||x.id||"").toString()===qid.toString());
+          if(q) {
+            setQdata({...q,_tab:t});
+            setQuestion(q.Question||q.question||"");
+            setOpt1(q.Opt1||q.opt1||q["Option A"]||"");
+            setOpt2(q.Opt2||q.opt2||q["Option B"]||"");
+            setOpt3(q.Opt3||q.opt3||q["Option C"]||"");
+            setOpt4(q.Opt4||q.opt4||q["Option D"]||"");
+            setCorrect(q.Correct||q.correct||"");
+            setExplanation(q.Explanation||q.explanation||"");
+            setTechnique(q.Technique||q.technique||"");
+            break;
+          }
+        } catch(_) {}
+      }
+      setLoadQ(false);
+    })();
+  },[qid]);
+
+  const save = async() => {
+    setSaving(true);
+    try {
+      if(qdata&&qid) {
+        // Firebase directly update
+        const t = qdata._tab||"Quiz";
+        const data = await fb.get(t);
+        const arr = Array.isArray(data)?data:Object.values(data||{});
+        const idx = arr.findIndex(x=>x&&(x.ID||x.id||"").toString()===qid.toString());
+        if(idx!==-1) {
+          arr[idx] = {...arr[idx],Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Explanation:explanation,Technique:technique};
+          await fb.set(t, arr);
+          fbInvalidate(t);
+          // Background GAS Sheet sync
+          gasAction({action:"updateField",sheet:t,id:qid,field:"question",content:encodeURIComponent(question)}).catch(()=>{});
         }
       }
-      setLoadingQ(false);
-    })();
-  },[report.questionId]);
-
-  // একটা field save করে
-  const saveField=async(field,value)=>{
-    if(!qdata||!report.questionId||!value.trim()) return;
-    await apiAction({
-      action:"updateField",
-      sheet:qdata._tab||"Quiz",
-      id:report.questionId,
-      field,
-      content:encodeURIComponent(value),
-    });
-  };
-
-  const save=async()=>{
-    if(!qdata){setStep(2);return;}
-    setSaving(true);
-    try{
-      // সব field একসাথে save করো
-      const fields=[
-        ["question",question],
-        ["opt1",opt1],["opt2",opt2],["opt3",opt3],["opt4",opt4],
-        ["correct",correct],
-        ["explanation",explanation],
-        ["technique",technique],
-      ];
-      for(const[f,v] of fields){
-        if(v.trim()) await saveField(f,v);
-      }
-      push("success","✅ সেভ হয়েছে!","প্রশ্ন আপডেট হয়েছে");
+      push("success","✅ সেভ হয়েছে!","");
       setStep(2);
-    }catch(e){push("error","Save ব্যর্থ",e.message);}
+    } catch(e) { push("error","Save ব্যর্থ",e.message); }
     setSaving(false);
   };
 
-  const notify=async()=>{
+  const notify = async() => {
     setNotifying(true);
-    try{
-      await apiAction({action:"resolveReport",phone:report.phone,subject:encodeURIComponent(report.subject||"প্রশ্নটি"),questionId:report.questionId||""});
-      push("success","✅ সমাধান ও নোটিফাই!",`${report.phone} কে জানানো হয়েছে`);
-      onDone(report.row);
-    }catch(e){push("error","Notify ব্যর্থ",e.message);}
+    try {
+      const phone=(report.Phone||report.phone||"").replace(/[.#$\[\]\s]/g,'_');
+      await fb.set(`Notifications/${phone}/notif_${Date.now()}`, {
+        type:"report_resolved",
+        title:"✅ রিপোর্ট সমাধান হয়েছে!",
+        body:`"${report.Subject||report.subject||"প্রশ্নটি"}" সংশোধন করা হয়েছে।`,
+        questionId:qid, time:now_ts(), read:false
+      });
+      // Background FCM
+      gasAction({action:"resolveReport",phone:report.Phone||report.phone||"",subject:encodeURIComponent(report.Subject||report.subject||"প্রশ্নটি"),questionId:qid}).catch(()=>{});
+      push("success","✅ নোটিফাই হয়েছে!","");
+      onDone(report._key||report.row);
+    } catch(e) { push("error","Notify ব্যর্থ",e.message); }
     setNotifying(false);
   };
 
-  // overlay click এ close করা যাবে না — keyboard focus হারায়
   return(
     <div className="overlay">
       <div className="modal">
@@ -842,70 +838,53 @@ function EditResolveModal({report,onClose,onDone,push}){
           <div className={`step${step===1?" active":step>1?" done":""}`}>① এডিট</div>
           <div className={`step${step===2?" active":""}`}>② নোটিফাই</div>
         </div>
-
         {step===1&&<>
           <div className="mtitle">✏️ প্রশ্ন এডিট</div>
-          <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:10,padding:"8px 11px",marginBottom:12}}>
-            <div style={{fontSize:10,color:C.red,fontWeight:700,marginBottom:2}}>🚨 {report.phone} · {report.subject}</div>
-            <div style={{fontSize:12,color:C.text}}>{report.issue||"—"}</div>
+          <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:9,padding:"7px 10px",marginBottom:10}}>
+            <div style={{fontSize:10,color:C.red,fontWeight:700,marginBottom:2}}>🚨 {report.Phone||report.phone} · {report.Subject||report.subject}</div>
+            <div style={{fontSize:11,color:C.text}}>{report.Issue||report.issue||"—"}</div>
           </div>
-          {loadingQ
-            ?<><div className="skel" style={{height:50}}/><div className="skel"/></>
-            :!qdata
-              ?<div style={{textAlign:"center",color:C.muted,padding:"16px 0",fontSize:12}}>প্রশ্ন #{report.questionId||"—"} পাওয়া যায়নি।</div>
-              :<>
-                <div className="field">
-                  <label>❓ প্রশ্ন</label>
-                  <textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:70}}/>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                  <div className="field"><label>A</label><input className="input" value={opt1} onChange={e=>setOpt1(e.target.value)}/></div>
-                  <div className="field"><label>B</label><input className="input" value={opt2} onChange={e=>setOpt2(e.target.value)}/></div>
-                  <div className="field"><label>C</label><input className="input" value={opt3} onChange={e=>setOpt3(e.target.value)}/></div>
-                  <div className="field"><label>D</label><input className="input" value={opt4} onChange={e=>setOpt4(e.target.value)}/></div>
-                </div>
-                <div className="field">
-                  <label>✅ সঠিক উত্তর</label>
-                  <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:6}}>
-                    {[opt1,opt2,opt3,opt4].filter(Boolean).map((o,i)=>(
-                      <button key={i} type="button" className={`btn ${correct===o?"btn-s":"btn-g"}`} style={{fontSize:11,padding:"4px 8px"}} onClick={()=>setCorrect(o)}>{o.slice(0,16)}{o.length>16?"…":""}</button>
-                    ))}
-                  </div>
-                  <input className="input" value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি লিখুন..."/>
-                </div>
-                <div className="field">
-                  <label>📖 Explanation</label>
-                  <textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:80}}/>
-                </div>
-                <div className="field">
-                  <label>💡 Technique</label>
-                  <textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:55}}/>
-                </div>
-              </>
+          {loadQ?<><div className="skel" style={{height:46}}/><div className="skel"/></>:
+           !qdata?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>প্রশ্ন #{qid||"—"} পাওয়া যায়নি।</div>:
+           <>
+            <div className="field"><label>❓ প্রশ্ন</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:65}}/></div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
+              <div className="field"><label>A</label><input className="input" value={opt1} onChange={e=>setOpt1(e.target.value)}/></div>
+              <div className="field"><label>B</label><input className="input" value={opt2} onChange={e=>setOpt2(e.target.value)}/></div>
+              <div className="field"><label>C</label><input className="input" value={opt3} onChange={e=>setOpt3(e.target.value)}/></div>
+              <div className="field"><label>D</label><input className="input" value={opt4} onChange={e=>setOpt4(e.target.value)}/></div>
+            </div>
+            <div className="field">
+              <label>✅ সঠিক উত্তর</label>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:5}}>
+                {[opt1,opt2,opt3,opt4].filter(Boolean).map((o,i)=>(
+                  <button key={i} type="button" className={`correct-chip${correct===o?" active":""}`} onClick={()=>setCorrect(o)}>{o.slice(0,14)}{o.length>14?"…":""}</button>
+                ))}
+              </div>
+              <input className="input" value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি লিখুন..."/>
+            </div>
+            <div className="field"><label>📖 Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:75}}/></div>
+            <div className="field"><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:55}}/></div>
+           </>
           }
-          <div style={{display:"flex",gap:7,marginTop:4}}>
+          <div style={{display:"flex",gap:6}}>
             <button type="button" className="btn btn-g" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
             <button type="button" className="btn btn-p" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={save}>{saving?"⏳...":"💾 সেভ →"}</button>
           </div>
         </>}
-
         {step===2&&<>
-          <div className="mtitle">📣 স্টুডেন্টকে নোটিফাই করুন</div>
-          <div style={{background:"#22c55e12",border:"1px solid #22c55e30",borderRadius:11,padding:"13px",marginBottom:14}}>
-            <div style={{fontSize:13,fontWeight:700,color:C.green,marginBottom:5}}>✅ প্রশ্ন আপডেট সম্পন্ন!</div>
-            <div style={{fontSize:11,color:C.muted}}>এখন স্টুডেন্টকে জানান যে তাদের রিপোর্ট সমাধান হয়েছে।</div>
+          <div className="mtitle">📣 নোটিফাই</div>
+          <div style={{background:"#22c55e12",border:"1px solid #22c55e30",borderRadius:10,padding:"11px",marginBottom:12}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.green,marginBottom:4}}>✅ এডিট সম্পন্ন!</div>
+            <div style={{fontSize:11,color:C.muted}}>স্টুডেন্টকে জানাবেন?</div>
           </div>
-          <div style={{background:C.panel,borderRadius:10,padding:"12px 14px",marginBottom:14}}>
-            <div style={{fontSize:11,color:C.muted,marginBottom:5}}>নোটিফিকেশন পাবেন:</div>
-            <div style={{fontWeight:700,fontSize:14}}>📱 {report.phone}</div>
-            <div style={{fontSize:11,color:C.muted,marginTop:3}}>{report.subject} {report.questionId?"· #"+report.questionId:""}</div>
-            <div style={{fontSize:11,color:C.accent,marginTop:6,lineHeight:1.5}}>"✅ আপনার রিপোর্ট সমাধান হয়েছে! প্রশ্নটি সংশোধন করা হয়েছে।"</div>
+          <div style={{background:C.panel,borderRadius:9,padding:"10px 12px",marginBottom:12}}>
+            <div style={{fontWeight:700}}>📱 {report.Phone||report.phone}</div>
+            <div style={{fontSize:11,color:C.accent,marginTop:4}}>"✅ রিপোর্ট সমাধান হয়েছে!"</div>
           </div>
-          <div style={{display:"flex",gap:7}}>
-            <button className="btn btn-g" style={{flex:1,justifyContent:"center"}} onClick={()=>onDone(report.row)}>এড়িয়ে যান</button>
-            <button className="btn btn-s" style={{flex:2,justifyContent:"center"}} disabled={notifying} onClick={notify}>
-              {notifying?"⏳ পাঠানো হচ্ছে...":"✅ নোটিফাই করুন"}
-            </button>
+          <div style={{display:"flex",gap:6}}>
+            <button className="btn btn-g" style={{flex:1,justifyContent:"center"}} onClick={()=>onDone(report._key||report.row)}>এড়িয়ে যান</button>
+            <button className="btn btn-s" style={{flex:2,justifyContent:"center"}} disabled={notifying} onClick={notify}>{notifying?"⏳...":"✅ নোটিফাই"}</button>
           </div>
         </>}
       </div>
@@ -914,103 +893,270 @@ function EditResolveModal({report,onClose,onDone,push}){
 }
 
 /* ══════════════════════════════════════════
-   GLOBAL SEARCH
+   ENTRY PAGE — Quiz/QBank/Study add
+   Firebase direct write, GAS background sync
 ══════════════════════════════════════════ */
-function SearchPage({push,onStudentDetail}){
-  const[q,setQ]=useState("");
-  const[results,setResults]=useState(null);
-  const[loading,setLoading]=useState(false);
-  const debounce=useRef(null);
+function EntryPage({push}) {
+  const [mode,setMode] = useState("Quiz"); // Quiz|QBank|Study
+  const [qtype,setQtype] = useState("MCQ");
+  const [saving,setSaving] = useState(false);
+  const {data:subjRaw} = useFB("Quiz");
 
-  const doSearch=async(query)=>{
-    if(!query||query.length<2){setResults(null);return;}
-    setLoading(true);
-    try{
-      const[byTag,users]=await Promise.all([
-        apiFetch({action:"findByTag",q:query},true),
-        apiFetch({action:"getUsers"},false),
-      ]);
-      const qs=byTag?.results||[];
-      const uList=(users?.users||[]).filter(u=>{
-        const nm=(u.Name||u.name||"").toLowerCase();
-        const ph=(u.Phone||u.phone||"").toLowerCase();
-        const qlo=query.toLowerCase();
-        return nm.includes(qlo)||ph.includes(qlo);
-      });
-      setResults({questions:qs.slice(0,10),users:uList.slice(0,8)});
-    }catch(e){push("error","সমস্যা",e.message);}
-    setLoading(false);
+  // Fields
+  const [question,setQuestion] = useState("");
+  const [opt1,setOpt1]=useState(""); const [opt2,setOpt2]=useState("");
+  const [opt3,setOpt3]=useState(""); const [opt4,setOpt4]=useState("");
+  const [correct,setCorrect] = useState("");
+  const [subject,setSubject] = useState("");
+  const [topic,setTopic] = useState("");
+  const [subtopic,setSubtopic] = useState("");
+  const [explanation,setExplanation] = useState("");
+  const [technique,setTechnique] = useState("");
+  const [imgUrl,setImgUrl] = useState("");
+  const [uploading,setUploading] = useState(false);
+
+  // Subject suggestions from Firebase
+  const subjects = subjRaw
+    ? [...new Set((Array.isArray(subjRaw)?subjRaw:Object.values(subjRaw)).filter(Boolean).map(q=>q.Subject||q.subject||"").filter(Boolean))]
+    : [];
+
+  const reset = () => {
+    setQuestion(""); setOpt1(""); setOpt2(""); setOpt3(""); setOpt4("");
+    setCorrect(""); setExplanation(""); setTechnique(""); setImgUrl("");
   };
 
-  const onInput=v=>{
-    setQ(v);
-    clearTimeout(debounce.current);
-    debounce.current=setTimeout(()=>doSearch(v),450);
+  const handleImg = async(e) => {
+    const f=e.target.files[0]; if(!f) return;
+    setUploading(true);
+    try { const url=await uploadImg(f); setImgUrl(url); push("success","ছবি আপলোড হয়েছে",""); }
+    catch { push("error","আপলোড ব্যর্থ",""); }
+    setUploading(false);
   };
 
-  const total=(results?.questions?.length||0)+(results?.users?.length||0);
+  const submit = async() => {
+    if(!question.trim()) { push("warn","প্রশ্ন লিখুন",""); return; }
+    if(mode!=="Study" && qtype==="MCQ" && !correct) { push("warn","সঠিক উত্তর দিন",""); return; }
+    if(!subject.trim()) { push("warn","বিষয় লিখুন",""); return; }
+    setSaving(true);
+    try {
+      const ts = now_ts();
+      const id = Date.now(); // unique ID
+
+      let record = {};
+      if(mode==="Quiz") {
+        record = { ID:id, Question:question, Opt1:opt1, Opt2:opt2, Opt3:opt3, Opt4:opt4, Correct:correct, Subject:subject, Sub_topic:subtopic, Explanation:explanation, Technique:technique, QType:qtype, Timestamp:ts, Image:imgUrl };
+      } else if(mode==="QBank") {
+        record = { ID:id, Question:question, Opt1:opt1, Opt2:opt2, Opt3:opt3, Opt4:opt4, Correct:correct, Subject:subject, Topic:topic, Sub_topic:subtopic, Explanation:explanation, Technique:technique, QType:qtype, Timestamp:ts, Image:imgUrl };
+      } else {
+        record = { ID:id, Subject:subject, Sub_topic:subtopic, Explanation:explanation, Technique:technique, Timestamp:ts, Image:imgUrl };
+      }
+
+      // Firebase directly push (instant ~200ms)
+      await fb.push(mode, record);
+      fbInvalidate(mode);
+
+      // Background GAS Sheet sync (non-blocking)
+      const params = mode==="Quiz"
+        ? { targetTab:"Quiz", question, opt1, opt2, opt3, opt4, correct, subject, sub_topic:subtopic, explanation, technique, qType:qtype, timestamp:ts, audienceTags:"General" }
+        : mode==="QBank"
+          ? { targetTab:"QBank", question, opt1, opt2, opt3, opt4, correct, subject, topic, sub_topic:subtopic, explanation, technique, qType:qtype, timestamp:ts }
+          : { targetTab:"Study", subject, sub_topic:subtopic, explanation, technique, timestamp:ts };
+
+      fetch(GAS, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(params) }).catch(()=>{});
+
+      push("success","✅ সেভ হয়েছে!", `${mode} #${id}`);
+      reset();
+    } catch(e) { push("error","ব্যর্থ",e.message); }
+    setSaving(false);
+  };
 
   return(
     <div className="page">
-      <div className="sw" style={{marginBottom:14}}>
-        <span className="si">🔍</span>
-        <input className="input" placeholder="নাম, ফোন, প্রশ্ন, বিষয় — সব খুঁজুন..." value={q} onChange={e=>onInput(e.target.value)} autoFocus/>
+      {/* Mode tabs */}
+      <div className="ftabs" style={{marginBottom:12}}>
+        {["Quiz","QBank","Study"].map(m=>(
+          <button key={m} className={`ftab${mode===m?" active":""}`} onClick={()=>setMode(m)}>{m}</button>
+        ))}
       </div>
 
-      {loading&&<div style={{textAlign:"center",padding:"28px 0",color:C.muted,fontSize:13}}>⏳ খোঁজা হচ্ছে...</div>}
-
-      {!loading&&results&&(
-        <div style={{fontSize:11,color:C.muted,marginBottom:10}}>{total}টি ফলাফল পাওয়া গেছে</div>
+      {/* Question Type */}
+      {mode!=="Study"&&(
+        <div style={{display:"flex",gap:7,marginBottom:12}}>
+          {["MCQ","Written"].map(t=>(
+            <button key={t} className={`type-pill${qtype===t?" active":""}`} onClick={()=>setQtype(t)}>{t}</button>
+          ))}
+        </div>
       )}
 
+      {/* Question */}
+      {mode!=="Study"&&(
+        <div className="field">
+          <label>❓ প্রশ্ন</label>
+          <textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} placeholder="প্রশ্নের টেক্সট এখানে লিখুন..." style={{minHeight:80}}/>
+        </div>
+      )}
+
+      {/* Options */}
+      {mode!=="Study"&&qtype==="MCQ"&&(
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            <div className="field"><label>A</label><input className="input" value={opt1} onChange={e=>setOpt1(e.target.value)} placeholder="Option A"/></div>
+            <div className="field"><label>B</label><input className="input" value={opt2} onChange={e=>setOpt2(e.target.value)} placeholder="Option B"/></div>
+            <div className="field"><label>C</label><input className="input" value={opt3} onChange={e=>setOpt3(e.target.value)} placeholder="Option C"/></div>
+            <div className="field"><label>D</label><input className="input" value={opt4} onChange={e=>setOpt4(e.target.value)} placeholder="Option D"/></div>
+          </div>
+          <div className="field">
+            <label>✅ সঠিক উত্তর</label>
+            <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:6}}>
+              {[opt1,opt2,opt3,opt4].filter(Boolean).map((o,i)=>(
+                <button key={i} type="button" className={`correct-chip${correct===o?" active":""}`} onClick={()=>setCorrect(o)}>{o.slice(0,16)}{o.length>16?"…":""}</button>
+              ))}
+            </div>
+            <input className="input" value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি লিখুন..."/>
+          </div>
+        </>
+      )}
+
+      {/* Subject */}
+      <div className="field">
+        <label>📚 বিষয়</label>
+        <input className="input" list="subj-list" value={subject} onChange={e=>setSubject(e.target.value)} placeholder="Subject..."/>
+        <datalist id="subj-list">{subjects.map((s,i)=><option key={i} value={s}/>)}</datalist>
+      </div>
+
+      {/* Topic (QBank only) */}
+      {mode==="QBank"&&(
+        <div className="field"><label>📂 Topic</label><input className="input" value={topic} onChange={e=>setTopic(e.target.value)} placeholder="Topic..."/></div>
+      )}
+
+      {/* SubTopic */}
+      <div className="field">
+        <label>📌 Sub Topic</label>
+        <input className="input" value={subtopic} onChange={e=>setSubtopic(e.target.value)} placeholder="Sub Topic..."/>
+      </div>
+
+      {/* Explanation */}
+      <div className="field">
+        <label>📖 Explanation</label>
+        <textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} placeholder="ব্যাখ্যা..." style={{minHeight:80}}/>
+      </div>
+
+      {/* Technique */}
+      <div className="field">
+        <label>💡 Technique</label>
+        <textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} placeholder="মনে রাখার কৌশল..." style={{minHeight:60}}/>
+      </div>
+
+      {/* Image */}
+      <div className="field">
+        <label>🖼 ছবি (optional)</label>
+        <div style={{display:"flex",gap:7,alignItems:"center"}}>
+          <label style={{flex:1,background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,padding:"9px 12px",cursor:"pointer",display:"flex",alignItems:"center",gap:7,fontSize:12,color:C.muted}}>
+            {uploading?"⏳ আপলোড হচ্ছে...":"📷 ছবি বেছে নিন"}
+            <input type="file" accept="image/*" style={{display:"none"}} onChange={handleImg}/>
+          </label>
+          {imgUrl&&<a href={imgUrl} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.accent}}>দেখুন ↗</a>}
+        </div>
+        {imgUrl&&<img src={imgUrl} className="img-preview" alt="preview"/>}
+      </div>
+
+      <button className="btn btn-p btn-block" style={{marginTop:4}} disabled={saving} onClick={submit}>
+        {saving?"⏳ সেভ হচ্ছে...":"💾 Firebase-এ সেভ করুন"}
+      </button>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════
+   SEARCH
+══════════════════════════════════════════ */
+function SearchPage({push,onStudentDetail}) {
+  const [q,setQ] = useState("");
+  const [results,setResults] = useState(null);
+  const [loading,setLoading] = useState(false);
+  const debRef = useRef(null);
+  const {data:quizRaw} = useFB("Quiz");
+  const {data:qbankRaw} = useFB("QBank");
+  const {data:usersRaw} = useFB("Users");
+
+  const doSearch = useCallback((query) => {
+    if(!query||query.length<2) { setResults(null); return; }
+    setLoading(true);
+    const qlo = query.toLowerCase();
+
+    const searchArr = (raw) => raw
+      ? (Array.isArray(raw)?raw:Object.values(raw)).filter(Boolean).filter(q2=>{
+          const txt = [(q2.Question||q2.question||""),(q2.Subject||q2.subject||""),(q2.Sub_topic||q2.sub_topic||""),(q2.Correct||q2.correct||"")].join(" ").toLowerCase();
+          return txt.includes(qlo);
+        }).slice(0,10)
+      : [];
+
+    const userArr2 = usersRaw
+      ? (Array.isArray(usersRaw)?usersRaw:Object.entries(usersRaw).map(([k,v])=>({...v,_key:k}))).filter(Boolean).filter(u=>{
+          const nm=(u.Name||u.name||"").toLowerCase();
+          const ph=(u.Phone||u.phone||"").toLowerCase();
+          return nm.includes(qlo)||ph.includes(qlo);
+        }).slice(0,6)
+      : [];
+
+    const qResults = [
+      ...searchArr(quizRaw).map(q2=>({...q2,_tab:"Quiz"})),
+      ...searchArr(qbankRaw).map(q2=>({...q2,_tab:"QBank"})),
+    ];
+
+    setResults({questions:qResults.slice(0,12),users:userArr2});
+    setLoading(false);
+  }, [quizRaw,qbankRaw,usersRaw]);
+
+  const onInput = v => {
+    setQ(v);
+    clearTimeout(debRef.current);
+    debRef.current = setTimeout(()=>doSearch(v), 300);
+  };
+
+  const total = (results?.questions?.length||0)+(results?.users?.length||0);
+
+  return(
+    <div className="page">
+      <div className="sw" style={{marginBottom:12}}>
+        <span className="si">🔍</span>
+        <input className="input" placeholder="নাম, ফোন, প্রশ্ন, বিষয়..." value={q} onChange={e=>onInput(e.target.value)} autoFocus/>
+      </div>
+      {loading&&<div style={{textAlign:"center",padding:"24px 0",color:C.muted,fontSize:12}}>⏳ খোঁজা হচ্ছে...</div>}
+      {!loading&&results&&<div style={{fontSize:11,color:C.muted,marginBottom:9}}>{total}টি ফলাফল</div>}
       {results?.users?.length>0&&(
         <>
           <div className="slabel">👥 স্টুডেন্ট</div>
           {results.users.map((u,i)=>{
-            const nm=u.Name||u.name||"অজানা", ph=u.Phone||u.phone||"—";
+            const nm=u.Name||u.name||"অজানা",ph=u.Phone||u.phone||"—";
             const st=(u.Status||u.status||"inactive").toLowerCase();
             return(
               <div key={i} className="sr-item" onClick={()=>onStudentDetail(u)}>
                 <div className="avatar sm">{initials(nm)}</div>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:600,fontSize:13}}>{nm}</div>
-                  <div style={{fontSize:11,color:C.muted}}>📱 {ph}</div>
-                </div>
+                <div style={{flex:1,minWidth:0}}><div style={{fontWeight:600,fontSize:12}}>{nm}</div><div style={{fontSize:10,color:C.muted}}>📱 {ph}</div></div>
                 <span className={`pill p-${st==="active"?"active":"inactive"}`}>{st==="active"?"✅":"🔴"}</span>
               </div>
             );
           })}
         </>
       )}
-
       {results?.questions?.length>0&&(
         <>
           <div className="slabel">❓ প্রশ্ন</div>
           {results.questions.map((q2,i)=>(
             <div key={i} className="sr-item" style={{cursor:"default"}}>
-              <div>
-                <span className="sr-tag">{q2.tab}</span>
-              </div>
+              <span className="sr-tag">{q2._tab}</span>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:12,fontWeight:600,lineHeight:1.4}}>{q2.question?.slice(0,90)}{q2.question?.length>90?"…":""}</div>
-                {q2.correct&&<div style={{fontSize:10,color:C.green,marginTop:2}}>✅ {q2.correct}</div>}
+                <div style={{fontSize:12,fontWeight:600,lineHeight:1.4}}>{(q2.Question||q2.question||"").slice(0,85)}…</div>
+                {(q2.Correct||q2.correct)&&<div style={{fontSize:10,color:C.green,marginTop:1}}>✅ {q2.Correct||q2.correct}</div>}
               </div>
-              <div style={{fontSize:10,color:C.muted,whiteSpace:"nowrap"}}>#{q2.id}</div>
+              <div style={{fontSize:10,color:C.muted}}>#{q2.ID||q2.id}</div>
             </div>
           ))}
         </>
       )}
-
-      {!loading&&results&&total===0&&(
-        <div className="empty"><div className="ei">🔍</div><p>"{q}" এর কোনো ফলাফল নেই</p></div>
-      )}
-
-      {!results&&!loading&&(
-        <div className="empty" style={{paddingTop:32}}>
-          <div className="ei">🔍</div>
-          <p style={{fontSize:13}}>স্টুডেন্টের নাম/ফোন<br/>বা প্রশ্নের কীওয়ার্ড লিখুন</p>
-        </div>
-      )}
+      {!loading&&results&&total===0&&<div className="empty"><div className="ei">🔍</div><p>"{q}" পাওয়া যায়নি</p></div>}
+      {!results&&!loading&&<div className="empty" style={{paddingTop:28}}><div className="ei">🔍</div><p style={{fontSize:12}}>এখানে সব কিছু খোঁজুন<br/><span style={{fontSize:10,color:C.muted}}>Firebase থেকে instant</span></p></div>}
     </div>
   );
 }
@@ -1018,64 +1164,69 @@ function SearchPage({push,onStudentDetail}){
 /* ══════════════════════════════════════════
    NOTIFICATIONS
 ══════════════════════════════════════════ */
-function NotificationsPage({push}){
-  const[title,setTitle]=useState("");
-  const[body,setBody]=useState("");
-  const[sending,setSending]=useState(false);
-  const[hist,setHist]=useState([{title:"নতুন কুইজ যোগ!",body:"Physics থেকে নতুন প্রশ্ন",time:"আগে"}]);
+function NotifyPage({push}) {
+  const [title,setTitle] = useState("");
+  const [body,setBody] = useState("");
+  const [sending,setSending] = useState(false);
+  const [hist,setHist] = useState([]);
 
-  const send=async()=>{
-    if(!title||!body){push("warn","তথ্য দিন","Title ও Message দরকার");return;}
+  const send = async() => {
+    if(!title||!body){push("warn","তথ্য দিন","");return;}
     setSending(true);
-    try{
-      const r=await apiAction({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)});
-      push("success","পাঠানো হয়েছে! 🎉",`${r.fcm?.sent||0} জনকে পাঠানো হয়েছে`);
-      setHist(p=>[{title,body,time:"এখনই"},...p]);
+    try {
+      // GAS FCM broadcast
+      const r = await gasAction({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)});
+      push("success","পাঠানো হয়েছে! 🎉",`${r.fcm?.sent||0} জনকে`);
+      setHist(p=>[{title,body,time:"এখনই"},...p.slice(0,9)]);
       setTitle(""); setBody("");
-    }catch(e){push("error","ব্যর্থ",e.message);}
+    } catch(e){push("error","ব্যর্থ",e.message);}
     setSending(false);
   };
 
   return(
     <div className="page">
-      <div className="bcard">
+      <div style={{background:`linear-gradient(135deg,${C.card},#0a1830)`,border:`1px solid ${C.accent}20`,borderRadius:13,padding:14,marginBottom:11}}>
         <div className="card-title">📣 সবাইকে Broadcast</div>
         <div className="field"><label>শিরোনাম</label><input className="input" placeholder="নোটিফিকেশনের শিরোনাম..." value={title} onChange={e=>setTitle(e.target.value)}/></div>
-        <div className="field"><label>বার্তা</label><textarea className="ta" placeholder="বিস্তারিত লিখুন..." value={body} onChange={e=>setBody(e.target.value)}/></div>
+        <div className="field"><label>বার্তা</label><textarea className="ta" placeholder="বিস্তারিত..." value={body} onChange={e=>setBody(e.target.value)}/></div>
         <button className="btn btn-p btn-block" onClick={send} disabled={sending}>{sending?"⏳ পাঠানো হচ্ছে...":"📣 সবাইকে পাঠান"}</button>
       </div>
-      <div className="slabel">ইতিহাস</div>
-      <div className="card">
-        {hist.map((h,i)=>(
-          <div key={i} className="nrow">
-            <div className={`ndot ${i===0?"n":"o"}`}/>
-            <div className="ncontent"><div className="ntitle">{h.title}</div><div className="nsub">{h.body?.slice(0,55)}</div></div>
-            <div className="ntime">{h.time}</div>
-          </div>
-        ))}
-      </div>
+      {hist.length>0&&(
+        <div className="card">
+          <div className="card-title">ইতিহাস</div>
+          {hist.map((h,i)=>(
+            <div key={i} className="nrow">
+              <div className={`ndot ${i===0?"n":"o"}`}/>
+              <div className="ncontent"><div className="ntitle">{h.title}</div><div className="nsub">{h.body?.slice(0,55)}</div></div>
+              <div className="ntime">{h.time}</div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function NotifyModal({user,onClose,push,inDetail}){
-  const[title,setTitle]=useState("");
-  const[body,setBody]=useState("");
-  const[sending,setSending]=useState(false);
+function NotifyModal({user,onClose,push,inline}) {
+  const [title,setTitle] = useState("");
+  const [body,setBody] = useState("");
+  const [sending,setSending] = useState(false);
   const nm=user.Name||user.name||"স্টুডেন্ট";
 
-  const send=async()=>{
-    if(!title||!body)return;
+  const send = async() => {
+    if(!title||!body) return;
     setSending(true);
-    try{
-      await apiAction({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)});
-      push("success","পাঠানো হয়েছে",`${nm} কে নোটিফাই করা হয়েছে`);
-      if(!inDetail) onClose();
-    }catch(e){push("error","ব্যর্থ",e.message);}
+    try {
+      const ph=(user.Phone||user.phone||"").replace(/[.#$\[\]\s]/g,'_');
+      await fb.set(`Notifications/${ph}/notif_${Date.now()}`,{type:"personal",title,body,time:now_ts(),read:false});
+      gasAction({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)}).catch(()=>{});
+      push("success","পাঠানো হয়েছে",nm);
+      if(!inline) onClose();
+    } catch(e){push("error","ব্যর্থ",e.message);}
     setSending(false);
   };
 
-  if(inDetail) return(
+  if(inline) return(
     <div className="card">
       <div className="card-title">📣 ব্যক্তিগত নোটিফিকেশন</div>
       <div className="field"><label>শিরোনাম</label><input className="input" placeholder="Title..." value={title} onChange={e=>setTitle(e.target.value)}/></div>
@@ -1086,13 +1237,13 @@ function NotifyModal({user,onClose,push,inDetail}){
 
   return(
     <div className="overlay">
-      <div className="modal" onClick={e=>e.stopPropagation()}>
+      <div className="modal">
         <div className="mhandle"/>
         <div className="mtitle">📣 {nm}</div>
-        <div style={{fontSize:11,color:C.muted,marginBottom:12}}>📱 {user.Phone||user.phone}</div>
+        <div style={{fontSize:11,color:C.muted,marginBottom:11}}>📱 {user.Phone||user.phone}</div>
         <div className="field"><label>শিরোনাম</label><input className="input" placeholder="Title..." value={title} onChange={e=>setTitle(e.target.value)}/></div>
         <div className="field"><label>বার্তা</label><textarea className="ta" placeholder="Message..." value={body} onChange={e=>setBody(e.target.value)}/></div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:7}}>
           <button className="btn btn-g" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
           <button className="btn btn-p" style={{flex:1,justifyContent:"center"}} onClick={send} disabled={sending}>{sending?"⏳":"📨 পাঠান"}</button>
         </div>
@@ -1104,44 +1255,45 @@ function NotifyModal({user,onClose,push,inDetail}){
 /* ══════════════════════════════════════════
    ROOT APP
 ══════════════════════════════════════════ */
-const NAV=[
-  {id:"dashboard",icon:"📊",label:"Dashboard"},
-  {id:"signups",  icon:"🆕",label:"সাইনআপ",  badge:true},
-  {id:"students", icon:"👥",label:"Students"},
-  {id:"reports",  icon:"🚨",label:"Reports",  badge:true},
-  {id:"search",   icon:"🔍",label:"Search"},
-  {id:"notifs",   icon:"📣",label:"Notify"},
+const NAV = [
+  {id:"dashboard", icon:"📊", label:"Dashboard"},
+  {id:"signups",   icon:"🆕", label:"সাইনআপ",  badge:true},
+  {id:"students",  icon:"👥", label:"Students"},
+  {id:"reports",   icon:"🚨", label:"Reports",  badge:true},
+  {id:"entry",     icon:"✏️", label:"Entry"},
+  {id:"search",    icon:"🔍", label:"Search"},
+  {id:"notify",    icon:"📣", label:"Notify"},
 ];
 
-export default function App(){
-  const[page,setPage]=useState("dashboard");
-  const[toasts,push]=useToasts();
-  const[refreshTick,setRefreshTick]=useState(0);
-  const[spin,setSpin]=useState(false);
-  const[searchDetail,setSearchDetail]=useState(null);
+export default function App() {
+  const [page,setPage] = useState("dashboard");
+  const [toasts,push] = useToasts();
+  const [tick,setTick] = useState(0);
+  const [spin,setSpin] = useState(false);
+  const [searchDetail,setSearchDetail] = useState(null);
 
-  const doRefresh=()=>{
+  const refresh = () => {
     setSpin(true);
-    cacheInvalidate("getDashboard","getUsers");
-    setRefreshTick(t=>t+1);
-    setTimeout(()=>setSpin(false),1500);
+    Object.keys(_cache).forEach(k=>delete _cache[k]);
+    setTick(t=>t+1);
+    setTimeout(()=>setSpin(false),1400);
   };
 
+  // Auto revalidate every 60s
   useEffect(()=>{
-    const id=setInterval(()=>setRefreshTick(t=>t+1),60_000);
+    const id=setInterval(()=>setTick(t=>t+1),60_000);
     return()=>clearInterval(id);
   },[]);
 
-  // Search থেকে student detail
   if(searchDetail) return(
     <>
       <style>{css}</style>
-      <StudentDetailPage user={searchDetail} onBack={()=>setSearchDetail(null)} push={push}/>
-      <div className="toasts">{toasts.map(t=>(<div key={t.id} className={`toast ${t.type}`}><div className="t-icon">{t.type==="success"?"✅":t.type==="error"?"❌":t.type==="warn"?"⚠️":"ℹ️"}</div><div className="t-body"><div className="t-title">{t.title}</div>{t.msg&&<div className="t-msg">{t.msg}</div>}</div></div>))}</div>
+      <StudentDetail user={searchDetail} onBack={()=>setSearchDetail(null)} push={push}/>
+      <Toasts toasts={toasts}/>
     </>
   );
 
-  const curNav=NAV.find(n=>n.id===page);
+  const curNav = NAV.find(n=>n.id===page);
 
   return(
     <>
@@ -1149,17 +1301,19 @@ export default function App(){
       <div className="topbar">
         <div>
           <div className="topbar-title">{curNav?.icon} {curNav?.label}</div>
-          <div className="topbar-sub">Smart Study Admin</div>
+          <div className="topbar-sub">Smart Study Admin · Firebase</div>
         </div>
-        <button className={`icon-btn${spin?" spinning":""}`} onClick={doRefresh}>🔄</button>
+        <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
       </div>
 
-      <div style={{display:page==="dashboard"?"block":"none"}}><DashboardPage push={push} forceRefresh={refreshTick}/></div>
-      <div style={{display:page==="signups"  ?"block":"none"}}><SignupsPage   push={push} forceRefresh={refreshTick}/></div>
-      <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} forceRefresh={refreshTick}/></div>
-      <div style={{display:page==="reports"  ?"block":"none"}}><ReportsPage   push={push} forceRefresh={refreshTick}/></div>
-      <div style={{display:page==="search"   ?"block":"none"}}><SearchPage    push={push} onStudentDetail={u=>{setSearchDetail(u);}}/></div>
-      <div style={{display:page==="notifs"   ?"block":"none"}}><NotificationsPage push={push}/></div>
+      {/* সব page mount — display:none দিয়ে hide */}
+      <div style={{display:page==="dashboard"?"block":"none"}}><DashboardPage push={push} forceRefresh={tick}/></div>
+      <div style={{display:page==="signups"  ?"block":"none"}}><SignupsPage   push={push} forceRefresh={tick}/></div>
+      <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} forceRefresh={tick}/></div>
+      <div style={{display:page==="reports"  ?"block":"none"}}><ReportsPage   push={push} forceRefresh={tick}/></div>
+      <div style={{display:page==="entry"    ?"block":"none"}}><EntryPage     push={push}/></div>
+      <div style={{display:page==="search"   ?"block":"none"}}><SearchPage    push={push} onStudentDetail={u=>setSearchDetail(u)}/></div>
+      <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push}/></div>
 
       <nav className="bottom-nav">
         {NAV.map(n=>(
@@ -1171,14 +1325,20 @@ export default function App(){
         ))}
       </nav>
 
-      <div className="toasts">
-        {toasts.map(t=>(
-          <div key={t.id} className={`toast ${t.type}`}>
-            <div className="t-icon">{t.type==="success"?"✅":t.type==="error"?"❌":t.type==="warn"?"⚠️":"ℹ️"}</div>
-            <div className="t-body"><div className="t-title">{t.title}</div>{t.msg&&<div className="t-msg">{t.msg}</div>}</div>
-          </div>
-        ))}
-      </div>
+      <Toasts toasts={toasts}/>
     </>
+  );
+}
+
+function Toasts({toasts}) {
+  return(
+    <div className="toasts">
+      {toasts.map(t=>(
+        <div key={t.id} className={`toast ${t.type}`}>
+          <div className="t-icon">{t.type==="success"?"✅":t.type==="error"?"❌":t.type==="warn"?"⚠️":"ℹ️"}</div>
+          <div className="t-body"><div className="t-title">{t.title}</div>{t.msg&&<div className="t-msg">{t.msg}</div>}</div>
+        </div>
+      ))}
+    </div>
   );
 }
