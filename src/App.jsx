@@ -430,13 +430,13 @@ function DashboardPage({push,forceRefresh}) {
         <div className="stat-card t-blue"   data-icon="👥"><div className="stat-label">স্টুডেন্ট</div><div className="stat-value sv-blue">{fmt(total)}</div></div>
         <div className="stat-card t-green"  data-icon="✅"><div className="stat-label">অ্যাক্টিভ</div><div className="stat-value sv-green">{fmt(active)}</div></div>
         <div className="stat-card t-yellow" data-icon="⏳"><div className="stat-label">পেন্ডিং</div><div className="stat-value sv-yellow">{fmt(pending)}</div></div>
-        <div className="stat-card t-red"    data-icon="🚨"><div className="stat-label">রিপোর্ট</div><div className="stat-value sv-red">{fmt(rptTotal)}</div></div>
+        <div className="stat-card t-red"    data-icon="🚨"><div className="stat-label">রিপোর্ট</div><div className="stat-value sv-red">{fmt(finalRptTotal)}</div></div>
       </div>
       <div className="stat-grid">
-        <div className="stat-card t-blue"   data-icon="❓"><div className="stat-label">Quiz</div><div className="stat-value sv-blue">{fmt(qs.total)}</div></div>
-        <div className="stat-card t-green"  data-icon="📚"><div className="stat-label">QBank</div><div className="stat-value sv-green">{fmt(qbs.total)}</div></div>
-        <div className="stat-card t-yellow" data-icon="📖"><div className="stat-label">Study</div><div className="stat-value sv-yellow">{fmt(stTotal)}</div></div>
-        <div className="stat-card t-purple" data-icon="📊"><div className="stat-label">মোট</div><div className="stat-value sv-purple">{fmt(qs.total+qbs.total+stTotal)}</div></div>
+        <div className="stat-card t-blue"   data-icon="❓"><div className="stat-label">Quiz</div><div className="stat-value sv-blue">{fmt(finalQuizTotal)}</div></div>
+        <div className="stat-card t-green"  data-icon="📚"><div className="stat-label">QBank</div><div className="stat-value sv-green">{fmt(finalQbankTotal)}</div></div>
+        <div className="stat-card t-yellow" data-icon="📖"><div className="stat-label">Study</div><div className="stat-value sv-yellow">{fmt(finalStTotal)}</div></div>
+        <div className="stat-card t-purple" data-icon="📊"><div className="stat-label">মোট</div><div className="stat-value sv-purple">{fmt(finalQuizTotal+finalQbankTotal+finalStTotal)}</div></div>
       </div>
       <div className="card">
         <div className="card-title">📈 Daily Active (৭ দিন)</div>
@@ -453,9 +453,15 @@ function DashboardPage({push,forceRefresh}) {
             <button key={v} className={`atab${atab===v?" active":""}`} onClick={()=>setAtab(v)}>{l}</button>
           ))}
         </div>
-        {atab==="quiz"&&(Object.keys(qs.bySubject).length===0?<div style={{textAlign:"center",color:C.muted,padding:"12px 0",fontSize:12}}>ডেটা নেই</div>:<SubjectTree entries={Object.entries(qs.bySubject)} total={qs.total} color={C.accent}/>)}
-        {atab==="qbank"&&(Object.keys(qbs.bySubject).length===0?<div style={{textAlign:"center",color:C.muted,padding:"12px 0",fontSize:12}}>ডেটা নেই</div>:<SubjectTree entries={Object.entries(qbs.bySubject)} total={qbs.total} color={C.green}/>)}
-        {atab==="study"&&<div style={{textAlign:"center",color:C.muted,padding:"12px 0",fontSize:12}}>{fmt(stTotal)}টি নোট</div>}
+        {atab==="quiz"&&(quizE.length===0
+          ?<div style={{textAlign:"center",color:C.muted,padding:"12px 0",fontSize:12}}>{loadingFull?"⏳ লোড হচ্ছে...":"ডেটা নেই"}</div>
+          :<SubjectTree entries={quizE} total={finalQuizTotal} color={C.accent}/>
+        )}
+        {atab==="qbank"&&(qbankE.length===0
+          ?<div style={{textAlign:"center",color:C.muted,padding:"12px 0",fontSize:12}}>{loadingFull?"⏳ লোড হচ্ছে...":"ডেটা নেই"}</div>
+          :<SubjectTree entries={qbankE} total={finalQbankTotal} color={C.green}/>
+        )}
+        {atab==="study"&&<div style={{textAlign:"center",color:C.muted,padding:"12px 0",fontSize:12}}>{fmt(finalStTotal)}টি নোট</div>}
       </div>
     </div>
   );
@@ -483,8 +489,13 @@ function SignupsPage({push,forceRefresh}) {
         fb.patch(`PendingSignups/${u._key}`, { approved:true }),
         fb.set(`Notifications/${ph}/welcome`, { type:"welcome", title:"🎉 অ্যাকাউন্ট অ্যাক্টিভ!", body:"Smart Study-তে স্বাগতম!", time:now_ts(), read:false }),
       ]);
-      // Background GAS FCM
+      // Background: GAS Sheet sync + FCM
       gasAction({ action:"activateUser", phone:u.phone||u.Phone||"" }).catch(()=>{});
+      // GAS Sheet sync
+      setTimeout(()=>{
+        const ph = (u.phone||u.Phone||"").replace(/[.#$\[\]\s]/g,'_');
+        fetch(`${GAS}?action=updateField&sheet=Users&id=${u.phone||u.Phone||""}&field=status&content=Active`).catch(()=>{});
+      }, 300);
       push("success","✅ অ্যাক্টিভ!",u.name||u.Name||"");
       setDone(p=>[...p,u._key]);
       fbInvalidate("PendingSignups"); fbInvalidate("Users");
@@ -530,7 +541,9 @@ function SignupsPage({push,forceRefresh}) {
 ══════════════════════════════════════════ */
 function StudentsPage({push,forceRefresh}) {
   const {data:usersRaw,loading} = useFB("Users",forceRefresh);
+  // Analytics/Summary ছোট dataset — fast load হয়
   const {data:summary}           = useFB("Analytics/Summary");
+  // Users loaded হলে Analytics match করা হবে
   const [overrides,setOverrides] = useState({});
   const [search,setSearch] = useState("");
   const [tab,setTab] = useState("all");
@@ -793,20 +806,41 @@ function ReportEditModal({report,onClose,onDone,push}) {
     setSaving(true);
     try {
       if(qdata&&qid) {
-        // Firebase directly update
         const t = qdata._tab||"Quiz";
+        // ① Firebase directly update (~200ms)
         const data = await fb.get(t);
-        const arr = Array.isArray(data)?data:Object.values(data||{});
+        const isArr = Array.isArray(data);
+        const arr = isArr ? data : Object.values(data||{});
         const idx = arr.findIndex(x=>x&&(x.ID||x.id||"").toString()===qid.toString());
         if(idx!==-1) {
-          arr[idx] = {...arr[idx],Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Explanation:explanation,Technique:technique};
-          await fb.set(t, arr);
+          const updated = {...arr[idx],
+            Question:question, Opt1:opt1, Opt2:opt2, Opt3:opt3, Opt4:opt4,
+            Correct:correct, Explanation:explanation, Technique:technique
+          };
+          if(isArr) {
+            arr[idx] = updated;
+            await fb.set(t, arr);
+          } else {
+            // object keys
+            const keys = Object.keys(data);
+            const key = keys[idx];
+            await fb.patch(`${t}/${key}`, updated);
+          }
           fbInvalidate(t);
-          // Background GAS Sheet sync
-          gasAction({action:"updateField",sheet:t,id:qid,field:"question",content:encodeURIComponent(question)}).catch(()=>{});
         }
+        // ② Background GAS → Sheet sync (সব field একসাথে)
+        const syncFields = [
+          ["question",question],["opt1",opt1],["opt2",opt2],
+          ["opt3",opt3],["opt4",opt4],["correct",correct],
+          ["explanation",explanation],["technique",technique]
+        ];
+        syncFields.forEach(([field,value])=>{
+          if(value.trim()) {
+            fetch(`${GAS}?action=updateField&sheet=${t}&id=${qid}&field=${field}&content=${encodeURIComponent(value)}`).catch(()=>{});
+          }
+        });
       }
-      push("success","✅ সেভ হয়েছে!","");
+      push("success","✅ Firebase ও Sheet দুটোতেই সেভ হয়েছে!","");
       setStep(2);
     } catch(e) { push("error","Save ব্যর্থ",e.message); }
     setSaving(false);
@@ -955,14 +989,25 @@ function EntryPage({push}) {
       await fb.push(mode, record);
       fbInvalidate(mode);
 
-      // Background GAS Sheet sync (non-blocking)
-      const params = mode==="Quiz"
-        ? { targetTab:"Quiz", question, opt1, opt2, opt3, opt4, correct, subject, sub_topic:subtopic, explanation, technique, qType:qtype, timestamp:ts, audienceTags:"General" }
+      // ② Background GAS → Sheet sync (non-blocking, user কে wait করতে হবে না)
+      const gasParams = mode==="Quiz"
+        ? { targetTab:"Quiz", question, opt1, opt2, opt3, opt4, correct, subject,
+            sub_topic:subtopic, explanation, technique, qType:qtype,
+            timestamp:ts, audienceTags:"General", editId:"" }
         : mode==="QBank"
-          ? { targetTab:"QBank", question, opt1, opt2, opt3, opt4, correct, subject, topic, sub_topic:subtopic, explanation, technique, qType:qtype, timestamp:ts }
-          : { targetTab:"Study", subject, sub_topic:subtopic, explanation, technique, timestamp:ts };
+          ? { targetTab:"QBank", question, opt1, opt2, opt3, opt4, correct,
+              subject, topic, sub_topic:subtopic, explanation, technique,
+              qType:qtype, timestamp:ts, audienceTags:"General" }
+          : { targetTab:"Study", subject, sub_topic:subtopic,
+              explanation, technique, timestamp:ts };
 
-      fetch(GAS, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(params) }).catch(()=>{});
+      setTimeout(()=>{
+        fetch(GAS, {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify(gasParams)
+        }).catch(()=>{}); // silent fail — Firebase already saved
+      }, 500);
 
       push("success","✅ সেভ হয়েছে!", `${mode} #${id}`);
       reset();
