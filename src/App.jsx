@@ -314,8 +314,9 @@ function DashboardPage({push,forceRefresh}){
     return{l:label,v:count};
   });
 
-  const loading=l1&&l2;
-  if(loading&&!stats&&!users)return(
+  // শুধু users load হলেই basic stats দেখানো যাবে — _DashStats এর জন্য block করব না
+  const loading=l2&&!users; // শুধু Users এর জন্য wait করো
+  if(loading)return(
     <div className="page">
       <div className="stat-grid">{[...Array(4)].map((_,i)=><div key={i} className="skel" style={{height:74,borderRadius:13}}/>)}</div>
       {[...Array(3)].map((_,i)=><div key={i} className="skel"/>)}
@@ -336,7 +337,23 @@ function DashboardPage({push,forceRefresh}){
         <div className="stat-card t-yellow" data-icon="📖"><div className="stat-label">Study</div><div className="stat-value sv-yellow">{fmt(stTotal)}</div></div>
         <div className="stat-card t-purple" data-icon="📊"><div className="stat-label">মোট</div><div className="stat-value sv-purple">{fmt(quizTotal+qbTotal+stTotal)}</div></div>
       </div>
-      {!stats&&<div style={{background:"#f59e0b18",border:"1px solid #f59e0b30",borderRadius:10,padding:"8px 12px",fontSize:11,color:C.yellow,marginBottom:10}}>⚠️ GAS এ একবার manualSyncAll() চালান — stats আপডেট হবে</div>}
+      {!stats&&!l1&&(
+        <div style={{background:"#f59e0b18",border:"1px solid #f59e0b30",borderRadius:10,padding:"8px 12px",fontSize:11,color:C.yellow,marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <span>⚠️ Analytics stats নেই</span>
+          <button className="btn btn-g" style={{fontSize:10,padding:"3px 8px"}} onClick={async()=>{
+            try{
+              const r=await gasAction({action:"getDashboard"});
+              if(r&&r.quiz){
+                const qt=Object.values(r.quiz).reduce((s,v)=>s+(v.total||0),0);
+                const qbt=Object.values(r.qbank||{}).reduce((s,v)=>s+(v.total||0),0);
+                const stt=Object.values(r.study||{}).reduce((s,v)=>s+(v.total||0),0);
+                await fb.set("_DashStats",{quiz:r.quiz,qbank:r.qbank,quizTotal:qt,qbankTotal:qbt,studyTotal:stt,reportTotal:r.reports?.length||0,updatedAt:Date.now()});
+                fbInvalidate("_DashStats");
+              }
+            }catch(e){}
+          }}>🔄 Load</button>
+        </div>
+      )}
       <div className="card">
         <div className="card-title">📈 Daily Active (৭ দিন)</div>
         <MiniBar data={days} color={C.accent}/>
@@ -441,8 +458,14 @@ function StudentsPage({push,forceRefresh}){
   const[activating,setActivating]=useState(null);
 
   const users=toArr(usersRaw).map(u=>{
-    const ph=(u.Phone||u.phone||"").replace(/^'+/,"").replace(/^0+/,"");
-    const sm=summary&&Object.entries(summary).find(([k])=>k.replace(/_/g,"").replace(/^0+/,"")===ph);
+    const rawPhone=(u.Phone||u.phone||"").replace(/^'+/,"").trim();
+    const phNorm=rawPhone.replace(/^0+/,"");
+    // Firebase key এ phone সব format এ হতে পারে — সব try করো
+    const sm=summary&&Object.entries(summary).find(([k])=>{
+      const kn=k.replace(/_/g,"").replace(/^0+/,"");
+      const kRaw=k.replace(/_/g,"");
+      return kn===phNorm||kRaw===rawPhone||kn===rawPhone||k===rawPhone;
+    });
     const stats=sm?sm[1]:{};
     const ov=overrides[u.Phone||u.phone||u._key];
     return{...u,...stats,Status:ov||u.Status||u.status||"Inactive"};
@@ -527,11 +550,21 @@ function StudentsPage({push,forceRefresh}){
 function StudentDetail({user,onBack,push}){
   const nm=user.Name||user.name||"অজানা";
   const ph=(user.Phone||user.phone||"").replace(/^'+/,"");
-  const phKey=ph.replace(/[.#$\[\]\s]/g,'_').replace(/^0+/,"");
   const st=(user.Status||user.status||"inactive").toLowerCase();
-  const{data:timeData}=useFB(`Analytics/Time/${phKey}`);
-  const{data:subjData}=useFB(`Analytics/Subject/${phKey}`);
-  const c=parseInt(user.totalCorrect)||0,w=parseInt(user.totalWrong)||0,tot=c+w;
+  // Firebase key: phone number তে . # $ [ ] space → underscore
+  // leading zero সরানো হবে না — যেভাবে student app save করেছে সেভাবেই খুঁজবো
+  const phKey=ph.replace(/[.#$\[\]\s]/g,'_');
+  const phKeyNoZero=ph.replace(/^0+/,"").replace(/[.#$\[\]\s]/g,'_');
+  const{data:timeDataRaw}=useFB(`Analytics/Time/${phKey}`);
+  const{data:timeDataRaw2}=useFB(`Analytics/Time/${phKeyNoZero}`);
+  const{data:subjDataRaw}=useFB(`Analytics/Subject/${phKey}`);
+  const{data:subjDataRaw2}=useFB(`Analytics/Subject/${phKeyNoZero}`);
+  const timeData=timeDataRaw||timeDataRaw2;
+  const subjData=subjDataRaw||subjDataRaw2;
+  // user object এ analytics আসছে কিনা check করো
+  const c=parseInt(user.totalCorrect)||parseInt(user.correct)||0;
+  const w=parseInt(user.totalWrong)||parseInt(user.wrong)||0;
+  const tot=c+w;
   const acc=tot?Math.round(c/tot*100):0;
   const mins=parseInt(user.totalMinutes)||0;
   const dailyTime=timeData&&typeof timeData==="object"
