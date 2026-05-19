@@ -294,13 +294,41 @@ function DashboardPage({push,forceRefresh}){
   const total   = userArr.length;
   const active  = userArr.filter(u=>(u.Status||u.status||"").toLowerCase()==="active").length;
 
-  // Stats from _DashStats
-  const quizMap   = stats?.quiz   || {};
-  const qbankMap  = stats?.qbank  || {};
-  const quizTotal = stats?.quizTotal  || 0;
-  const qbTotal   = stats?.qbankTotal || 0;
-  const stTotal   = stats?.studyTotal || 0;
-  const rptTotal  = stats?.reportTotal|| 0;
+  // Direct Firebase counts (fast, no GAS needed)
+  const{data:quizRaw}  = useFB("Quiz",  forceRefresh);
+  const{data:qbankRaw} = useFB("QBank", forceRefresh);
+  const{data:studyRaw} = useFB("Study", forceRefresh);
+  const{data:rptRaw}   = useFB("Reports",forceRefresh);
+
+  // Build stats from Firebase arrays
+  const buildMap=(raw)=>{
+    const map={};
+    toArr(raw).forEach(q=>{
+      const sub=(q.Subject||q.subject||"Unknown").trim();
+      const typ=(q.QType||q.qtype||"MCQ").toLowerCase();
+      const st=(q.Sub_topic||q.sub_topic||"General").trim();
+      const parts=st.includes(" > ")?st.split(" > "):[st,st];
+      const top=parts[0].trim()||"General";
+      const stF=parts.length>1?parts[1].trim():st;
+      const isWr=typ==="written";
+      if(!map[sub])map[sub]={total:0,mcq:0,written:0,topics:{}};
+      map[sub].total++;if(isWr)map[sub].written++;else map[sub].mcq++;
+      if(!map[sub].topics[top])map[sub].topics[top]={total:0,subtopics:{}};
+      map[sub].topics[top].total++;
+      if(!map[sub].topics[top].subtopics[stF])map[sub].topics[top].subtopics[stF]={total:0,mcq:0,written:0};
+      map[sub].topics[top].subtopics[stF].total++;
+      if(isWr)map[sub].topics[top].subtopics[stF].written++;
+      else map[sub].topics[top].subtopics[stF].mcq++;
+    });
+    return map;
+  };
+
+  const quizMap  = quizRaw  ? buildMap(quizRaw)  : (stats?.quiz  ||{});
+  const qbankMap = qbankRaw ? buildMap(qbankRaw) : (stats?.qbank ||{});
+  const quizTotal  = toArr(quizRaw).length  || stats?.quizTotal  || 0;
+  const qbTotal    = toArr(qbankRaw).length || stats?.qbankTotal || 0;
+  const stTotal    = toArr(studyRaw).length || stats?.studyTotal || 0;
+  const rptTotal   = toArr(rptRaw).length   || stats?.reportTotal|| 0;
 
   const quizE  = Object.entries(quizMap);
   const qbankE = Object.entries(qbankMap);
@@ -314,8 +342,7 @@ function DashboardPage({push,forceRefresh}){
     return{l:label,v:count};
   });
 
-  // শুধু users load হলেই basic stats দেখানো যাবে — _DashStats এর জন্য block করব না
-  const loading=l2&&!users; // শুধু Users এর জন্য wait করো
+  const loading=(l2&&!users); // Users load হওয়া পর্যন্ত skeleton দেখাও
   if(loading)return(
     <div className="page">
       <div className="stat-grid">{[...Array(4)].map((_,i)=><div key={i} className="skel" style={{height:74,borderRadius:13}}/>)}</div>
@@ -337,23 +364,7 @@ function DashboardPage({push,forceRefresh}){
         <div className="stat-card t-yellow" data-icon="📖"><div className="stat-label">Study</div><div className="stat-value sv-yellow">{fmt(stTotal)}</div></div>
         <div className="stat-card t-purple" data-icon="📊"><div className="stat-label">মোট</div><div className="stat-value sv-purple">{fmt(quizTotal+qbTotal+stTotal)}</div></div>
       </div>
-      {!stats&&!l1&&(
-        <div style={{background:"#f59e0b18",border:"1px solid #f59e0b30",borderRadius:10,padding:"8px 12px",fontSize:11,color:C.yellow,marginBottom:10,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <span>⚠️ Analytics stats নেই</span>
-          <button className="btn btn-g" style={{fontSize:10,padding:"3px 8px"}} onClick={async()=>{
-            try{
-              const r=await gasAction({action:"getDashboard"});
-              if(r&&r.quiz){
-                const qt=Object.values(r.quiz).reduce((s,v)=>s+(v.total||0),0);
-                const qbt=Object.values(r.qbank||{}).reduce((s,v)=>s+(v.total||0),0);
-                const stt=Object.values(r.study||{}).reduce((s,v)=>s+(v.total||0),0);
-                await fb.set("_DashStats",{quiz:r.quiz,qbank:r.qbank,quizTotal:qt,qbankTotal:qbt,studyTotal:stt,reportTotal:r.reports?.length||0,updatedAt:Date.now()});
-                fbInvalidate("_DashStats");
-              }
-            }catch(e){}
-          }}>🔄 Load</button>
-        </div>
-      )}
+
       <div className="card">
         <div className="card-title">📈 Daily Active (৭ দিন)</div>
         <MiniBar data={days} color={C.accent}/>
@@ -385,30 +396,36 @@ function DashboardPage({push,forceRefresh}){
 
 /* ══════════════ SIGNUPS ══════════════ */
 function SignupsPage({push,forceRefresh}){
-  const{data:pending,loading}=useFB("PendingSignups",forceRefresh);
+  // PendingSignups নেই — Users থেকে Inactive filter করো
+  const{data:usersRaw,loading}=useFB("Users",forceRefresh);
   const[activating,setActivating]=useState(null);
   const[done,setDone]=useState([]);
 
-  const rows=pending&&typeof pending==="object"
-    ?Object.entries(pending).filter(([k,v])=>v&&!v.approved&&!done.includes(k)).map(([k,v])=>({...v,_key:k}))
-    :[];
+  const rows=toArr(usersRaw)
+    .filter(u=>{
+      const st=(u.Status||u.status||"").toLowerCase();
+      return(st==="inactive"||st===""||st==="pending")&&!done.includes(u._key||(u.Phone||u.phone));
+    });
 
   const activate=async(u)=>{
-    const key=u._key;
+    const phone=u.Phone||u.phone||"";
+    const key=u._key||phone;
     setActivating(key);
     try{
-      const phone=u.phone||u.Phone||"";
       const phKey=phone.replace(/[.#$\[\]\s]/g,'_');
-      await Promise.all([
-        fb.patch(`Users/${phKey}`,{Name:u.name||u.Name||"",Phone:phone,Status:"Active",Role:"Student",approvedAt:new Date().toISOString()}),
-        fb.patch(`PendingSignups/${key}`,{approved:true}),
-        fb.set(`Notifications/${phKey}/welcome`,{type:"welcome",title:"🎉 অ্যাকাউন্ট অ্যাক্টিভ!",body:"Smart Study-তে স্বাগতম!",time:nowTs(),read:false}),
-      ]);
-      // Background GAS FCM + Sheet
+      // Firebase Users এ Status update
+      await fb.patch(`Users/${phKey}`,{Status:"Active"});
+      // Notification পাঠাও
+      await fb.set(`Notifications/${phKey}/welcome_${Date.now()}`,{
+        type:"welcome",title:"🎉 অ্যাকাউন্ট অ্যাক্টিভ!",
+        body:"Smart Study-তে স্বাগতম! এখন পড়াশোনা শুরু করুন।",
+        time:nowTs(),read:false
+      });
+      // Background GAS: Sheet sync + FCM
       gasBg({action:"activateUser",phone});
-      push("success","✅ অ্যাক্টিভ!",u.name||u.Name||"");
+      push("success","✅ অ্যাক্টিভ!",u.Name||u.name||phone);
       setDone(p=>[...p,key]);
-      fbInvalidate("PendingSignups","Users");
+      fbInvalidate("Users");
     }catch(e){push("error","ব্যর্থ",e.message);}
     setActivating(null);
   };
@@ -422,7 +439,8 @@ function SignupsPage({push,forceRefresh}){
       {loading&&!pending?[...Array(3)].map((_,i)=><div key={i} className="skel"/>):
        rows.length===0?<div className="empty"><div className="ei">🎉</div><p>সব অ্যাক্টিভ!</p></div>:
        rows.map((u,i)=>{
-        const nm=u.name||u.Name||"অজানা",ph=u.phone||u.Phone||"—";
+        const nm=u.Name||u.name||"অজানা",ph=u.Phone||u.phone||"—";
+        const key=u._key||ph;
         return(
           <div key={i} className="card" style={{padding:12}}>
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
@@ -430,13 +448,13 @@ function SignupsPage({push,forceRefresh}){
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
                 <div style={{fontSize:11,color:C.muted}}>📱 {ph}</div>
-                {u.email&&<div style={{fontSize:11,color:C.muted}}>✉️ {u.email}</div>}
-                <div style={{fontSize:10,color:C.muted}}>🕐 {timeAgo(u.createdAt||u.timestamp)}</div>
+                {(u.Email||u.email)&&<div style={{fontSize:11,color:C.muted}}>✉️ {u.Email||u.email}</div>}
+                <div style={{fontSize:10,color:C.muted}}>🕐 {timeAgo(u.Timestamp||u.createdAt||u.timestamp)}</div>
               </div>
               <span className="pill p-pending">⏳ পেন্ডিং</span>
             </div>
             <button className="btn btn-s btn-block" disabled={!!activating} onClick={()=>activate(u)}>
-              {activating===u._key?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
+              {activating===key?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
             </button>
           </div>
         );
@@ -450,6 +468,8 @@ function SignupsPage({push,forceRefresh}){
 function StudentsPage({push,forceRefresh}){
   const{data:usersRaw,loading}=useFB("Users",forceRefresh);
   const{data:summary}=useFB("Analytics/Summary");
+  // Firebase এ minutes এর field name বিভিন্ন হতে পারে
+  const getMins=(u)=>parseInt(u.totalMinutes||u.studyMinutes||u.totalTime||u.minutes||u.studyTime||0);
   const[overrides,setOverrides]=useState({});
   const[search,setSearch]=useState("");
   const[tab,setTab]=useState("all");
@@ -459,12 +479,11 @@ function StudentsPage({push,forceRefresh}){
 
   const users=toArr(usersRaw).map(u=>{
     const rawPhone=(u.Phone||u.phone||"").replace(/^'+/,"").trim();
-    const phNorm=rawPhone.replace(/^0+/,"");
-    // Firebase key এ phone সব format এ হতে পারে — সব try করো
+    // Firebase Summary key = "01726989905" (leading zero সহ) — exact match করো
     const sm=summary&&Object.entries(summary).find(([k])=>{
-      const kn=k.replace(/_/g,"").replace(/^0+/,"");
-      const kRaw=k.replace(/_/g,"");
-      return kn===phNorm||kRaw===rawPhone||kn===rawPhone||k===rawPhone;
+      return k===rawPhone                          // exact: "01726989905"
+        || k===rawPhone.replace(/^0+/,"")          // no-zero: "1726989905"
+        || k.replace(/^0+/,"")===rawPhone.replace(/^0+/,""); // both stripped
     });
     const stats=sm?sm[1]:{};
     const ov=overrides[u.Phone||u.phone||u._key];
@@ -512,6 +531,7 @@ function StudentsPage({push,forceRefresh}){
         const st=(u.Status||"inactive").toLowerCase();
         const c=parseInt(u.totalCorrect)||0,w=parseInt(u.totalWrong)||0,tot=c+w;
         const acc=tot?Math.round(c/tot*100):0;
+        const mins2=getMins(u);
         return(
           <div key={i} className="card" style={{padding:11,cursor:"pointer"}} onClick={()=>setDetail(u)}>
             <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:8}}>
@@ -526,7 +546,7 @@ function StudentsPage({push,forceRefresh}){
               </div>
             </div>
             <div style={{display:"flex",gap:6,marginBottom:8}}>
-              {[[C.green,c,"✅"],[C.red,w,"❌"],[C.accent,parseInt(u.totalMinutes)||0,"⏱"]].map(([cl,val,ic])=>(
+              {[[C.green,c,"✅"],[C.red,w,"❌"],[C.accent,mins2,"⏱"]].map(([cl,val,ic])=>(
                 <div key={ic} style={{textAlign:"center",flex:1,background:C.panel,borderRadius:7,padding:"5px 2px"}}>
                   <div style={{color:cl,fontWeight:700,fontSize:13}}>{val}</div>
                   <div style={{color:C.muted,fontSize:9}}>{ic}</div>
@@ -553,20 +573,21 @@ function StudentDetail({user,onBack,push}){
   const st=(user.Status||user.status||"inactive").toLowerCase();
   // Firebase key: phone number তে . # $ [ ] space → underscore
   // leading zero সরানো হবে না — যেভাবে student app save করেছে সেভাবেই খুঁজবো
+  // Firebase Analytics key = phone as-is e.g. "01788196143"
   const phKey=ph.replace(/[.#$\[\]\s]/g,'_');
   const phKeyNoZero=ph.replace(/^0+/,"").replace(/[.#$\[\]\s]/g,'_');
-  const{data:timeDataRaw}=useFB(`Analytics/Time/${phKey}`);
-  const{data:timeDataRaw2}=useFB(`Analytics/Time/${phKeyNoZero}`);
-  const{data:subjDataRaw}=useFB(`Analytics/Subject/${phKey}`);
-  const{data:subjDataRaw2}=useFB(`Analytics/Subject/${phKeyNoZero}`);
-  const timeData=timeDataRaw||timeDataRaw2;
-  const subjData=subjDataRaw||subjDataRaw2;
+  const{data:timeDataA}=useFB(`Analytics/Time/${phKey}`);
+  const{data:timeDataB}=useFB(`Analytics/Time/${phKeyNoZero}`);
+  const{data:subjDataA}=useFB(`Analytics/Subject/${phKey}`);
+  const{data:subjDataB}=useFB(`Analytics/Subject/${phKeyNoZero}`);
+  const timeData=timeDataA||timeDataB;
+  const subjData=subjDataA||subjDataB;
   // user object এ analytics আসছে কিনা check করো
   const c=parseInt(user.totalCorrect)||parseInt(user.correct)||0;
   const w=parseInt(user.totalWrong)||parseInt(user.wrong)||0;
   const tot=c+w;
   const acc=tot?Math.round(c/tot*100):0;
-  const mins=parseInt(user.totalMinutes)||0;
+  const mins=parseInt(user.totalMinutes||user.studyMinutes||user.totalTime||user.minutes||user.studyTime||0);
   const dailyTime=timeData&&typeof timeData==="object"
     ?Object.entries(timeData).sort(([a],[b])=>a.localeCompare(b)).slice(-7).map(([d,v])=>({l:d.slice(5),v:parseInt(v)||0})):[];
   const subjEntries=subjData&&typeof subjData==="object"?Object.entries(subjData):[];
