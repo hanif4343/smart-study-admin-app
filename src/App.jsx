@@ -716,21 +716,25 @@ function ReportEditModal({report,onClose,onDone,push}){
   const doNotify=async()=>{
     setNotifying(true);
     try{
-      const phone=(report.Phone||report.phone||"").toString();
+      const phone=(report.Phone||report.phone||"").toString().replace(/^\''+/,"").trim();
       const subject=(report.Subject||report.subject||"প্রশ্নটি").toString();
       const phK=phoneKey(phone);
       const notifTitle="✅ রিপোর্ট সমাধান হয়েছে!";
       const notifBody=`"${subject}" সংশোধন হয়েছে।`;
       // 1. Firebase-এ লিখে দাও
       await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:notifBody,questionId:qid,time:nowTs(),read:false});
-      // 2. FCM push - specific user কে (fire and forget, 6s timeout)
+      // 2. FCM push - response দেখো
+      let fcmInfo="";
       try{
-        await Promise.race([
+        const resp=await Promise.race([
           fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody)})),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),6000))
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),7000))
         ]);
-      }catch(_){}
-      push("success","✅ নোটিফাই হয়েছে!",phone);
+        const rj=await resp.json().catch(()=>({}));
+        if(rj?.fcm?.name) fcmInfo=" · FCM ✅";
+        else if(rj?.fcm?.error) fcmInfo=" · FCM ❌ "+rj.fcm.error;
+      }catch(_){fcmInfo=" · FCM timeout";}
+      push("success","✅ নোটিফাই হয়েছে!",phone+fcmInfo);
       onDone(report._fbKey||report.row||qid);
     }catch(e){push("error","Notify ব্যর্থ",String(e?.message||e||"Unknown error"));}
     setNotifying(false);
