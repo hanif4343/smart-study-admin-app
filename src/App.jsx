@@ -623,19 +623,26 @@ function ReportsPage({push,tick}){
       </div>
       {loading&&!rRaw?[...Array(3)].map((_,i)=><div key={i} className="sk"/>):
        reports.length===0?<div className="empty"><div className="ei">📋</div><p>রিপোর্ট নেই! 🎉</p></div>:
-       reports.map((r,i)=>(
-        <div key={i} className="rc">
-          <div style={{fontWeight:700,fontSize:13}}>{r.Subject||r.subject||"অজানা"}</div>
-          <div className="rm">
-            <span>📱 {r.Phone||r.phone||"—"}</span>
-            {(r.SubTopic||r.subtopic)&&<span>📌 {r.SubTopic||r.subtopic}</span>}
-            {(r.QuestionID||r.questionId)&&<span style={{color:C.accent}}>#{r.QuestionID||r.questionId}</span>}
-            <span>{timeAgo(r.timestamp||r.time)}</span>
-          </div>
-          <div className="ri">{r.Issue||r.issue||r.Question||r.question||"বিস্তারিত নেই"}</div>
-          <button className="btn bp bb" style={{marginTop:8}} onClick={()=>setEditing(r)}>✏️ এডিট ও সমাধান</button>
-        </div>
-       ))
+       reports.map((r,i)=>{
+        const isMCQ=(r.QType||r.qtype||"MCQ").toLowerCase()!=="written";
+        const qid2=r.QuestionID||r.questionId;
+        return(
+         <div key={i} className="rc" style={{borderLeft:`3px solid ${isMCQ?C.accent:C.purple}`}}>
+           <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:6}}>
+             <span style={{background:isMCQ?`${C.accent}22`:`${C.purple}22`,color:isMCQ?C.accent:C.purple,border:`1px solid ${isMCQ?C.accent:C.purple}44`,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700}}>{isMCQ?"❓ MCQ":"✍️ Written"}</span>
+             <div style={{fontWeight:700,fontSize:13,flex:1}}>{r.Subject||r.subject||"অজানা"}</div>
+           </div>
+           <div className="rm">
+             <span>📱 {r.Phone||r.phone||"—"}</span>
+             {(r.SubTopic||r.subtopic)&&<span>📌 {r.SubTopic||r.subtopic}</span>}
+             {qid2&&<span style={{color:C.accent}}>#{qid2}</span>}
+             <span>{timeAgo(r.timestamp||r.time)}</span>
+           </div>
+           <div className="ri">{r.Issue||r.issue||r.Question||r.question||"বিস্তারিত নেই"}</div>
+           <button className="btn bp bb" style={{marginTop:8,background:isMCQ?C.accent:C.purple}} onClick={()=>setEditing(r)}>✏️ এডিট ও সমাধান</button>
+         </div>
+        );
+       })
       }
       {editing&&<ReportEditModal report={editing} onClose={()=>setEditing(null)} onDone={key=>{setDone(p=>new Set([...p,key]));setEditing(null);fbInv("Reports");}} push={push}/>}
     </div>
@@ -654,6 +661,7 @@ function ReportEditModal({report,onClose,onDone,push}){
   const[correct,setCorrect]=useState("");
   const[explanation,setExplanation]=useState("");
   const[technique,setTechnique]=useState("");
+  const[isMCQ,setIsMCQ]=useState((report.QType||report.qtype||"MCQ").toLowerCase()!=="written");
   const qid=(report.QuestionID||report.questionId||"").toString();
 
   useEffect(()=>{
@@ -673,6 +681,8 @@ function ReportEditModal({report,onClose,onDone,push}){
             setCorrect(q.Correct||q.correct||"");
             setExplanation(q.Explanation||q.explanation||"");
             setTechnique(q.Technique||q.technique||"");
+            const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
+            setIsMCQ(qt!=="written");
             break;
           }
         }catch(_){}
@@ -687,29 +697,46 @@ function ReportEditModal({report,onClose,onDone,push}){
       if(qdata&&qid){
         const t=qdata._tab||"Quiz";
         const fkey=qdata._fbKey;
-        if(fkey) await fbPatch(`${t}/${fkey}`,{Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Explanation:explanation,Technique:technique});
+        const patch=isMCQ
+          ?{Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Explanation:explanation,Technique:technique}
+          :{Question:question,Explanation:explanation,Technique:technique};
+        if(fkey) await fbPatch(`${t}/${fkey}`,patch);
         fbInv(t);
-        [["question",question],["opt1",opt1],["opt2",opt2],["opt3",opt3],["opt4",opt4],["correct",correct],["explanation",explanation],["technique",technique]]
-          .forEach(([f,v])=>v.trim()&&gasBg({action:"updateField",sheet:t,id:qid,field:f,content:encodeURIComponent(v)}));
+        const fields=isMCQ
+          ?[["question",question],["opt1",opt1],["opt2",opt2],["opt3",opt3],["opt4",opt4],["correct",correct],["explanation",explanation],["technique",technique]]
+          :[["question",question],["explanation",explanation],["technique",technique]];
+        fields.forEach(([f,v])=>v.trim()&&gasBg({action:"updateField",sheet:t,id:qid,field:f,content:encodeURIComponent(v)}));
       }
       push("success","✅ Firebase ও Sheet-এ সেভ হয়েছে!","");
       setStep(2);
-    }catch(e){push("error","Save ব্যর্থ",e.message);}
+    }catch(e){push("error","Save ব্যর্থ",String(e?.message||e||"Unknown error"));}
     setSaving(false);
   };
 
   const doNotify=async()=>{
     setNotifying(true);
     try{
-      const phone=report.Phone||report.phone||"";
+      const phone=(report.Phone||report.phone||"").toString();
+      const subject=(report.Subject||report.subject||"প্রশ্নটি").toString();
       const phK=phoneKey(phone);
-      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:"✅ রিপোর্ট সমাধান হয়েছে!",body:`"${report.Subject||report.subject||"প্রশ্নটি"}" সংশোধন হয়েছে।`,questionId:qid,time:nowTs(),read:false});
-      gasBg({action:"resolveReport",phone,subject:encodeURIComponent(report.Subject||report.subject||"প্রশ্নটি"),questionId:qid});
-      push("success","✅ নোটিফাই হয়েছে!","");
+      const notifTitle="✅ রিপোর্ট সমাধান হয়েছে!";
+      const notifBody=`"${subject}" সংশোধন হয়েছে।`;
+      // 1. Firebase-এ লিখে দাও
+      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:notifBody,questionId:qid,time:nowTs(),read:false});
+      // 2. FCM push - specific user কে (fire and forget, 6s timeout)
+      try{
+        await Promise.race([
+          fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody)})),
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),6000))
+        ]);
+      }catch(_){}
+      push("success","✅ নোটিফাই হয়েছে!",phone);
       onDone(report._fbKey||report.row||qid);
-    }catch(e){push("error","Notify ব্যর্থ",e.message);}
+    }catch(e){push("error","Notify ব্যর্থ",String(e?.message||e||"Unknown error"));}
     setNotifying(false);
   };
+
+  const accentColor=isMCQ?C.accent:C.purple;
 
   return(
     <div className="ovl">
@@ -720,37 +747,60 @@ function ReportEditModal({report,onClose,onDone,push}){
           <div className={`step${step===2?" act":""}`}>② নোটিফাই</div>
         </div>
         {step===1&&<>
-          <div className="mt">✏️ প্রশ্ন এডিট</div>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:11}}>
+            <span style={{background:`${accentColor}22`,color:accentColor,border:`1px solid ${accentColor}44`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700}}>{isMCQ?"❓ MCQ":"✍️ Written"}</span>
+            <div style={{fontWeight:700,fontSize:14}}>প্রশ্ন এডিট</div>
+          </div>
           <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:9,padding:"7px 10px",marginBottom:10}}>
             <div style={{fontSize:10,color:C.red,fontWeight:700,marginBottom:2}}>🚨 {report.Phone||report.phone} · {report.Subject||report.subject}</div>
             <div style={{fontSize:11,color:C.text}}>{report.Issue||report.issue||"—"}</div>
           </div>
           {loadQ?<><div className="sk" style={{height:46}}/><div className="sk"/></>:
            !qdata?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>প্রশ্ন #{qid||"—"} পাওয়া যায়নি।</div>:
-           <>
-            <div className="fld"><label>❓ প্রশ্ন</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:65}}/></div>
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
-              <div className="fld"><label>A</label><input className="inp" value={opt1} onChange={e=>setOpt1(e.target.value)}/></div>
-              <div className="fld"><label>B</label><input className="inp" value={opt2} onChange={e=>setOpt2(e.target.value)}/></div>
-              <div className="fld"><label>C</label><input className="inp" value={opt3} onChange={e=>setOpt3(e.target.value)}/></div>
-              <div className="fld"><label>D</label><input className="inp" value={opt4} onChange={e=>setOpt4(e.target.value)}/></div>
-            </div>
-            <div className="fld">
-              <label>✅ সঠিক উত্তর</label>
-              <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:5}}>
-                {[opt1,opt2,opt3,opt4].filter(Boolean).map((o,i)=>(
-                  <button key={i} type="button" className={`cc${correct===o?" on":""}`} onClick={()=>setCorrect(o)}>{o.slice(0,14)}{o.length>14?"…":""}</button>
-                ))}
+           isMCQ?(
+            <>
+              <div className="fld"><label>❓ প্রশ্ন</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:65}}/></div>
+              <div style={{background:`${accentColor}0a`,border:`1px solid ${accentColor}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
+                <div style={{fontSize:10,fontWeight:700,color:accentColor,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📋 Options</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
+                  <div className="fld" style={{margin:0}}><label>A</label><input className="inp" value={opt1} onChange={e=>setOpt1(e.target.value)}/></div>
+                  <div className="fld" style={{margin:0}}><label>B</label><input className="inp" value={opt2} onChange={e=>setOpt2(e.target.value)}/></div>
+                  <div className="fld" style={{margin:0}}><label>C</label><input className="inp" value={opt3} onChange={e=>setOpt3(e.target.value)}/></div>
+                  <div className="fld" style={{margin:0}}><label>D</label><input className="inp" value={opt4} onChange={e=>setOpt4(e.target.value)}/></div>
+                </div>
+                <div style={{marginTop:10}}>
+                  <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:".5px",textTransform:"uppercase",marginBottom:5}}>✅ সঠিক উত্তর</div>
+                  <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:6}}>
+                    {[opt1,opt2,opt3,opt4].filter(Boolean).map((o,i)=>(
+                      <button key={i} type="button" className={`cc${correct===o?" on":""}`} onClick={()=>setCorrect(o)}>{o.slice(0,14)}{o.length>14?"…":""}</button>
+                    ))}
+                  </div>
+                  <input className="inp" value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি লিখুন..."/>
+                </div>
               </div>
-              <input className="inp" value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি লিখুন..."/>
-            </div>
-            <div className="fld"><label>📖 Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:75}}/></div>
-            <div className="fld"><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:55}}/></div>
-           </>
+              <div style={{background:`${C.green}0a`,border:`1px solid ${C.green}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.green,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📖 Explanation & Technique</div>
+                <div className="fld" style={{marginBottom:8}}><label>Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:70}}/></div>
+                <div className="fld" style={{margin:0}}><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:50}}/></div>
+              </div>
+            </>
+           ):(
+            <>
+              <div style={{background:`${C.purple}0a`,border:`1px solid ${C.purple}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.purple,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>✍️ Written প্রশ্ন</div>
+                <div className="fld" style={{margin:0}}><label>প্রশ্ন</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:80}}/></div>
+              </div>
+              <div style={{background:`${C.green}0a`,border:`1px solid ${C.green}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.green,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📖 Explanation & Technique</div>
+                <div className="fld" style={{marginBottom:8}}><label>Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:80}}/></div>
+                <div className="fld" style={{margin:0}}><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:50}}/></div>
+              </div>
+            </>
+           )
           }
           <div style={{display:"flex",gap:6}}>
             <button type="button" className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
-            <button type="button" className="btn bp" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={save}>{saving?"⏳...":"💾 সেভ →"}</button>
+            <button type="button" className="btn bp" style={{flex:2,justifyContent:"center",background:accentColor}} disabled={saving} onClick={save}>{saving?"⏳...":"💾 সেভ →"}</button>
           </div>
         </>}
         {step===2&&<>
@@ -943,15 +993,33 @@ function NotifyPage({push}){
   const[body,setBody]=useState("");
   const[sending,setSending]=useState(false);
   const[hist,setHist]=useState([]);
+  const{data:usersRaw}=useFB("Users");
+
   const send=async()=>{
     if(!title||!body){push("warn","তথ্য দিন","");return;}
     setSending(true);
     try{
-      const r=await gasCall({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)});
-      push("success","পাঠানো হয়েছে! 🎉",`${r.fcm?.sent||0} জনকে`);
-      setHist(p=>[{title,body,time:"এখনই"},...p.slice(0,9)]);
+      // 1. Firebase-এ সব active user এর Notifications-এ লিখে দাও
+      const users=toArr(usersRaw);
+      const active=users.filter(u=>(u.Status||u.status||"").toLowerCase()==="active");
+      const ts=nowTs();
+      const notifKey=`broadcast_${Date.now()}`;
+      await Promise.all(active.map(u=>{
+        const phK=phoneKey(u.Phone||u.phone||"");
+        if(!phK)return Promise.resolve();
+        return fbSet(`Notifications/${phK}/${notifKey}`,{type:"broadcast",title,body,time:ts,read:false});
+      }));
+      // 2. GAS দিয়ে FCM push পাঠাও (fire-and-forget)
+      try{
+        const r=await gasCall({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)});
+        const sent=r?.fcm?.sent||r?.sent||0;
+        push("success","📣 পাঠানো হয়েছে!",`Firebase: ${active.length}জন · FCM: ${sent}জন`);
+      }catch{
+        push("success","✅ Firebase-এ পাঠানো হয়েছে",`${active.length} জন active user`);
+      }
+      setHist(p=>[{title,body,time:ts,count:active.length},...p.slice(0,9)]);
       setTitle("");setBody("");
-    }catch(e){push("error","ব্যর্থ",e.message);}
+    }catch(e){push("error","ব্যর্থ",String(e?.message||e||"Unknown error"));}
     setSending(false);
   };
   return(
@@ -964,7 +1032,11 @@ function NotifyPage({push}){
       </div>
       {hist.length>0&&<div className="card"><div className="ct">ইতিহাস</div>{hist.map((h,i)=>(
         <div key={i} className="nr">
-          <div className={`nd ${i===0?"n":"o"}`}/><div className="nc"><div className="nt">{h.title}</div><div className="ns">{h.body?.slice(0,55)}</div></div>
+          <div className={`nd ${i===0?"n":"o"}`}/>
+          <div className="nc">
+            <div className="nt">{h.title}</div>
+            <div className="ns">{h.body?.slice(0,55)}{h.count!=null&&<span style={{color:C.accent}}> · {h.count}জন</span>}</div>
+          </div>
           <div className="ntm">{h.time}</div>
         </div>
       ))}</div>}
@@ -981,12 +1053,20 @@ function NotifyModal({user,onClose,push,inline}){
     if(!title||!body)return;
     setSending(true);
     try{
-      const phK=phoneKey(user.Phone||user.phone||"");
+      const phone=(user.Phone||user.phone||"").toString();
+      const phK=phoneKey(phone);
+      // 1. Firebase Notifications-এ লিখে দাও (app নিজেই poll করে)
       await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"personal",title,body,time:nowTs(),read:false});
-      gasBg({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)});
-      push("success","পাঠানো হয়েছে",nm);
+      // 2. GAS দিয়ে specific user কে FCM পাঠাও (phone দিয়ে token খুঁজবে)
+      try{
+        await Promise.race([
+          fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(title),body:encodeURIComponent(body)})),
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),6000))
+        ]);
+      }catch(_){}
+      push("success","✅ পাঠানো হয়েছে",nm);
       if(!inline)onClose();
-    }catch(e){push("error","ব্যর্থ",e.message);}
+    }catch(e){push("error","ব্যর্থ",String(e?.message||e||"Unknown error"));}
     setSending(false);
   };
   if(inline)return(
@@ -1020,7 +1100,6 @@ const NAV=[
   {id:"signups",  icon:"🆕",label:"সাইনআপ",  badge:true},
   {id:"students", icon:"👥",label:"Students"},
   {id:"reports",  icon:"🚨",label:"Reports",  badge:true},
-  {id:"entry",    icon:"✏️",label:"Entry"},
   {id:"search",   icon:"🔍",label:"Search"},
   {id:"notify",   icon:"📣",label:"Notify"},
 ];
@@ -1063,7 +1142,6 @@ export default function App(){
       <div style={{display:page==="signups"  ?"block":"none"}}><SignupsPage   push={push} tick={tick}/></div>
       <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} tick={tick}/></div>
       <div style={{display:page==="reports"  ?"block":"none"}}><ReportsPage   push={push} tick={tick}/></div>
-      <div style={{display:page==="entry"    ?"block":"none"}}><EntryPage     push={push}/></div>
       <div style={{display:page==="search"   ?"block":"none"}}><SearchPage    push={push} onDetail={u=>setSearchDetail(u)}/></div>
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push}/></div>
       <nav className="bottom-nav">
