@@ -684,8 +684,10 @@ function ReportEditModal({report,onClose,onDone,push}){
           if(q){
             setQdata({...q,_tab:t});
             setQuestion(q.Question||q.question||"");
-            setOpt1(q.Opt1||q.opt1||""); setOpt2(q.Opt2||q.opt2||"");
-            setOpt3(q.Opt3||q.opt3||""); setOpt4(q.Opt4||q.opt4||"");
+            setOpt1(q.Opt1||q.opt1||q.Option1||q.option1||"");
+            setOpt2(q.Opt2||q.opt2||q.Option2||q.option2||"");
+            setOpt3(q.Opt3||q.opt3||q.Option3||q.option3||"");
+            setOpt4(q.Opt4||q.opt4||q.Option4||q.option4||"");
             setCorrect(q.Correct||q.correct||"");
             setExplanation(q.Explanation||q.explanation||"");
             setTechnique(q.Technique||q.technique||"");
@@ -713,8 +715,11 @@ function ReportEditModal({report,onClose,onDone,push}){
         let patch={};
         let fields=[];
         if(qtype==="mcq"){
-          patch={Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Explanation:explanation,Technique:technique};
-          fields=[["question",question],["opt1",opt1],["opt2",opt2],["opt3",opt3],["opt4",opt4],["correct",correct],["explanation",explanation],["technique",technique]];
+          // original field name detect করো (Opt1 বা option1)
+          const o1k=qdata.Opt1!=null?"Opt1":qdata.opt1!=null?"opt1":qdata.Option1!=null?"Option1":"option1";
+          const o2k=o1k.replace(/1$/,"2"); const o3k=o1k.replace(/1$/,"3"); const o4k=o1k.replace(/1$/,"4");
+          patch={Question:question,[o1k]:opt1,[o2k]:opt2,[o3k]:opt3,[o4k]:opt4,Correct:correct,Explanation:explanation,Technique:technique};
+          fields=[["question",question],[o1k.toLowerCase(),opt1],[o2k.toLowerCase(),opt2],[o3k.toLowerCase(),opt3],[o4k.toLowerCase(),opt4],["correct",correct],["explanation",explanation],["technique",technique]];
         } else if(qtype==="written"){
           patch={Question:question,Explanation:explanation,Technique:technique};
           fields=[["question",question],["explanation",explanation],["technique",technique]];
