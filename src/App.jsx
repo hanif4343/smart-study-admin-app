@@ -630,6 +630,7 @@ function ReportsPage({push,tick}){
          <div key={i} className="rc" style={{borderLeft:`3px solid ${isMCQ?C.accent:C.purple}`}}>
            <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:6}}>
              <span style={{background:isMCQ?`${C.accent}22`:`${C.purple}22`,color:isMCQ?C.accent:C.purple,border:`1px solid ${isMCQ?C.accent:C.purple}44`,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700}}>{isMCQ?"❓ MCQ":"✍️ Written"}</span>
+             {(r.QSheet||r.qsheet)&&<span style={{background:`${C.green}22`,color:C.green,border:`1px solid ${C.green}44`,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700}}>📋 {r.QSheet||r.qsheet}</span>}
              <div style={{fontWeight:700,fontSize:13,flex:1}}>{r.Subject||r.subject||"অজানা"}</div>
            </div>
            <div className="rm">
@@ -663,16 +664,24 @@ function ReportEditModal({report,onClose,onDone,push}){
   const[technique,setTechnique]=useState("");
   const[isMCQ,setIsMCQ]=useState((report.QType||report.qtype||"MCQ").toLowerCase()!=="written");
   const qid=(report.QuestionID||report.questionId||"").toString();
+  // QSheet থেকে সরাসরি সঠিক sheet এ খুঁজবো
+  const qsheet=(report.QSheet||report.qsheet||"").toString().trim();
 
   useEffect(()=>{
     if(!qid){setLoadQ(false);return;}
     (async()=>{
       setLoadQ(true);
-      for(const t of["Quiz","QBank"]){
+      // QSheet থাকলে শুধু সেই sheet এ খোঁজো, না থাকলে সব try করো
+      const sheetsToTry = qsheet ? [qsheet] : ["Quiz","QBank","Study"];
+      for(const t of sheetsToTry){
         try{
           const raw=await fbGet(t);
           const arr=toArr(raw);
-          const q=arr.find(x=>(x.ID||x.id||"").toString()===qid);
+          const qNorm=qid.replace(/^0+/,"");
+          const q=arr.find(x=>{
+            const xid=(x.ID||x.id||x.SL||x.sl||"").toString().replace(/^0+/,"");
+            return xid===qNorm;
+          });
           if(q){
             setQdata({...q,_tab:t});
             setQuestion(q.Question||q.question||"");
@@ -689,7 +698,7 @@ function ReportEditModal({report,onClose,onDone,push}){
       }
       setLoadQ(false);
     })();
-  },[qid]);
+  },[qid,qsheet]);
 
   const save=async()=>{
     setSaving(true);
@@ -727,7 +736,7 @@ function ReportEditModal({report,onClose,onDone,push}){
       let fcmInfo="";
       try{
         const resp=await Promise.race([
-          fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody),url:"report",questionId:qid})),
+          fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody),url:"report",questionId:qid,qsheet:qdata?._tab||""})),
           new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),7000))
         ]);
         const rj=await resp.json().catch(()=>({}));
