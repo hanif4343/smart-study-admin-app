@@ -727,7 +727,7 @@ function ReportEditModal({report,onClose,onDone,push}){
       let fcmInfo="";
       try{
         const resp=await Promise.race([
-          fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody)})),
+          fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody),url:"report",questionId:qid})),
           new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),7000))
         ]);
         const rj=await resp.json().catch(()=>({}));
