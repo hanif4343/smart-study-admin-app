@@ -662,20 +662,19 @@ function ReportEditModal({report,onClose,onDone,push}){
   const[correct,setCorrect]=useState("");
   const[explanation,setExplanation]=useState("");
   const[technique,setTechnique]=useState("");
-  const[isMCQ,setIsMCQ]=useState((report.QType||report.qtype||"MCQ").toLowerCase()!=="written");
+  const[qtype,setQtype]=useState("mcq"); // "mcq" | "written" | "study"
   const qid=(report.QuestionID||report.questionId||"").toString();
-  // QSheet থেকে সরাসরি সঠিক sheet এ খুঁজবো
   const qsheet=(report.QSheet||report.qsheet||"").toString().trim();
 
   useEffect(()=>{
     if(!qid){setLoadQ(false);return;}
     (async()=>{
       setLoadQ(true);
-      // QSheet থাকলে শুধু সেই sheet এ খোঁজো, না থাকলে সব try করো
-      const sheetsToTry = qsheet ? [qsheet] : ["Quiz","QBank","Study"];
+      const sheetsToTry=qsheet?[qsheet]:["Quiz","QBank","Study"];
       for(const t of sheetsToTry){
         try{
-          const raw=await fbGet(t);
+          // fbCached use — already loaded থাকলে instant
+          const raw=await fbCached(t);
           const arr=toArr(raw);
           const qNorm=qid.replace(/^0+/,"");
           const q=arr.find(x=>{
@@ -690,8 +689,13 @@ function ReportEditModal({report,onClose,onDone,push}){
             setCorrect(q.Correct||q.correct||"");
             setExplanation(q.Explanation||q.explanation||"");
             setTechnique(q.Technique||q.technique||"");
-            const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
-            setIsMCQ(qt!=="written");
+            // type detect: Study sheet = "study", QType=written = "written", else "mcq"
+            if(t==="Study"){
+              setQtype("study");
+            } else {
+              const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
+              setQtype(qt==="written"?"written":"mcq");
+            }
             break;
           }
         }catch(_){}
@@ -706,33 +710,37 @@ function ReportEditModal({report,onClose,onDone,push}){
       if(qdata&&qid){
         const t=qdata._tab||"Quiz";
         const fkey=qdata._fbKey;
-        const patch=isMCQ
-          ?{Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Explanation:explanation,Technique:technique}
-          :{Question:question,Explanation:explanation,Technique:technique};
+        let patch={};
+        let fields=[];
+        if(qtype==="mcq"){
+          patch={Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Explanation:explanation,Technique:technique};
+          fields=[["question",question],["opt1",opt1],["opt2",opt2],["opt3",opt3],["opt4",opt4],["correct",correct],["explanation",explanation],["technique",technique]];
+        } else if(qtype==="written"){
+          patch={Question:question,Explanation:explanation,Technique:technique};
+          fields=[["question",question],["explanation",explanation],["technique",technique]];
+        } else { // study
+          patch={Question:question,Correct:correct,Explanation:explanation,Technique:technique};
+          fields=[["question",question],["correct",correct],["explanation",explanation],["technique",technique]];
+        }
         if(fkey) await fbPatch(`${t}/${fkey}`,patch);
         fbInv(t);
-        const fields=isMCQ
-          ?[["question",question],["opt1",opt1],["opt2",opt2],["opt3",opt3],["opt4",opt4],["correct",correct],["explanation",explanation],["technique",technique]]
-          :[["question",question],["explanation",explanation],["technique",technique]];
-        fields.forEach(([f,v])=>v.trim()&&gasBg({action:"updateField",sheet:t,id:qid,field:f,content:encodeURIComponent(v)}));
+        fields.forEach(([f,v])=>v&&v.trim()&&gasBg({action:"updateField",sheet:t,id:qid,field:f,content:encodeURIComponent(v)}));
       }
-      push("success","✅ Firebase ও Sheet-এ সেভ হয়েছে!","");
+      push("success","✅ সেভ হয়েছে!","");
       setStep(2);
-    }catch(e){push("error","Save ব্যর্থ",String(e?.message||e||"Unknown error"));}
+    }catch(e){push("error","Save ব্যর্থ",String(e?.message||e||""));}
     setSaving(false);
   };
 
   const doNotify=async()=>{
     setNotifying(true);
     try{
-      const phone=(report.Phone||report.phone||"").toString().replace(/^\''+/,"").trim();
+      const phone=(report.Phone||report.phone||"").toString().replace(/^'+/,"").trim();
       const subject=(report.Subject||report.subject||"প্রশ্নটি").toString();
       const phK=phoneKey(phone);
       const notifTitle="✅ রিপোর্ট সমাধান হয়েছে!";
       const notifBody=`"${subject}" সংশোধন হয়েছে।`;
-      // 1. Firebase-এ লিখে দাও
-      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:notifBody,questionId:qid,time:nowTs(),read:false});
-      // 2. FCM push - response দেখো
+      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:notifBody,questionId:qid,qsheet:qdata?._tab||"",time:nowTs(),read:false});
       let fcmInfo="";
       try{
         const resp=await Promise.race([
@@ -741,15 +749,16 @@ function ReportEditModal({report,onClose,onDone,push}){
         ]);
         const rj=await resp.json().catch(()=>({}));
         if(rj?.fcm?.name) fcmInfo=" · FCM ✅";
-        else if(rj?.fcm?.error) fcmInfo=" · FCM ❌ "+rj.fcm.error;
-      }catch(_){fcmInfo=" · FCM timeout";}
-      push("success","✅ নোটিফাই হয়েছে!",phone+fcmInfo);
+        else if(rj?.fcm?.error) fcmInfo=" · ❌ "+rj.fcm.error;
+      }catch(_){fcmInfo=" · timeout";}
+      push("success","✅ নোটিফাই!",phone+fcmInfo);
       onDone(report._fbKey||report.row||qid);
-    }catch(e){push("error","Notify ব্যর্থ",String(e?.message||e||"Unknown error"));}
+    }catch(e){push("error","Notify ব্যর্থ",String(e?.message||e||""));}
     setNotifying(false);
   };
 
-  const accentColor=isMCQ?C.accent:C.purple;
+  const ac=qtype==="mcq"?C.accent:qtype==="study"?C.green:C.purple;
+  const typeLabel=qtype==="mcq"?"❓ MCQ":qtype==="study"?"📖 Study":"✍️ Written";
 
   return(
     <div className="ovl">
@@ -759,63 +768,91 @@ function ReportEditModal({report,onClose,onDone,push}){
           <div className={`step${step===1?" act":step>1?" done":""}`}>① এডিট</div>
           <div className={`step${step===2?" act":""}`}>② নোটিফাই</div>
         </div>
+
         {step===1&&<>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:11}}>
-            <span style={{background:`${accentColor}22`,color:accentColor,border:`1px solid ${accentColor}44`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700}}>{isMCQ?"❓ MCQ":"✍️ Written"}</span>
-            <div style={{fontWeight:700,fontSize:14}}>প্রশ্ন এডিট</div>
+          {/* Header */}
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+            <span style={{background:`${ac}22`,color:ac,border:`1px solid ${ac}44`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700}}>{typeLabel}</span>
+            {qsheet&&<span style={{background:`${C.green}15`,color:C.green,border:`1px solid ${C.green}30`,borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700}}>📋 {qsheet}</span>}
           </div>
+
+          {/* Report issue */}
           <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:9,padding:"7px 10px",marginBottom:10}}>
-            <div style={{fontSize:10,color:C.red,fontWeight:700,marginBottom:2}}>🚨 {report.Phone||report.phone} · {report.Subject||report.subject}</div>
+            <div style={{fontSize:10,color:C.red,fontWeight:700,marginBottom:2}}>🚨 {(report.Phone||report.phone||"").toString().replace(/^'+/,"")} · {report.Subject||report.subject}</div>
             <div style={{fontSize:11,color:C.text}}>{report.Issue||report.issue||"—"}</div>
           </div>
-          {loadQ?<><div className="sk" style={{height:46}}/><div className="sk"/></>:
-           !qdata?<div style={{textAlign:"center",color:C.muted,padding:"14px 0",fontSize:12}}>প্রশ্ন #{qid||"—"} পাওয়া যায়নি।</div>:
-           isMCQ?(
-            <>
-              <div className="fld"><label>❓ প্রশ্ন</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:65}}/></div>
-              <div style={{background:`${accentColor}0a`,border:`1px solid ${accentColor}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
-                <div style={{fontSize:10,fontWeight:700,color:accentColor,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📋 Options</div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7}}>
-                  <div className="fld" style={{margin:0}}><label>A</label><input className="inp" value={opt1} onChange={e=>setOpt1(e.target.value)}/></div>
-                  <div className="fld" style={{margin:0}}><label>B</label><input className="inp" value={opt2} onChange={e=>setOpt2(e.target.value)}/></div>
-                  <div className="fld" style={{margin:0}}><label>C</label><input className="inp" value={opt3} onChange={e=>setOpt3(e.target.value)}/></div>
-                  <div className="fld" style={{margin:0}}><label>D</label><input className="inp" value={opt4} onChange={e=>setOpt4(e.target.value)}/></div>
-                </div>
-                <div style={{marginTop:10}}>
-                  <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:".5px",textTransform:"uppercase",marginBottom:5}}>✅ সঠিক উত্তর</div>
-                  <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:6}}>
-                    {[opt1,opt2,opt3,opt4].filter(Boolean).map((o,i)=>(
-                      <button key={i} type="button" className={`cc${correct===o?" on":""}`} onClick={()=>setCorrect(o)}>{o.slice(0,14)}{o.length>14?"…":""}</button>
-                    ))}
-                  </div>
-                  <input className="inp" value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি লিখুন..."/>
-                </div>
+
+          {/* Loading */}
+          {loadQ&&<>
+            <div className="sk" style={{height:52,marginBottom:8}}/>
+            <div className="sk" style={{height:36,marginBottom:8}}/>
+            <div className="sk" style={{height:80}}/>
+          </>}
+
+          {/* Not found */}
+          {!loadQ&&!qdata&&<div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12}}>প্রশ্ন #{qid||"—"} পাওয়া যায়নি।</div>}
+
+          {/* ── MCQ ── */}
+          {!loadQ&&qdata&&qtype==="mcq"&&<>
+            <div className="fld"><label>❓ প্রশ্ন</label>
+              <textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:60}}/>
+            </div>
+            <div style={{background:`${ac}0a`,border:`1px solid ${ac}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:ac,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📋 Options</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:10}}>
+                <div className="fld" style={{margin:0}}><label>A</label><input className="inp" value={opt1} onChange={e=>setOpt1(e.target.value)}/></div>
+                <div className="fld" style={{margin:0}}><label>B</label><input className="inp" value={opt2} onChange={e=>setOpt2(e.target.value)}/></div>
+                <div className="fld" style={{margin:0}}><label>C</label><input className="inp" value={opt3} onChange={e=>setOpt3(e.target.value)}/></div>
+                <div className="fld" style={{margin:0}}><label>D</label><input className="inp" value={opt4} onChange={e=>setOpt4(e.target.value)}/></div>
               </div>
-              <div style={{background:`${C.green}0a`,border:`1px solid ${C.green}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
-                <div style={{fontSize:10,fontWeight:700,color:C.green,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📖 Explanation & Technique</div>
-                <div className="fld" style={{marginBottom:8}}><label>Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:70}}/></div>
-                <div className="fld" style={{margin:0}}><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:50}}/></div>
+              <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:".5px",textTransform:"uppercase",marginBottom:5}}>✅ সঠিক উত্তর</div>
+              <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:6}}>
+                {[opt1,opt2,opt3,opt4].filter(Boolean).map((o,i)=>(
+                  <button key={i} type="button" className={`cc${correct===o?" on":""}`} onClick={()=>setCorrect(o)}>{o.slice(0,16)}{o.length>16?"…":""}</button>
+                ))}
               </div>
-            </>
-           ):(
-            <>
-              <div style={{background:`${C.purple}0a`,border:`1px solid ${C.purple}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
-                <div style={{fontSize:10,fontWeight:700,color:C.purple,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>✍️ Written প্রশ্ন</div>
-                <div className="fld" style={{margin:0}}><label>প্রশ্ন</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:80}}/></div>
-              </div>
-              <div style={{background:`${C.green}0a`,border:`1px solid ${C.green}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
-                <div style={{fontSize:10,fontWeight:700,color:C.green,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📖 Explanation & Technique</div>
-                <div className="fld" style={{marginBottom:8}}><label>Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:80}}/></div>
-                <div className="fld" style={{margin:0}}><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:50}}/></div>
-              </div>
-            </>
-           )
-          }
-          <div style={{display:"flex",gap:6}}>
+              <input className="inp" value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি লিখুন..."/>
+            </div>
+            <div style={{background:`${C.green}0a`,border:`1px solid ${C.green}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:C.green,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📖 Explanation & Technique</div>
+              <div className="fld" style={{marginBottom:8}}><label>Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:65}}/></div>
+              <div className="fld" style={{margin:0}}><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:45}}/></div>
+            </div>
+          </>}
+
+          {/* ── Written ── */}
+          {!loadQ&&qdata&&qtype==="written"&&<>
+            <div style={{background:`${ac}0a`,border:`1px solid ${ac}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:ac,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>✍️ প্রশ্ন</div>
+              <div className="fld" style={{margin:0}}><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:75}}/></div>
+            </div>
+            <div style={{background:`${C.green}0a`,border:`1px solid ${C.green}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:C.green,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📖 Explanation & Technique</div>
+              <div className="fld" style={{marginBottom:8}}><label>Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:75}}/></div>
+              <div className="fld" style={{margin:0}}><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:45}}/></div>
+            </div>
+          </>}
+
+          {/* ── Study ── */}
+          {!loadQ&&qdata&&qtype==="study"&&<>
+            <div style={{background:`${ac}0a`,border:`1px solid ${ac}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:ac,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📖 Study নোট</div>
+              <div className="fld" style={{marginBottom:8}}><label>প্রশ্ন / বিষয়</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:65}}/></div>
+              <div className="fld" style={{margin:0}}><label>✅ উত্তর</label><textarea className="ta" value={correct} onChange={e=>setCorrect(e.target.value)} style={{minHeight:65}}/></div>
+            </div>
+            <div style={{background:`${C.green}0a`,border:`1px solid ${C.green}20`,borderRadius:10,padding:"10px",marginBottom:10}}>
+              <div style={{fontSize:10,fontWeight:700,color:C.green,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📖 Explanation & Technique</div>
+              <div className="fld" style={{marginBottom:8}}><label>Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:70}}/></div>
+              <div className="fld" style={{margin:0}}><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:45}}/></div>
+            </div>
+          </>}
+
+          <div style={{display:"flex",gap:6,marginTop:4}}>
             <button type="button" className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
-            <button type="button" className="btn bp" style={{flex:2,justifyContent:"center",background:accentColor}} disabled={saving} onClick={save}>{saving?"⏳...":"💾 সেভ →"}</button>
+            <button type="button" className="btn bp" style={{flex:2,justifyContent:"center",background:ac}} disabled={saving||loadQ||!qdata} onClick={save}>{saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করুন →"}</button>
           </div>
         </>}
+
         {step===2&&<>
           <div className="mt">📣 নোটিফাই</div>
           <div style={{background:"#22c55e12",border:"1px solid #22c55e30",borderRadius:10,padding:"11px",marginBottom:12}}>
@@ -823,7 +860,7 @@ function ReportEditModal({report,onClose,onDone,push}){
             <div style={{fontSize:11,color:C.muted}}>Firebase ও Sheet দুটোতেই আপডেট হয়েছে।</div>
           </div>
           <div style={{background:C.panel,borderRadius:9,padding:"10px 12px",marginBottom:12}}>
-            <div style={{fontWeight:700}}>📱 {report.Phone||report.phone}</div>
+            <div style={{fontWeight:700}}>📱 {(report.Phone||report.phone||"").toString().replace(/^'+/,"")}</div>
             <div style={{fontSize:11,color:C.accent,marginTop:4}}>"✅ রিপোর্ট সমাধান হয়েছে!"</div>
           </div>
           <div style={{display:"flex",gap:6}}>
