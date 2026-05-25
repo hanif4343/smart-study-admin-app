@@ -715,24 +715,23 @@ function ReportsPage({push,tick}){
        })
       }
       {editing&&<ReportEditModal report={editing} onClose={()=>setEditing(null)} onDone={async key=>{
-        // 1. Immediately remove from UI
-        setDone(p=>new Set([...p,key]));
+        // Capture before state change
+        const fbKey=editing._fbKey||key;
+        // 1. Remove from UI immediately
+        setDone(p=>new Set([...p,fbKey||key]));
         setEditing(null);
+        fbInv("Reports");
         // 2. Firebase delete
-        try{
-          const fbKey=editing._fbKey;
-          if(fbKey) await fbDel(`Reports/${fbKey}`);
-          fbInv("Reports");
-        }catch(_){}
-        // 3. GAS sheet delete (async, with response)
+        try{ if(fbKey) await fbDel(`Reports/${fbKey}`); }catch(_){}
+        // 3. GAS sheet delete
         try{
           await Promise.race([
-            gasCall({action:"deleteReport",key:String(editing._fbKey||key)}),
+            gasCall({action:"deleteReport",key:String(fbKey||key)}),
             new Promise((_,rej)=>setTimeout(()=>rej(),8000))
           ]);
-          push("success","✅ রিপোর্ট সরানো হয়েছে","Firebase + Sheet উভয় থেকে");
+          push("success","✅ রিপোর্ট সরানো হয়েছে","Firebase + Sheet থেকে");
         }catch(_){
-          push("success","✅ Firebase থেকে সরানো হয়েছে","Sheet sync হবে");
+          push("success","✅ সরানো হয়েছে","");
         }
       }} push={push}/>}
     </div>
@@ -834,21 +833,25 @@ function ReportEditModal({report,onClose,onDone,push}){
       const phK=phoneKey(phone);
       const notifTitle="✅ রিপোর্ট সমাধান হয়েছে!";
       const notifBody=`"${subject}" সংশোধন হয়েছে।`;
-      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:notifBody,questionId:qid,qsheet:qdata?._tab||"",time:nowTs(),read:false});
-      let fcmInfo="";
-      try{
-        const resp=await Promise.race([
-          fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody),url:"report",questionId:qid,qsheet:qdata?._tab||""})),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),7000))
-        ]);
-        const rj=await resp.json().catch(()=>({}));
-        if(rj?.fcm?.name) fcmInfo=" · FCM ✅";
-        else if(rj?.fcm?.error) fcmInfo=" · ❌ "+rj.fcm.error;
-      }catch(_){fcmInfo=" · timeout";}
-      push("success","✅ নোটিফাই!",phone+fcmInfo);
+      // Firebase notification লিখো
+      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{
+        type:"report_resolved",title:notifTitle,body:notifBody,
+        questionId:qid,qsheet:qdata?._tab||"",time:nowTs(),read:false
+      });
+      // FCM push — fire and forget (3s timeout, don't block UI)
+      fetch(GAS+"?"+new URLSearchParams({
+        action:"personalNotify",phone,
+        title:encodeURIComponent(notifTitle),
+        body:encodeURIComponent(notifBody),
+        url:"report",questionId:qid,qsheet:qdata?._tab||""
+      })).catch(()=>{});
+      push("success","✅ নোটিফাই পাঠানো হয়েছে!",phone);
+      setNotifying(false);
       onDone(report._fbKey||report.row||qid);
-    }catch(e){push("error","Notify ব্যর্থ",String(e?.message||e||""));}
-    setNotifying(false);
+    }catch(e){
+      push("error","Notify ব্যর্থ",String(e?.message||e||""));
+      setNotifying(false);
+    }
   };
 
   const ac=qtype==="mcq"?C.accent:qtype==="study"?C.green:C.purple;
@@ -1574,6 +1577,29 @@ export default function App(){
   };
 
   useEffect(()=>{const id=setInterval(()=>setTick(t=>t+1),60_000);return()=>clearInterval(id);},[]);
+
+  // ── Back button handling ──
+  useEffect(()=>{
+    const handler=(e)=>{
+      // StudentDetail খোলা থাকলে back দিলে সেটা বন্ধ করো
+      if(searchDetail){
+        e.preventDefault();
+        setSearchDetail(null);
+        return;
+      }
+      // Home ছাড়া অন্য page এ থাকলে dashboard এ যাও
+      if(page!=="dashboard"){
+        e.preventDefault();
+        setPage("dashboard");
+        return;
+      }
+      // Dashboard এ → app minimize (browser default)
+    };
+    window.addEventListener("popstate",handler);
+    // প্রতিটা page change এ history push করো
+    window.history.pushState({page},"");
+    return()=>window.removeEventListener("popstate",handler);
+  },[page,searchDetail]);
 
   if(searchDetail)return(
     <>
