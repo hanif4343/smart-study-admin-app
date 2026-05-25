@@ -647,13 +647,25 @@ function ReportsPage({push,tick}){
        })
       }
       {editing&&<ReportEditModal report={editing} onClose={()=>setEditing(null)} onDone={async key=>{
+        // 1. Immediately remove from UI
         setDone(p=>new Set([...p,key]));
         setEditing(null);
-        fbInv("Reports");
-        // Auto-remove from Firebase
-        try{ if(key) await fbDel(`Reports/${key}`); }catch(_){}
-        // Auto-remove from Sheet
-        gasBg({action:"deleteReport",key:String(key)});
+        // 2. Firebase delete
+        try{
+          const fbKey=editing._fbKey;
+          if(fbKey) await fbDel(`Reports/${fbKey}`);
+          fbInv("Reports");
+        }catch(_){}
+        // 3. GAS sheet delete (async, with response)
+        try{
+          await Promise.race([
+            gasCall({action:"deleteReport",key:String(editing._fbKey||key)}),
+            new Promise((_,rej)=>setTimeout(()=>rej(),8000))
+          ]);
+          push("success","✅ রিপোর্ট সরানো হয়েছে","Firebase + Sheet উভয় থেকে");
+        }catch(_){
+          push("success","✅ Firebase থেকে সরানো হয়েছে","Sheet sync হবে");
+        }
       }} push={push}/>}
     </div>
   );
