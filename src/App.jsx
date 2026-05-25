@@ -20,9 +20,9 @@ const gasBg = params => setTimeout(()=>fetch(GAS+"?"+new URLSearchParams(params)
 const gasPost= body   => setTimeout(()=>fetch(GAS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(()=>{}),300);
 const gasCall= async params =>{ const r=await fetch(GAS+"?"+new URLSearchParams(params)); return r.json(); };
 
-/* ══════════ CACHE ══════════ */
-const _cache={}, _subs={}, _fly={};
-const STALE=60_000;
+/* ══════════ REALTIME FIREBASE ══════════ */
+const _cache={}, _subs={}, _fly={}, _streams={};
+const STALE=300_000; // 5min fallback cache
 
 async function fbCached(path,force=false){
   if(!force&&_cache[path]&&Date.now()-_cache[path].ts<STALE) return _cache[path].data;
@@ -35,9 +35,74 @@ async function fbCached(path,force=false){
   return _fly[path];
 }
 
-const fbInv=(...ps)=>ps.forEach(p=>{delete _cache[p];});
+const fbInv=(...ps)=>ps.forEach(p=>{
+  delete _cache[p];
+  // Force refresh all subscribers
+  (_subs[p]||new Set()).forEach(()=>{});
+  fbCached(p,true).catch(()=>{});
+});
 
-// FIXED: useFB — path must be stable string, no dynamic computation inside hook
+// Firebase SSE realtime stream
+function fbListen(path){
+  if(_streams[path]) return; // already listening
+  try{
+    const url=`${FB}/${path}.json?auth=${FBK}`;
+    const es=new EventSource(url);
+    _streams[path]=es;
+    es.addEventListener("put",ev=>{
+      try{
+        const msg=JSON.parse(ev.data);
+        const data=msg.data;
+        // Update cache
+        if(msg.path==="/"||msg.path===""){
+          _cache[path]={data,ts:Date.now()};
+          (_subs[path]||new Set()).forEach(cb=>cb(data));
+        } else {
+          // Partial update — merge into cache
+          const cur=_cache[path]?.data;
+          if(cur&&typeof cur==="object"&&!Array.isArray(cur)){
+            const parts=msg.path.replace(/^\//,"").split("/");
+            const updated=JSON.parse(JSON.stringify(cur));
+            let node=updated;
+            for(let i=0;i<parts.length-1;i++){
+              if(!node[parts[i]]) node[parts[i]]={};
+              node=node[parts[i]];
+            }
+            if(data===null) delete node[parts[parts.length-1]];
+            else node[parts[parts.length-1]]=data;
+            _cache[path]={data:updated,ts:Date.now()};
+            (_subs[path]||new Set()).forEach(cb=>cb(updated));
+          } else {
+            // Full refresh
+            fbCached(path,true).catch(()=>{});
+          }
+        }
+      }catch(_){}
+    });
+    es.addEventListener("patch",ev=>{
+      try{
+        const msg=JSON.parse(ev.data);
+        const cur=_cache[path]?.data;
+        if(cur&&typeof cur==="object"){
+          const updated={...cur,...msg.data};
+          _cache[path]={data:updated,ts:Date.now()};
+          (_subs[path]||new Set()).forEach(cb=>cb(updated));
+        } else {
+          fbCached(path,true).catch(()=>{});
+        }
+      }catch(_){}
+    });
+    es.onerror=()=>{
+      // Reconnect after 3s
+      es.close();
+      delete _streams[path];
+      setTimeout(()=>fbListen(path),3000);
+    };
+  }catch(_){
+    delete _streams[path];
+  }
+}
+
 function useFB(path, tick=0){
   const[data,set]=useState(()=>_cache[path]?.data??null);
   const[loading,setL]=useState(!_cache[path]);
@@ -49,9 +114,11 @@ function useFB(path, tick=0){
     _subs[path].add(cb);
     const force=tick>prev.current; prev.current=tick;
     const s=_cache[path]?.data;
-    if(s&&!force){set(s);setL(false);fbCached(path,false).catch(()=>{});}
+    if(s&&!force){set(s);setL(false);}
     else{if(!s)setL(true);fbCached(path,force).catch(()=>setL(false));}
-    return()=>_subs[path]?.delete(cb);
+    // Start SSE realtime listener
+    fbListen(path);
+    return()=>{_subs[path]?.delete(cb);};
   },[path,tick]);
   return{data,loading};
 }
@@ -122,6 +189,7 @@ html,body,#root{background:${C.bg};color:${C.text};font-family:'Noto Sans Bengal
 .nav-badge{position:absolute;top:5px;right:calc(50% - 16px);background:${C.red};color:#fff;font-size:8px;font-weight:700;width:14px;height:14px;border-radius:50%;display:flex;align-items:center;justify-content:center}
 .topbar{background:${C.card};border-bottom:1px solid ${C.border};padding:12px 16px 10px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
 .topbar-title{font-size:15px;font-weight:700}.topbar-sub{font-size:10px;color:${C.muted};margin-top:1px}
+@keyframes rtPulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.8)}}
 .icon-btn{width:34px;height:34px;border-radius:9px;background:${C.panel};border:1px solid ${C.border};color:${C.text};font-size:16px;display:flex;align-items:center;justify-content:center;cursor:pointer}
 .icon-btn.spin{animation:spin 1s linear infinite}
 .page{padding:13px;padding-bottom:82px;min-height:100dvh}
@@ -1521,7 +1589,10 @@ export default function App(){
       <div className="topbar">
         <div>
           <div className="topbar-title">{NAV.find(n=>n.id===page)?.icon} {NAV.find(n=>n.id===page)?.label}</div>
-          <div className="topbar-sub">Smart Study Admin · Firebase Direct</div>
+          <div className="topbar-sub" style={{display:"flex",alignItems:"center",gap:5}}>
+            <span style={{width:6,height:6,borderRadius:"50%",background:C.green,display:"inline-block",boxShadow:`0 0 6px ${C.green}`,animation:"rtPulse 2s infinite"}}></span>
+            Smart Study Admin · Realtime
+          </div>
         </div>
         <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
       </div>
