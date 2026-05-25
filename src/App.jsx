@@ -12,6 +12,7 @@ const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#2
 const fbGet  = async p => { const r=await fetch(`${FB}/${p}.json?auth=${FBK}`); return r.json(); };
 const fbPatch= async(p,d)=>{ const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)}); return r.json(); };
 const fbSet  = async(p,d)=>{ const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)}); return r.json(); };
+const fbDel  = async p  =>{ const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"DELETE"}); return r.json(); };
 const fbPush = async(p,d)=>{ const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)}); return r.json(); };
 
 /* ══════════ GAS helpers ══════════ */
@@ -645,7 +646,15 @@ function ReportsPage({push,tick}){
         );
        })
       }
-      {editing&&<ReportEditModal report={editing} onClose={()=>setEditing(null)} onDone={key=>{setDone(p=>new Set([...p,key]));setEditing(null);fbInv("Reports");}} push={push}/>}
+      {editing&&<ReportEditModal report={editing} onClose={()=>setEditing(null)} onDone={async key=>{
+        setDone(p=>new Set([...p,key]));
+        setEditing(null);
+        fbInv("Reports");
+        // Auto-remove from Firebase
+        try{ if(key) await fbDel(`Reports/${key}`); }catch(_){}
+        // Auto-remove from Sheet
+        gasBg({action:"deleteReport",key:String(key)});
+      }} push={push}/>}
     </div>
   );
 }
@@ -878,6 +887,272 @@ function ReportEditModal({report,onClose,onDone,push}){
   );
 }
 
+/* ══════════ Q-EDITOR PAGE ══════════ */
+function QEditorPage({push,tick}){
+  const[sheet,setSheet]=useState("QBank");
+  const[search,setSearch]=useState("");
+  const[editing,setEditing]=useState(null);
+  const[renaming,setRenaming]=useState(null); // {type:"subject"|"topic"|"subtopic", sheet, oldVal, questions:[]}
+  const[deleting,setDeleting]=useState(null); // {type, sheet, val, questions:[]}
+  const[saving,setSaving]=useState(false);
+  const{data:raw,loading}=useFB(sheet,tick);
+  const items=useMemo(()=>toArr(raw),[raw]);
+
+  // Filtered items
+  const filtered=useMemo(()=>{
+    if(!search.trim()) return items.slice(0,60);
+    const q=search.toLowerCase();
+    return items.filter(x=>(x.Question||x.question||"").toLowerCase().includes(q)||(x.Subject||x.subject||"").toLowerCase().includes(q)).slice(0,60);
+  },[items,search]);
+
+  // Subject list
+  const subjects=useMemo(()=>[...new Set(items.map(x=>x.Subject||x.subject||"").filter(Boolean))].sort(),[items]);
+
+  /* ── Rename subject/topic/subtopic across all questions ── */
+  const doRename=async()=>{
+    if(!renaming||saving) return;
+    setSaving(true);
+    const{type,oldVal,newVal,sheet:sh,questions}=renaming;
+    if(!newVal||!newVal.trim()){push("warn","নতুন নাম দিন","");setSaving(false);return;}
+    try{
+      const fieldMap={subject:"Subject",topic:"Sub_Topic",subtopic:"Sub_Topic"};
+      const field=fieldMap[type]||"Subject";
+      // Firebase: patch all matching questions
+      await Promise.all(questions.map(q=>{
+        if(!q._fbKey) return;
+        return fbPatch(`${sh}/${q._fbKey}`,{[field]:newVal.trim()});
+      }));
+      fbInv(sh);
+      // GAS Sheet rename
+      gasBg({action:"renameField",sheet:sh,field:field.toLowerCase(),oldVal:encodeURIComponent(oldVal),newVal:encodeURIComponent(newVal.trim())});
+      push("success",`✅ ${questions.length}টি প্রশ্নে rename হয়েছে`,"");
+      setRenaming(null);
+    }catch(e){push("error","Rename ব্যর্থ",String(e?.message||e||""));}
+    setSaving(false);
+  };
+
+  /* ── Delete topic/subtopic ── */
+  const doDelete=async()=>{
+    if(!deleting||saving) return;
+    setSaving(true);
+    const{sheet:sh,questions}=deleting;
+    try{
+      await Promise.all(questions.map(q=>{
+        if(!q._fbKey) return;
+        return fbDel(`${sh}/${q._fbKey}`);
+      }));
+      fbInv(sh);
+      gasBg({action:"deleteByIds",sheet:sh,ids:encodeURIComponent(questions.map(q=>q.ID||q.id||q.SL||q.sl).join(","))});
+      push("success",`🗑️ ${questions.length}টি প্রশ্ন মুছে ফেলা হয়েছে`,"");
+      setDeleting(null);
+    }catch(e){push("error","Delete ব্যর্থ",String(e?.message||e||""));}
+    setSaving(false);
+  };
+
+  return(
+    <div className="page">
+      {/* Sheet tabs */}
+      <div className="ftabs" style={{marginBottom:10}}>
+        {["QBank","Quiz","Study"].map(s=>(
+          <button key={s} className={`ftab${sheet===s?" on":""}`} onClick={()=>{setSheet(s);setSearch("");}}>{s}</button>
+        ))}
+      </div>
+
+      {/* Search */}
+      <div style={{position:"relative",marginBottom:10}}>
+        <input className="inp" placeholder="🔍 প্রশ্ন খুঁজুন..." value={search} onChange={e=>setSearch(e.target.value)} style={{paddingRight:36}}/>
+        {search&&<button onClick={()=>setSearch("")} style={{position:"absolute",right:10,top:"50%",transform:"translateY(-50%)",background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:14}}>✕</button>}
+      </div>
+
+      {/* Subject manager */}
+      {!search&&<div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:12,marginBottom:12}}>
+        <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>📂 Subjects</div>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
+          {subjects.map(subj=>{
+            const subjQs=items.filter(x=>(x.Subject||x.subject||"")=== subj);
+            const topics=[...new Set(subjQs.map(x=>x.Sub_Topic||x.sub_topic||"").filter(Boolean))];
+            return(
+              <div key={subj} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+                {/* Subject row */}
+                <div style={{display:"flex",alignItems:"center",padding:"8px 10px",gap:8}}>
+                  <div style={{flex:1,fontSize:12,fontWeight:700,color:C.text}}>{subj}</div>
+                  <span style={{fontSize:10,color:C.muted}}>{subjQs.length}টি</span>
+                  <button onClick={()=>setRenaming({type:"subject",sheet,oldVal:subj,newVal:subj,questions:subjQs})} style={{background:`${C.accent}20`,border:`1px solid ${C.accent}40`,color:C.accent,padding:"3px 10px",borderRadius:7,fontSize:10,cursor:"pointer",fontWeight:700}}>✏️ Rename</button>
+                  <button onClick={()=>setDeleting({type:"subject",sheet,val:subj,questions:subjQs})} style={{background:`${C.red}15`,border:`1px solid ${C.red}30`,color:C.red,padding:"3px 10px",borderRadius:7,fontSize:10,cursor:"pointer",fontWeight:700}}>🗑️</button>
+                </div>
+                {/* Topics */}
+                {topics.map(tp=>{
+                  const tpQs=subjQs.filter(x=>(x.Sub_Topic||x.sub_topic||"")=== tp);
+                  return(
+                    <div key={tp} style={{display:"flex",alignItems:"center",padding:"6px 10px 6px 22px",gap:8,borderTop:`1px solid ${C.border}`}}>
+                      <div style={{flex:1,fontSize:11,color:C.muted}}>↳ {tp}</div>
+                      <span style={{fontSize:10,color:C.muted}}>{tpQs.length}</span>
+                      <button onClick={()=>setRenaming({type:"subtopic",sheet,oldVal:tp,newVal:tp,questions:tpQs})} style={{background:`${C.accent}15`,border:`1px solid ${C.accent}30`,color:C.accent,padding:"2px 8px",borderRadius:6,fontSize:10,cursor:"pointer"}}>✏️</button>
+                      <button onClick={()=>setDeleting({type:"subtopic",sheet,val:tp,questions:tpQs})} style={{background:`${C.red}12`,border:`1px solid ${C.red}25`,color:C.red,padding:"2px 8px",borderRadius:6,fontSize:10,cursor:"pointer"}}>🗑️</button>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+      </div>}
+
+      {/* Questions list */}
+      <div style={{fontSize:10,fontWeight:700,color:C.muted,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>
+        {search?`"${search}" — ${filtered.length}টি ফলাফল`:`সর্বশেষ ${filtered.length}টি প্রশ্ন`}
+      </div>
+      {loading&&!raw?[...Array(3)].map((_,i)=><div key={i} className="sk" style={{height:64,marginBottom:8}}/>):
+        filtered.map((q,i)=>{
+          const qid=q.ID||q.id||q.SL||q.sl||"";
+          const qtype=(q.QType||q.qtype||"MCQ").toLowerCase();
+          const subj=q.Subject||q.subject||"";
+          const tp=q.Sub_Topic||q.sub_topic||"";
+          return(
+            <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:8}}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:6}}>
+                <span style={{background:`${C.accent}20`,color:C.accent,border:`1px solid ${C.accent}30`,borderRadius:6,padding:"2px 7px",fontSize:9,fontWeight:700,flexShrink:0}}>#{qid}</span>
+                <span style={{background:qtype==="written"?`${C.purple}20`:`${C.green}20`,color:qtype==="written"?C.purple:C.green,border:`1px solid ${qtype==="written"?C.purple:C.green}30`,borderRadius:6,padding:"2px 7px",fontSize:9,fontWeight:700,flexShrink:0}}>{qtype==="written"?"Written":"MCQ"}</span>
+                <div style={{flex:1,fontSize:12,fontWeight:600,color:C.text,lineHeight:1.5}}>{(q.Question||q.question||"—").slice(0,80)}</div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:8}}>
+                {subj&&<span style={{fontSize:10,color:C.muted,background:C.panel,padding:"2px 8px",borderRadius:6}}>{subj}</span>}
+                {tp&&<span style={{fontSize:10,color:C.muted,background:C.panel,padding:"2px 8px",borderRadius:6}}>{tp}</span>}
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={()=>setEditing({...q,_sheet:sheet})} style={{flex:1,background:`${C.accent}15`,border:`1px solid ${C.accent}30`,color:C.accent,padding:"6px",borderRadius:8,fontSize:11,cursor:"pointer",fontWeight:700}}>✏️ এডিট</button>
+                <button onClick={()=>setDeleting({type:"question",sheet,val:qid,questions:[q]})} style={{background:`${C.red}12`,border:`1px solid ${C.red}25`,color:C.red,padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer"}}>🗑️</button>
+              </div>
+            </div>
+          );
+        })
+      }
+
+      {/* Edit Modal */}
+      {editing&&<QEditModal q={editing} push={push} onClose={()=>setEditing(null)} onSaved={()=>{fbInv(sheet);setEditing(null);}}/>}
+
+      {/* Rename Modal */}
+      {renaming&&<div className="ovl"><div className="modal">
+        <div className="mh"/>
+        <div className="mt">✏️ Rename {renaming.type==="subject"?"Subject":"Topic"}</div>
+        <div style={{fontSize:11,color:C.muted,marginBottom:10}}>প্রভাবিত: <span style={{color:C.accent,fontWeight:700}}>{renaming.questions.length}টি প্রশ্ন</span></div>
+        <div className="fld"><label>নতুন নাম</label>
+          <input className="inp" value={renaming.newVal||""} onChange={e=>setRenaming(p=>({...p,newVal:e.target.value}))} placeholder="নতুন নাম লিখুন..."/>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={()=>setRenaming(null)}>বাতিল</button>
+          <button className="btn bp" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={doRename}>{saving?"⏳...":"✅ Rename করুন"}</button>
+        </div>
+      </div></div>}
+
+      {/* Delete Warning Modal */}
+      {deleting&&<div className="ovl"><div className="modal">
+        <div className="mh"/>
+        <div style={{textAlign:"center",padding:"10px 0 14px"}}>
+          <div style={{fontSize:36,marginBottom:8}}>🗑️</div>
+          <div style={{fontSize:15,fontWeight:700,color:C.red,marginBottom:6}}>সত্যিই ডিলিট করবেন?</div>
+          <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>
+            <span style={{color:C.red,fontWeight:700}}>{deleting.questions.length}টি প্রশ্ন</span> স্থায়ীভাবে মুছে যাবে।<br/>এই কাজ undo করা যাবে না!
+          </div>
+          <div style={{background:`${C.red}12`,border:`1px solid ${C.red}30`,borderRadius:10,padding:"10px",marginTop:12,fontSize:11,color:C.red,fontWeight:600}}>
+            ⚠️ Firebase ও Sheet উভয় থেকেই মুছে যাবে
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6}}>
+          <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={()=>setDeleting(null)}>বাতিল</button>
+          <button style={{flex:2,background:C.red,border:"none",color:"#fff",padding:"10px",borderRadius:10,fontSize:13,fontWeight:700,cursor:"pointer"}} disabled={saving} onClick={doDelete}>{saving?"⏳ মুছছে...":"🗑️ হ্যাঁ, ডিলিট করো"}</button>
+        </div>
+      </div></div>}
+    </div>
+  );
+}
+
+/* ── Q Edit Modal (full) ── */
+function QEditModal({q,push,onClose,onSaved}){
+  const sh=q._sheet||"QBank";
+  const[saving,setSaving]=useState(false);
+  const optKeys={opt1:q.opt1!=null?"opt1":q.Opt1!=null?"Opt1":q.option1!=null?"option1":"Option1",
+                  opt2:q.opt2!=null?"opt2":q.Opt2!=null?"Opt2":q.option2!=null?"option2":"Option2",
+                  opt3:q.opt3!=null?"opt3":q.Opt3!=null?"Opt3":q.option3!=null?"option3":"Option3",
+                  opt4:q.opt4!=null?"opt4":q.Opt4!=null?"Opt4":q.option4!=null?"option4":"Option4"};
+  const[question,setQuestion]=useState(q.Question||q.question||"");
+  const[subject,setSubject]=useState(q.Subject||q.subject||"");
+  const[subtopic,setSubtopic]=useState(q.Sub_Topic||q.sub_topic||"");
+  const[opt1,setOpt1]=useState(q[optKeys.opt1]||"");
+  const[opt2,setOpt2]=useState(q[optKeys.opt2]||"");
+  const[opt3,setOpt3]=useState(q[optKeys.opt3]||"");
+  const[opt4,setOpt4]=useState(q[optKeys.opt4]||"");
+  const[correct,setCorrect]=useState(q.Correct||q.correct||"");
+  const[explanation,setExplanation]=useState(q.Explanation||q.explanation||"");
+  const[technique,setTechnique]=useState(q.Technique||q.technique||"");
+  const qtype=(q.QType||q.qtype||"MCQ").toLowerCase();
+  const isMCQ=qtype!=="written"&&qtype!=="study";
+  const qid=String(q.ID||q.id||q.SL||q.sl||"");
+
+  const save=async()=>{
+    setSaving(true);
+    try{
+      const fkey=q._fbKey;
+      const patch={Question:question,Subject:subject,Sub_Topic:subtopic,Explanation:explanation,Technique:technique};
+      if(isMCQ){patch[optKeys.opt1]=opt1;patch[optKeys.opt2]=opt2;patch[optKeys.opt3]=opt3;patch[optKeys.opt4]=opt4;patch.Correct=correct;}
+      else if(qtype==="study") patch.Correct=correct;
+      if(fkey) await fbPatch(`${sh}/${fkey}`,patch);
+      // GAS sheet update
+      const fields=[["question",question],["subject",subject],["sub_topic",subtopic],["explanation",explanation],["technique",technique]];
+      if(isMCQ) fields.push([optKeys.opt1.toLowerCase(),opt1],[optKeys.opt2.toLowerCase(),opt2],[optKeys.opt3.toLowerCase(),opt3],[optKeys.opt4.toLowerCase(),opt4],["correct",correct]);
+      else if(qtype==="study") fields.push(["correct",correct]);
+      fields.forEach(([f,v])=>v!==undefined&&gasBg({action:"updateField",sheet:sh,id:qid,field:f,content:encodeURIComponent(v)}));
+      push("success","✅ সেভ হয়েছে","");
+      onSaved();
+    }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
+    setSaving(false);
+  };
+
+  const ac=isMCQ?C.accent:qtype==="study"?C.green:C.purple;
+  return(
+    <div className="ovl"><div className="modal">
+      <div className="mh"/>
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+        <span style={{background:`${ac}22`,color:ac,border:`1px solid ${ac}44`,borderRadius:6,padding:"3px 10px",fontSize:11,fontWeight:700}}>{isMCQ?"❓ MCQ":qtype==="study"?"📖 Study":"✍️ Written"}</span>
+        <span style={{background:`${C.accent}15`,color:C.accent,borderRadius:6,padding:"3px 8px",fontSize:10,fontWeight:700}}>#{qid} · {sh}</span>
+      </div>
+      <div className="fld"><label>❓ প্রশ্ন</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:60}}/></div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+        <div className="fld" style={{margin:0}}><label>📂 Subject</label><input className="inp" value={subject} onChange={e=>setSubject(e.target.value)}/></div>
+        <div className="fld" style={{margin:0}}><label>📌 SubTopic</label><input className="inp" value={subtopic} onChange={e=>setSubtopic(e.target.value)}/></div>
+      </div>
+      {isMCQ&&<>
+        <div style={{background:`${ac}0a`,border:`1px solid ${ac}20`,borderRadius:10,padding:10,marginBottom:10}}>
+          <div style={{fontSize:10,fontWeight:700,color:ac,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📋 Options</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:8}}>
+            <div className="fld" style={{margin:0}}><label>A</label><input className="inp" value={opt1} onChange={e=>setOpt1(e.target.value)}/></div>
+            <div className="fld" style={{margin:0}}><label>B</label><input className="inp" value={opt2} onChange={e=>setOpt2(e.target.value)}/></div>
+            <div className="fld" style={{margin:0}}><label>C</label><input className="inp" value={opt3} onChange={e=>setOpt3(e.target.value)}/></div>
+            <div className="fld" style={{margin:0}}><label>D</label><input className="inp" value={opt4} onChange={e=>setOpt4(e.target.value)}/></div>
+          </div>
+          <div style={{fontSize:10,fontWeight:700,color:C.muted,marginBottom:5,textTransform:"uppercase"}}>✅ সঠিক উত্তর</div>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:6}}>
+            {[opt1,opt2,opt3,opt4].filter(Boolean).map((o,i)=>(
+              <button key={i} type="button" className={`cc${correct===o?" on":""}`} onClick={()=>setCorrect(o)}>{o.slice(0,14)}{o.length>14?"…":""}</button>
+            ))}
+          </div>
+          <input className="inp" value={correct} onChange={e=>setCorrect(e.target.value)} placeholder="বা সরাসরি লিখুন..."/>
+        </div>
+      </>}
+      {qtype==="study"&&<div className="fld"><label>✅ উত্তর</label><textarea className="ta" value={correct} onChange={e=>setCorrect(e.target.value)} style={{minHeight:60}}/></div>}
+      <div style={{background:`${C.green}0a`,border:`1px solid ${C.green}20`,borderRadius:10,padding:10,marginBottom:10}}>
+        <div style={{fontSize:10,fontWeight:700,color:C.green,marginBottom:8,letterSpacing:".5px",textTransform:"uppercase"}}>📖 Explanation & Technique</div>
+        <div className="fld" style={{marginBottom:8}}><label>Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:60}}/></div>
+        <div className="fld" style={{margin:0}}><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:40}}/></div>
+      </div>
+      <div style={{display:"flex",gap:6}}>
+        <button type="button" className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
+        <button type="button" className="btn bp" style={{flex:2,justifyContent:"center",background:ac}} disabled={saving} onClick={save}>{saving?"⏳...":"💾 সেভ করুন"}</button>
+      </div>
+    </div></div>
+  );
+}
+
 /* ══════════ ENTRY ══════════ */
 function EntryPage({push}){
   const[mode,setMode]=useState("Quiz");
@@ -1048,49 +1323,93 @@ function NotifyPage({push}){
   const[body,setBody]=useState("");
   const[sending,setSending]=useState(false);
   const[hist,setHist]=useState([]);
+  const[mode,setMode]=useState("all"); // "all" | "select"
+  const[selected,setSelected]=useState(new Set());
   const{data:usersRaw}=useFB("Users");
+  const users=useMemo(()=>toArr(usersRaw).filter(u=>(u.Status||u.status||"").toLowerCase()==="active"),[usersRaw]);
+
+  const toggleUser=phone=>{
+    setSelected(p=>{const s=new Set(p); s.has(phone)?s.delete(phone):s.add(phone); return s;});
+  };
 
   const send=async()=>{
     if(!title||!body){push("warn","তথ্য দিন","");return;}
+    const targets=mode==="all"?users:users.filter(u=>selected.has((u.Phone||u.phone||"").toString().replace(/^'+/,"").trim()));
+    if(targets.length===0){push("warn","কোনো user নির্বাচিত হয়নি","");return;}
     setSending(true);
     try{
-      // 1. Firebase-এ সব active user এর Notifications-এ লিখে দাও
-      const users=toArr(usersRaw);
-      const active=users.filter(u=>(u.Status||u.status||"").toLowerCase()==="active");
       const ts=nowTs();
       const notifKey=`broadcast_${Date.now()}`;
-      await Promise.all(active.map(u=>{
+      await Promise.all(targets.map(u=>{
         const phK=phoneKey(u.Phone||u.phone||"");
         if(!phK)return Promise.resolve();
         return fbSet(`Notifications/${phK}/${notifKey}`,{type:"broadcast",title,body,time:ts,read:false});
       }));
-      // 2. GAS দিয়ে FCM push পাঠাও (fire-and-forget)
-      try{
-        const r=await gasCall({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)});
-        const sent=r?.fcm?.sent||r?.sent||0;
-        push("success","📣 পাঠানো হয়েছে!",`Firebase: ${active.length}জন · FCM: ${sent}জন`);
-      }catch{
-        push("success","✅ Firebase-এ পাঠানো হয়েছে",`${active.length} জন active user`);
+      if(mode==="all"){
+        try{
+          const r=await gasCall({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)});
+          push("success","📣 পাঠানো হয়েছে!",`${targets.length}জন · FCM: ${r?.fcm?.sent||0}`);
+        }catch{push("success","✅ Firebase-এ পাঠানো হয়েছে",`${targets.length}জন`);}
+      } else {
+        // Individual FCM for selected
+        await Promise.all(targets.map(async u=>{
+          const phone=(u.Phone||u.phone||"").toString().replace(/^'+/,"").trim();
+          try{
+            await Promise.race([
+              fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(title),body:encodeURIComponent(body)})),
+              new Promise((_,rej)=>setTimeout(()=>rej(),5000))
+            ]);
+          }catch(_){}
+        }));
+        push("success","✅ পাঠানো হয়েছে",`${targets.length}জনকে`);
       }
-      setHist(p=>[{title,body,time:ts,count:active.length},...p.slice(0,9)]);
-      setTitle("");setBody("");
-    }catch(e){push("error","ব্যর্থ",String(e?.message||e||"Unknown error"));}
+      setHist(p=>[{title,body,time:ts,count:targets.length,mode},...p.slice(0,9)]);
+      setTitle("");setBody("");setSelected(new Set());
+    }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
     setSending(false);
   };
+
   return(
     <div className="page">
+      {/* Mode toggle */}
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        <button className={`btn${mode==="all"?" bp":" bg"}`} style={{flex:1,justifyContent:"center",fontSize:12}} onClick={()=>setMode("all")}>📣 সবাই</button>
+        <button className={`btn${mode==="select"?" bp":" bg"}`} style={{flex:1,justifyContent:"center",fontSize:12}} onClick={()=>setMode("select")}>👤 নির্বাচন করো</button>
+      </div>
+
+      {/* User select */}
+      {mode==="select"&&<div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,padding:10,marginBottom:12,maxHeight:200,overflowY:"auto"}}>
+        <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:8,letterSpacing:1,textTransform:"uppercase"}}>Active Users ({users.length})</div>
+        {users.map((u,i)=>{
+          const phone=(u.Phone||u.phone||"").toString().replace(/^'+/,"").trim();
+          const name=u.Name||u.name||"—";
+          const sel=selected.has(phone);
+          return(
+            <div key={i} onClick={()=>toggleUser(phone)} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 8px",borderRadius:8,cursor:"pointer",background:sel?`${C.accent}15`:"transparent",marginBottom:3}}>
+              <div style={{width:18,height:18,border:`2px solid ${sel?C.accent:C.muted}`,borderRadius:5,background:sel?C.accent:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:11,color:"#fff"}}>{sel?"✓":""}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,fontWeight:600,color:C.text}}>{name}</div>
+                <div style={{fontSize:10,color:C.muted}}>{phone}</div>
+              </div>
+            </div>
+          );
+        })}
+        {users.length===0&&<div style={{color:C.muted,fontSize:12,textAlign:"center",padding:"8px 0"}}>কোনো active user নেই</div>}
+        {selected.size>0&&<div style={{marginTop:8,fontSize:11,color:C.accent,fontWeight:700,textAlign:"center"}}>{selected.size}জন নির্বাচিত</div>}
+      </div>}
+
       <div style={{background:`linear-gradient(135deg,${C.card},#0a1830)`,border:`1px solid ${C.accent}20`,borderRadius:13,padding:14,marginBottom:11}}>
-        <div className="ct">📣 সবাইকে Broadcast</div>
+        <div className="ct">{mode==="all"?"📣 সবাইকে Broadcast":`👤 ${selected.size||"নির্বাচিত"} জনকে Notify`}</div>
         <div className="fld"><label>শিরোনাম</label><input className="inp" placeholder="নোটিফিকেশনের শিরোনাম..." value={title} onChange={e=>setTitle(e.target.value)}/></div>
         <div className="fld"><label>বার্তা</label><textarea className="ta" placeholder="বিস্তারিত..." value={body} onChange={e=>setBody(e.target.value)}/></div>
-        <button className="btn bp bb" onClick={send} disabled={sending}>{sending?"⏳ পাঠানো হচ্ছে...":"📣 সবাইকে পাঠান"}</button>
+        <button className="btn bp bb" onClick={send} disabled={sending}>{sending?"⏳ পাঠানো হচ্ছে...":"📣 পাঠান"}</button>
       </div>
       {hist.length>0&&<div className="card"><div className="ct">ইতিহাস</div>{hist.map((h,i)=>(
         <div key={i} className="nr">
           <div className={`nd ${i===0?"n":"o"}`}/>
           <div className="nc">
             <div className="nt">{h.title}</div>
-            <div className="ns">{h.body?.slice(0,55)}{h.count!=null&&<span style={{color:C.accent}}> · {h.count}জন</span>}</div>
+            <div className="ns">{h.body?.slice(0,55)}{h.count!=null&&<span style={{color:C.accent}}> · {h.count}জন</span>}{h.mode==="select"&&<span style={{color:C.yellow}}> · নির্বাচিত</span>}</div>
           </div>
           <div className="ntm">{h.time}</div>
         </div>
@@ -1155,6 +1474,7 @@ const NAV=[
   {id:"signups",  icon:"🆕",label:"সাইনআপ",  badge:true},
   {id:"students", icon:"👥",label:"Students"},
   {id:"reports",  icon:"🚨",label:"Reports",  badge:true},
+  {id:"qeditor",  icon:"✏️",label:"Q-Editor"},
   {id:"search",   icon:"🔍",label:"Search"},
   {id:"notify",   icon:"📣",label:"Notify"},
 ];
@@ -1197,6 +1517,7 @@ export default function App(){
       <div style={{display:page==="signups"  ?"block":"none"}}><SignupsPage   push={push} tick={tick}/></div>
       <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} tick={tick}/></div>
       <div style={{display:page==="reports"  ?"block":"none"}}><ReportsPage   push={push} tick={tick}/></div>
+      <div style={{display:page==="qeditor"  ?"block":"none"}}><QEditorPage   push={push} tick={tick}/></div>
       <div style={{display:page==="search"   ?"block":"none"}}><SearchPage    push={push} onDetail={u=>setSearchDetail(u)}/></div>
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push}/></div>
       <nav className="bottom-nav">
