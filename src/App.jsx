@@ -111,6 +111,20 @@ const uploadImg=async file=>{
   return(await r.json())?.data?.url||"";
 };
 
+/* ══════════ MODAL BACK HANDLER ══════════ */
+// যেকোনো modal এ এটা call করলে Android back button এ modal বন্ধ হবে
+function useModalBack(onClose){
+  useEffect(()=>{
+    window.dispatchEvent(new Event("modal-open"));
+    const handler=()=>onClose();
+    window.addEventListener("back-press",handler);
+    return()=>{
+      window.dispatchEvent(new Event("modal-close"));
+      window.removeEventListener("back-press",handler);
+    };
+  },[]);// eslint-disable-line
+}
+
 /* ══════════ TOAST ══════════ */
 let _tid=0;
 function useToasts(){
@@ -135,6 +149,7 @@ function Toasts({t}){return(
 
 /* ══════════ DELETE WARNING MODAL ══════════ */
 function DeleteWarningModal({title,description,onConfirm,onCancel,loading}){
+  useModalBack(onCancel);
   return(
     <div className="ovl" style={{zIndex:300}}>
       <div className="modal" style={{borderTop:`3px solid ${C.red}`}}>
@@ -691,6 +706,7 @@ function ReportsPage({push,tick}){
 }
 
 function ReportEditModal({report,onClose,onDone,push}){
+  useModalBack(onClose);
   const[step,setStep]=useState(1);
   const[qdata,setQdata]=useState(null);
   const[loadQ,setLoadQ]=useState(true);
@@ -791,9 +807,9 @@ function ReportEditModal({report,onClose,onDone,push}){
         await fbDelete(`Reports/${reportKey}`);
         invalidate("Reports");
       }
-      // Hard delete: Google Sheet
+      // Hard delete: Google Sheet — GAS expects 'key' not 'reportKey'
       if(reportKey){
-        gasBg({action:"deleteReport",reportKey,phone,questionId:qid});
+        gasBg({action:"deleteReport",key:reportKey,phone,questionId:qid});
       }
 
       push("success","✅ নোটিফাই ও ডিলিট!","Report মুছে গেছে");
@@ -1019,7 +1035,7 @@ function BrowseTab({push,tick}){
       const fkey=delTarget._fbKey;
       const qid=(delTarget.ID||delTarget.id||"").toString();
       if(fkey){await fbDelete(`${sheet}/${fkey}`);invalidate(sheet);}
-      gasBg({action:"deleteQuestion",sheet,questionId:qid,fbKey:fkey});
+      gasBg({action:"deleteByIds",sheet,ids:encodeURIComponent(qid)});
       push("success","🗑️ ডিলিট!",`#${qid}`);
       setDelTarget(null);
     }catch(e){push("error","ডিলিট ব্যর্থ",e.message);}
@@ -1092,6 +1108,7 @@ function BrowseTab({push,tick}){
 }
 
 function InlineEditModal({q,sheet,onClose,onSaved,push}){
+  useModalBack(onClose);
   const[saving,setSaving]=useState(false);
   const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
   const[question,setQuestion]=useState(q.Question||q.question||"");
@@ -1120,8 +1137,17 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
         patch={Question:question,[o1k]:opt1,[o2k]:opt2,[o3k]:opt3,[o4k]:opt4,Correct:correct,Explanation:explanation,Technique:technique};
       }
       if(fkey)await fbPatch(`${sheet}/${fkey}`,patch);
-      gasBg({action:"updateField",sheet,id:qid,field:"question",content:encodeURIComponent(question)});
-      if(explanation)gasBg({action:"updateField",sheet,id:qid,field:"explanation",content:encodeURIComponent(explanation)});
+      // Sync all changed fields to Google Sheet
+      const syncFields=[
+        ["question",question],
+        ["explanation",explanation],
+        ["technique",technique],
+        ["correct",correct],
+        ["opt1",opt1],["opt2",opt2],["opt3",opt3],["opt4",opt4],
+      ];
+      syncFields.forEach(([f,v])=>{
+        if(v&&v.trim()) gasBg({action:"updateField",sheet,id:qid,field:f,content:encodeURIComponent(v)});
+      });
       push("success","✅ আপডেট!",`#${qid}`);
       onSaved();
     }catch(e){push("error","ব্যর্থ",e.message);}
@@ -1219,7 +1245,9 @@ function RenameTab({push,tick}){
       }
       invalidate(sheet);
 
-      gasBg({action:"cascadeRename",sheet,renameType:type,oldName:encodeURIComponent(oldName),newName:encodeURIComponent(nName)});
+      // GAS renameField: field=subject/topic/sub_topic, oldVal, newVal
+      const gasField = type==="subject"?"subject":type==="topic"?"topic":"sub_topic";
+      gasBg({action:"renameField",sheet,field:gasField,oldVal:encodeURIComponent(oldName),newVal:encodeURIComponent(nName)});
       push("success","✅ Rename সম্পন্ন!",`"${oldName}" → "${nName}" · ${affected.length}টি`);
       setRenameTarget(null);setNewName("");
     }catch(e){push("error","Rename ব্যর্থ",e.message);}
@@ -1250,24 +1278,39 @@ function RenameTab({push,tick}){
        ))
       }
       {renameTarget&&(
-        <div className="ovl">
-          <div className="modal">
-            <div className="mh"/>
-            <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>✏️ Rename {type}</div>
-            <div style={{background:`${C.yellow}12`,border:`1px solid ${C.yellow}30`,borderRadius:9,padding:"8px 11px",marginBottom:12,fontSize:11}}>
-              <span style={{color:C.yellow,fontWeight:700}}>⚠️ </span>
-              <span style={{color:C.muted}}><b style={{color:C.text}}>{renameTarget.count}টি</b> প্রশ্নে Firebase ও Sheet-এ আপডেট হবে।</span>
-            </div>
-            <div className="fld"><label>পুরোনো নাম</label><div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,padding:"9px 12px",fontSize:13,color:C.muted}}>{renameTarget.name}</div></div>
-            <div className="fld"><label>নতুন নাম</label><input className="inp" value={newName} onChange={e=>setNewName(e.target.value)} autoFocus/></div>
-            <div style={{display:"flex",gap:7}}>
-              <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={()=>{setRenameTarget(null);setNewName("");}} disabled={renaming}>বাতিল</button>
-              <button className="btn bp" style={{flex:2,justifyContent:"center"}} onClick={doRename} disabled={renaming}>{renaming?"⏳ আপডেট হচ্ছে...":"✅ Rename"}</button>
-            </div>
-          </div>
-        </div>
+        <RenameModal
+          type={type}
+          target={renameTarget}
+          newName={newName}
+          setNewName={setNewName}
+          onCancel={()=>{setRenameTarget(null);setNewName("");}}
+          onRename={doRename}
+          renaming={renaming}
+        />
       )}
     </>
+  );
+}
+
+function RenameModal({type,target,newName,setNewName,onCancel,onRename,renaming}){
+  useModalBack(onCancel);
+  return(
+    <div className="ovl">
+      <div className="modal">
+        <div className="mh"/>
+        <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>✏️ Rename {type}</div>
+        <div style={{background:`${C.yellow}12`,border:`1px solid ${C.yellow}30`,borderRadius:9,padding:"8px 11px",marginBottom:12,fontSize:11}}>
+          <span style={{color:C.yellow,fontWeight:700}}>⚠️ </span>
+          <span style={{color:C.muted}}><b style={{color:C.text}}>{target.count}টি</b> প্রশ্নে Firebase ও Sheet-এ আপডেট হবে।</span>
+        </div>
+        <div className="fld"><label>পুরোনো নাম</label><div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,padding:"9px 12px",fontSize:13,color:C.muted}}>{target.name}</div></div>
+        <div className="fld"><label>নতুন নাম</label><input className="inp" value={newName} onChange={e=>setNewName(e.target.value)}/></div>
+        <div style={{display:"flex",gap:7}}>
+          <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onCancel} disabled={renaming}>বাতিল</button>
+          <button className="btn bp" style={{flex:2,justifyContent:"center"}} onClick={onRename} disabled={renaming}>{renaming?"⏳ আপডেট হচ্ছে...":"✅ Rename"}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1304,7 +1347,9 @@ function DeleteTab({push,tick}){
         if(Object.keys(updates).length>0)await fbPatch("",updates);
       }
       invalidate(sheet);
-      gasBg({action:"bulkDeleteByGroup",sheet,renameType:type,groupName:encodeURIComponent(groupName)});
+      // GAS deleteByIds — all question IDs comma-separated
+      const allIds=qs.map(q=>(q.ID||q.id||"").toString()).filter(Boolean).join(",");
+      if(allIds) gasBg({action:"deleteByIds",sheet,ids:encodeURIComponent(allIds)});
       push("success","🗑️ Bulk Delete!",`"${groupName}" · ${qs.length}টি মুছে গেছে`);
       setDelTarget(null);
     }catch(e){push("error","Delete ব্যর্থ",e.message);}
@@ -1461,6 +1506,7 @@ function NotifyPage({push}){
 }
 
 function NotifyModal({user,onClose,push,inline}){
+  useModalBack(inline?()=>{}:onClose);
   const[title,setTitle]=useState("");
   const[body,setBody]=useState("");
   const[sending,setSending]=useState(false);
@@ -1527,6 +1573,77 @@ export default function App(){
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
   const[searchDetail,setSearchDetail]=useState(null);
+  // Back stack: tracks navigation history for Android back button
+  const backStack=useRef(["dashboard"]);
+  const modalOpen=useRef(false); // any modal open?
+
+  // Called when navigating to a page
+  const goPage=useCallback((p)=>{
+    setPage(prev=>{
+      if(prev!==p){
+        backStack.current=[...backStack.current.filter(x=>x!==p),p];
+      }
+      return p;
+    });
+  },[]);
+
+  // Register modal open state so back button closes modal first
+  // Used by child components via window event
+  useEffect(()=>{
+    const onModalOpen =()=>{ modalOpen.current=true; };
+    const onModalClose=()=>{ modalOpen.current=false; };
+    window.addEventListener("modal-open", onModalOpen);
+    window.addEventListener("modal-close",onModalClose);
+    return()=>{
+      window.removeEventListener("modal-open", onModalOpen);
+      window.removeEventListener("modal-close",onModalClose);
+    };
+  },[]);
+
+  // Android hardware back button
+  useEffect(()=>{
+    const handleBack=(e)=>{
+      if(e&&e.preventDefault) e.preventDefault();
+
+      // If search detail open → close it
+      if(searchDetail){
+        setSearchDetail(null);
+        return;
+      }
+
+      // If any modal open → close it via event
+      if(modalOpen.current){
+        window.dispatchEvent(new Event("back-press"));
+        return;
+      }
+
+      // If not on dashboard → go back in stack
+      if(page!=="dashboard"){
+        const stack=backStack.current;
+        if(stack.length>1){
+          const newStack=stack.slice(0,-1);
+          backStack.current=newStack;
+          setPage(newStack[newStack.length-1]);
+        } else {
+          setPage("dashboard");
+          backStack.current=["dashboard"];
+        }
+        return;
+      }
+
+      // On dashboard → minimize app (Android behavior)
+      if(window.Capacitor?.Plugins?.App){
+        window.Capacitor.Plugins.App.minimizeApp();
+      } else {
+        // Fallback: history back or do nothing (don't close)
+        if(window.history.length>1) window.history.back();
+      }
+    };
+
+    // Capacitor fires 'backbutton' on document
+    document.addEventListener("backbutton", handleBack, false);
+    return()=>document.removeEventListener("backbutton", handleBack, false);
+  },[page,searchDetail]);
 
   const refresh=useCallback(()=>{
     setSpin(true);
@@ -1535,7 +1652,7 @@ export default function App(){
     setTimeout(()=>setSpin(false),1400);
   },[]);
 
-  // Auto-refresh every 2 minutes — just increment tick, no forced reload
+  // Auto-refresh every 2 minutes
   useEffect(()=>{
     const id=setInterval(()=>setTick(t=>t+1),120_000);
     return()=>clearInterval(id);
@@ -1572,7 +1689,7 @@ export default function App(){
 
       <nav className="bottom-nav">
         {NAV.map(n=>(
-          <button key={n.id} className={`nav-btn${page===n.id?" active":""}`} onClick={()=>setPage(n.id)}>
+          <button key={n.id} className={`nav-btn${page===n.id?" active":""}`} onClick={()=>goPage(n.id)}>
             <span className="nav-icon">{n.icon}</span>
             <span>{n.label}</span>
             {n.badge&&<span className="nav-badge">!</span>}
