@@ -1849,6 +1849,37 @@ export default function App(){
     return()=>clearInterval(id);
   },[]);
 
+  // ── Capacitor Push Notification click → সঠিক page এ navigate ──
+  useEffect(()=>{
+    // PushNotifications plugin (Capacitor)
+    const cap=window.Capacitor;
+    if(!cap?.Plugins?.PushNotifications) return;
+
+    const handler=(event)=>{
+      try{
+        const data=event?.notification?.data||event?.data||{};
+        const url=data.url||data.url_key||"";
+        const pageMap={
+          techniques   : "techniques",
+          reports      : "reports",
+          signups      : "signups",
+          students     : "students",
+          dashboard    : "dashboard",
+          notify       : "notify",
+          content      : "content",
+        };
+        const target=pageMap[url]||pageMap[data.type?.replace("admin_","")]||null;
+        if(target) goPage(target);
+      } catch(e){ console.warn("Push nav error",e); }
+    };
+
+    // Capacitor v5 event style
+    cap.Plugins.PushNotifications.addListener("pushNotificationActionPerformed", handler);
+    return()=>{
+      try{ cap.Plugins.PushNotifications.removeAllListeners(); }catch(e){}
+    };
+  },[goPage]);
+
   if(searchDetail)return(
     <>
       <style>{css}</style>
