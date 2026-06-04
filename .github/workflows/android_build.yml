@@ -31,20 +31,20 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # এখানে ফাইলটি সরাসরি প্রোজেক্টের রুট ডিরেক্টরিতে ডিকোড করা হচ্ছে
+      # GitHub Secret থেকে Base64 ডাটা নিয়ে সরাসরি android/app ফোল্ডারে ফাইল তৈরি করা হচ্ছে
       - name: Decode Keystore
         run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > release.keystore
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
 
-      # রিলিজ বিল্ড এবং সাইন করার ধাপ (পাথ ফিক্স করা হয়েছে)
+      # রিলিজ বিল্ড এবং সাইন করার ধাপ (আপনার hanif-alias সেট করা হয়েছে)
       - name: Build Android Release APK
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=../release.keystore \
+            -Pandroid.injected.signing.store.file=release.keystore \
             -Pandroid.injected.signing.store.password="${{ secrets.STORE_PASSWORD }}" \
-            -Pandroid.injected.signing.key.alias="YOUR_KEY_ALIAS" \
+            -Pandroid.injected.signing.key.alias="hanif-alias" \
             -Pandroid.injected.signing.key.password="${{ secrets.KEY_PASSWORD }}"
 
       # সাইন করা রিলিজ APK আপলোড
