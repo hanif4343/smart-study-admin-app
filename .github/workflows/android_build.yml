@@ -31,12 +31,12 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      # GitHub Secret থেকে Base64 ডাটা নিয়ে সরাসরি android/app ফোল্ডারে ফাইল তৈরি করা হচ্ছে
+      # সিক্রেট থেকে কিস্টোর জেনারেট করে সরাসরি android/app ফোল্ডারে রাখা হচ্ছে
       - name: Decode Keystore
         run: |
           echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
 
-      # রিলিজ বিল্ড এবং সাইন করার ধাপ (আপনার hanif-alias সেট করা হয়েছে)
+      # রিলিজ বিল্ড এবং সাইন করার ধাপ (আপনার hanif-alias সহ)
       - name: Build Android Release APK
         run: |
           cd android
