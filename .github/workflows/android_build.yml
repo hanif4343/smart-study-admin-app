@@ -31,14 +31,25 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Build Android APK
+      # এখানে Base64 থেকে Keystore ফাইলটি তৈরি করা হচ্ছে
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
+
+      # রিলিজ বিল্ড এবং সাইন করার ধাপ
+      - name: Build Android Release APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=release.keystore \
+            -Pandroid.injected.signing.store.password="${{ secrets.STORE_PASSWORD }}" \
+            -Pandroid.injected.signing.key.alias="hanif-alias" \
+            -Pandroid.injected.signing.key.password="${{ secrets.KEY_PASSWORD }}"
 
-      - name: Upload APK
+      # সাইন করা রিলিজ APK আপলোড
+      - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: SmartAdmin-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: SmartAdmin-Release-APK
+          path: android/app/build/outputs/apk/release/app-release.apk
