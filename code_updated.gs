@@ -325,9 +325,33 @@ function doGet(e) {
     var evType=e.parameter.event||"login";
     var uName=decodeURIComponent(e.parameter.name||"কেউ");
     var uPhone=decodeURIComponent(e.parameter.phone||"");
-    var title=evType==="signup"?"🆕 নতুন Signup!":"👤 User লগইন";
-    var body=evType==="signup"?uName+" ("+uPhone+") নতুন অ্যাকাউন্ট তৈরি করেছে।":uName+" ("+uPhone+") লগইন করেছে।";
-    return json({result:"success",fcm:sendFCMToPhone(adminPhone,title,body,{type:"admin_"+evType,url:"signups"})});
+    var extra=decodeURIComponent(e.parameter.extra||"");
+
+    var title, body, navUrl;
+
+    if(evType==="signup"){
+      title="🆕 নতুন Signup!";
+      body=uName+" ("+uPhone+") নতুন অ্যাকাউন্ট তৈরি করেছে।";
+      navUrl="signups";
+    } else if(evType==="login"){
+      title="👤 User লগইন";
+      body=uName+" ("+uPhone+") লগইন করেছে।";
+      navUrl="signups";
+    } else if(evType==="technique"){
+      title="🧠 নতুন টেকনিক জমা!";
+      body=uName+" ("+uPhone+") একটি পাবলিক টেকনিক যোগ করেছে।"+(extra?" প্রশ্ন: "+extra:"");
+      navUrl="techniques";
+    } else if(evType==="report"){
+      title="🚨 নতুন রিপোর্ট!";
+      body=uName+" ("+uPhone+") একটি প্রশ্ন রিপোর্ট করেছে।"+(extra?" কারণ: "+extra:"");
+      navUrl="reports";
+    } else {
+      title="🔔 Smart Study";
+      body=uName+" ("+uPhone+")";
+      navUrl="dashboard";
+    }
+
+    return json({result:"success",fcm:sendFCMToPhone(adminPhone,title,body,{type:"admin_"+evType,url:navUrl,questionId:e.parameter.questionId||"",tab:e.parameter.tab||""})});
   }
 
   // ── resolveReport ──
