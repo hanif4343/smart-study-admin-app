@@ -42,7 +42,6 @@ jobs:
 
       - name: Build Android Release APK
         env:
-          KEYSTORE_FILE: release.keystore
           KEYSTORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_ALIAS: hanif-alias
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
@@ -50,7 +49,7 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease \
-            -Pandroid.injected.signing.store.file=$KEYSTORE_FILE \
+            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/release.keystore \
             -Pandroid.injected.signing.store.password=$KEYSTORE_PASSWORD \
             -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
             -Pandroid.injected.signing.key.password=$KEY_PASSWORD
