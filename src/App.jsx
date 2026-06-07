@@ -2,18 +2,17 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 
 /* ══════════ CONFIG ══════════ */
 const FB  = "https://smartentrydb-default-rtdb.firebaseio.com";
-const FBK = "CsFdxaWLLU2AT92kxYFPTOhP1ewDR0jzK3hKjqWO";
 const GAS = "https://script.google.com/macros/s/AKfycbyjF7iFX0H_rFuJgMJYo70DC7KRX1lBXU7m7NoZCwf6VTJfRm6Iyw6hOcN2q_UKbxxgQg/exec";
 const IMGBB = "3f23d9fd6bdfdb694285773f40569906";
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
 /* ══════════ FIREBASE ══════════ */
-const fbGet   = async p=>{const r=await fetch(`${FB}/${p}.json?auth=${FBK}`);return r.json();};
-const fbPatch  = async(p,d)=>{const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbSet   = async(p,d)=>{const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbPush  = async(p,d)=>{const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbDelete= async p=>{const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"DELETE"});return r.json();};
+const fbGet   = async p=>{const r=await fetch(`${FB}/${p}.json`);return r.json();};
+const fbPatch  = async(p,d)=>{const r=await fetch(`${FB}/${p}.json`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbSet   = async(p,d)=>{const r=await fetch(`${FB}/${p}.json`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbPush  = async(p,d)=>{const r=await fetch(`${FB}/${p}.json`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbDelete= async p=>{const r=await fetch(`${FB}/${p}.json`,{method:"DELETE"});return r.json();};
 
 /* ══════════ GAS helpers ══════════ */
 const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams(params)).catch(()=>{}),300);
