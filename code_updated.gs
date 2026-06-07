@@ -3,7 +3,7 @@
   SMART STUDY — MASTER GAS (Updated)
   Script Properties:
     FIREBASE_URL     → https://yourproject-default-rtdb.firebaseio.com/
-    SECRET_KEY       → your-firebase-secret
+    SECRET_KEY       → ss_2024_abc123mnb  (GitHub secret এর মানের মতো হতে হবে)
     FCM_PROJECT_ID   → your-project-id
     FCM_CLIENT_EMAIL → firebase-adminsdk@...
     PRIVATE_KEY      → -----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n
@@ -150,6 +150,13 @@ function syncToFirebase(sheetName, folderName) {
 function doGet(e) {
   var action = e.parameter.action;
   var cfg    = getProps();
+
+  // ── SECRET_KEY VALIDATION ──
+  var expectedSecret = cfg.SECRET_KEY;
+  var receivedSecret = e.parameter.secret || "";
+  if (expectedSecret && receivedSecret !== expectedSecret) {
+    return json({ status: "error", message: "Unauthorized" });
+  }
 
   // ── verifyLogin ──
   if (action==="verifyLogin") {
@@ -529,6 +536,13 @@ function doPost(e) {
   try {
     var ss=SpreadsheetApp.getActiveSpreadsheet(), cfg=getProps();
     var params=(e.postData&&e.postData.contents)?JSON.parse(e.postData.contents):e.parameter;
+
+    // ── SECRET_KEY VALIDATION ──
+    var expectedSecret = cfg.SECRET_KEY;
+    var receivedSecret = params.secret || e.parameter.secret || "";
+    if (expectedSecret && receivedSecret !== expectedSecret) {
+      return json({ status: "error", message: "Unauthorized" });
+    }
 
     if(params.action==="getAI"||e.parameter.action==="getAI"){
       var promptText=params.prompt||e.parameter.prompt||"", apiKey=cfg.GEMINI_API_KEY;
