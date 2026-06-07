@@ -17,6 +17,11 @@ jobs:
         run: npm install
 
       - name: Web Build
+        env:
+          VITE_FB_API_KEY:      ${{ secrets.VITE_FB_API_KEY }}
+          VITE_FB_AUTH_DOMAIN:  ${{ secrets.VITE_FB_AUTH_DOMAIN }}
+          VITE_FB_DATABASE_URL: ${{ secrets.VITE_FB_DATABASE_URL }}
+          VITE_FB_PROJECT_ID:   ${{ secrets.VITE_FB_PROJECT_ID }}
         run: npm run build
 
       - name: Initialize Capacitor
