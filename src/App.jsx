@@ -3,9 +3,10 @@ import { initializeApp }        from "firebase/app";
 import { getAuth, signInAnonymously } from "firebase/auth";
 
 /* ══════════ CONFIG ══════════ */
-const FB    = import.meta.env.VITE_FB_DATABASE_URL;
-const GAS   = import.meta.env.VITE_GAS_URL;
-const IMGBB = import.meta.env.VITE_IMGBB_API_KEY;
+const FB     = import.meta.env.VITE_FB_DATABASE_URL;
+const GAS    = import.meta.env.VITE_GAS_URL;
+const IMGBB  = import.meta.env.VITE_IMGBB_API_KEY;
+const SECRET = import.meta.env.VITE_SECRET_KEY;
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
@@ -47,9 +48,9 @@ const fbPush  = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/$
 const fbDelete= async p=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return r.json();};
 
 /* ══════════ GAS helpers ══════════ */
-const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams(params)).catch(()=>{}),300);
-const gasPost= body  =>setTimeout(()=>fetch(GAS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(()=>{}),300);
-const gasCall= async params=>{const r=await fetch(GAS+"?"+new URLSearchParams(params));return r.json();};
+const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}),300);
+const gasPost= body  =>setTimeout(()=>fetch(GAS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,secret:SECRET})}).catch(()=>{}),300);
+const gasCall= async params=>{const r=await fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET}));return r.json();};
 
 /* ══════════ SIMPLE FETCH CACHE — no subscriptions, no loops ══════════ */
 const _store = {}; // path -> {data, ts, promise}
