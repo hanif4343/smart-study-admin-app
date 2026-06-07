@@ -38,15 +38,24 @@ jobs:
         with:
           java-version: '17'
           distribution: 'temurin'
-
-      - name: Build Android APK
+      - name: Decode Keystore
+        run: |
+          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
+      - name: Build Android Release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: hanif-alias
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
-
-      - name: Upload APK
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/release.keystore \
+            -Pandroid.injected.signing.store.password=$KEYSTORE_PASSWORD \
+            -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
+            -Pandroid.injected.signing.key.password=$KEY_PASSWORD
+      - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: SmartAdmin-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: SmartAdmin-Release-APK
+          path: android/app/build/outputs/apk/release/app-release.apk
