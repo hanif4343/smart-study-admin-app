@@ -3,9 +3,9 @@ import { initializeApp }        from "firebase/app";
 import { getAuth, signInAnonymously } from "firebase/auth";
 
 /* ══════════ CONFIG ══════════ */
-const FB  = "https://smartentrydb-default-rtdb.firebaseio.com";
-const GAS = "https://script.google.com/macros/s/AKfycbyjF7iFX0H_rFuJgMJYo70DC7KRX1lBXU7m7NoZCwf6VTJfRm6Iyw6hOcN2q_UKbxxgQg/exec";
-const IMGBB = "3f23d9fd6bdfdb694285773f40569906";
+const FB    = import.meta.env.VITE_FB_DATABASE_URL;
+const GAS   = import.meta.env.VITE_GAS_URL;
+const IMGBB = import.meta.env.VITE_IMGBB_API_KEY;
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
