@@ -988,11 +988,13 @@ function ContentManagerPage({push,tick}){
         <div className="atabs">
           <button className={`atab${tab==="browse"?" on":""}`} onClick={()=>setTab("browse")}>📋 Browse</button>
           <button className={`atab${tab==="rename"?" on":""}`} onClick={()=>setTab("rename")}>✏️ Rename</button>
+          <button className={`atab${tab==="audience"?" on":""}`} onClick={()=>setTab("audience")}>🎯 Audience</button>
           <button className={`atab${tab==="delete"?" on":""}`} onClick={()=>setTab("delete")}>🗑️ Delete</button>
         </div>
       </div>
       {tab==="browse"&&<BrowseTab push={push} tick={tick}/>}
       {tab==="rename"&&<RenameTab push={push} tick={tick}/>}
+      {tab==="audience"&&<AudienceTagRenameTab push={push} tick={tick}/>}
       {tab==="delete"&&<DeleteTab push={push} tick={tick}/>}
     </div>
   );
@@ -1308,6 +1310,202 @@ function RenameModal({type,target,newName,setNewName,onCancel,onRename,renaming}
         <div style={{display:"flex",gap:7}}>
           <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onCancel} disabled={renaming}>বাতিল</button>
           <button className="btn bp" style={{flex:2,justifyContent:"center"}} onClick={onRename} disabled={renaming}>{renaming?"⏳ আপডেট হচ্ছে...":"✅ Rename"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ══════════ AUDIENCE TAG RENAME TAB ══════════ */
+function AudienceTagRenameTab({push,tick}){
+  const SHEETS=["QBank","Quiz","Study"];
+
+  // Load all 3 sheets
+  const{data:qbRaw,loading:qbL}=useFB("QBank",tick);
+  const{data:qzRaw,loading:qzL}=useFB("Quiz",tick);
+  const{data:stRaw,loading:stL}=useFB("Study",tick);
+
+  const loading=qbL||qzL||stL;
+
+  const[renameTarget,setRenameTarget]=useState(null);
+  const[newName,setNewName]=useState("");
+  const[renaming,setRenaming]=useState(false);
+
+  // Collect all unique AudienceTags across all sheets with count & which sheets they appear in
+  const tagList=useMemo(()=>{
+    const map={}; // tag -> {count, sheets: {QBank:n, Quiz:n, Study:n}}
+    [[qbRaw,"QBank"],[qzRaw,"Quiz"],[stRaw,"Study"]].forEach(([raw,sheet])=>{
+      toArr(raw).forEach(q=>{
+        const tag=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
+        if(!tag)return;
+        if(!map[tag])map[tag]={count:0,sheets:{}};
+        map[tag].count++;
+        map[tag].sheets[sheet]=(map[tag].sheets[sheet]||0)+1;
+      });
+    });
+    return Object.entries(map).sort((a,b)=>b[1].count-a[1].count);
+  },[qbRaw,qzRaw,stRaw]);
+
+  const doRename=async()=>{
+    if(!newName.trim()||!renameTarget){push("warn","নতুন নাম দিন","");return;}
+    if(newName.trim()===renameTarget.tag){push("info","একই নাম","");return;}
+    setRenaming(true);
+    try{
+      const oldTag=renameTarget.tag;
+      const nTag=newName.trim();
+      let totalUpdated=0;
+
+      for(const sheet of SHEETS){
+        const raw=sheet==="QBank"?qbRaw:sheet==="Quiz"?qzRaw:stRaw;
+        const allQ=toArr(raw);
+        const affected=allQ.filter(q=>{
+          const t=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
+          return t===oldTag;
+        });
+        if(affected.length===0)continue;
+
+        // Batch update — chunks of 50
+        const CHUNK=50;
+        for(let i=0;i<affected.length;i+=CHUNK){
+          const updates={};
+          affected.slice(i,i+CHUNK).forEach(q=>{
+            const fkey=q._fbKey;
+            if(!fkey)return;
+            // Detect field name used in this record
+            const fieldKey=q.AudienceTags!=null?"AudienceTags":q.audienceTags!=null?"audienceTags":"audience_tags";
+            updates[`${sheet}/${fkey}/${fieldKey}`]=nTag;
+          });
+          if(Object.keys(updates).length>0)await fbPatch("",updates);
+          totalUpdated+=affected.slice(i,i+CHUNK).length;
+        }
+
+        // Also invalidate the sheet cache
+        invalidate(sheet);
+      }
+
+      push("success","✅ Audience Tag Rename সম্পন্ন!",`"${oldTag}" → "${nTag}" · ${totalUpdated}টি কন্টেন্ট`);
+      setRenameTarget(null);
+      setNewName("");
+    }catch(e){push("error","Rename ব্যর্থ",e.message);}
+    setRenaming(false);
+  };
+
+  return(
+    <>
+      {/* Info banner */}
+      <div style={{background:`${C.accent}12`,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11}}>
+        <div style={{fontWeight:700,color:C.accent,marginBottom:3}}>🎯 Audience Tag Rename</div>
+        <div style={{color:C.muted,lineHeight:1.6}}>
+          QBank, Quiz ও Study — তিনটি শিটে একসাথে AudienceTags আপডেট হবে।
+          <br/>ব্যবহারকারীর <b style={{color:C.text}}>classLevel</b>-এর সাথে মিলতে হবে।
+        </div>
+      </div>
+
+      <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+        {loading?"⏳ লোড হচ্ছে...":`${tagList.length}টি Audience Tag পাওয়া গেছে`}
+      </div>
+
+      {/* Tag list */}
+      {loading?[...Array(4)].map((_,i)=><div key={i} className="sk" style={{height:56,marginBottom:7}}/>):
+       tagList.length===0?
+        <div className="empty"><div className="ei">🎯</div><p>কোনো AudienceTags নেই</p></div>:
+        tagList.map(([tag,info])=>(
+          <div key={tag} style={{
+            background:C.panel,border:`1px solid ${C.border}`,borderRadius:11,
+            padding:"11px 12px",marginBottom:7,
+            display:"flex",alignItems:"center",gap:10
+          }}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontWeight:700,fontSize:13,marginBottom:3}}>{tag}</div>
+              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                {Object.entries(info.sheets).map(([sh,n])=>(
+                  <span key={sh} style={{
+                    fontSize:9,fontWeight:700,padding:"1px 6px",borderRadius:6,
+                    background:sh==="QBank"?`${C.green}20`:sh==="Quiz"?`${C.accent}20`:`${C.yellow}20`,
+                    color:sh==="QBank"?C.green:sh==="Quiz"?C.accent:C.yellow,
+                    border:`1px solid ${sh==="QBank"?C.green:sh==="Quiz"?C.accent:C.yellow}40`
+                  }}>{sh}: {n}টি</span>
+                ))}
+              </div>
+            </div>
+            <div style={{fontWeight:700,fontSize:15,color:C.muted,minWidth:28,textAlign:"right"}}>{info.count}</div>
+            <button
+              className="btn"
+              style={{padding:"5px 11px",fontSize:11,background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}33`,flexShrink:0}}
+              onClick={()=>{setRenameTarget({tag,count:info.count});setNewName(tag);}}
+            >✏️ Rename</button>
+          </div>
+        ))
+      }
+
+      {/* Rename Modal */}
+      {renameTarget&&(
+        <AudienceRenameModal
+          target={renameTarget}
+          newName={newName}
+          setNewName={setNewName}
+          onCancel={()=>{setRenameTarget(null);setNewName("");}}
+          onRename={doRename}
+          renaming={renaming}
+        />
+      )}
+    </>
+  );
+}
+
+function AudienceRenameModal({target,newName,setNewName,onCancel,onRename,renaming}){
+  useModalBack(onCancel);
+  return(
+    <div className="ovl">
+      <div className="modal">
+        <div className="mh"/>
+        <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>🎯 Audience Tag Rename</div>
+
+        {/* Warning */}
+        <div style={{background:`${C.yellow}12`,border:`1px solid ${C.yellow}30`,borderRadius:9,padding:"8px 11px",marginBottom:12,fontSize:11}}>
+          <span style={{color:C.yellow,fontWeight:700}}>⚠️ </span>
+          <span style={{color:C.muted}}>
+            <b style={{color:C.text}}>{target.count}টি</b> কন্টেন্টে Firebase-এ আপডেট হবে।
+            <br/>ব্যবহারকারীর <b style={{color:C.text}}>classLevel</b>-এর সাথে মিল রাখুন।
+          </span>
+        </div>
+
+        {/* Old name (readonly) */}
+        <div className="fld">
+          <label>পুরোনো Tag</label>
+          <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,padding:"9px 12px",fontSize:13,color:C.muted,fontFamily:"monospace"}}>
+            {target.tag}
+          </div>
+        </div>
+
+        {/* New name input */}
+        <div className="fld">
+          <label>নতুন Tag</label>
+          <input
+            className="inp"
+            value={newName}
+            onChange={e=>setNewName(e.target.value)}
+            placeholder="যেমন: Masters 1"
+            style={{fontFamily:"monospace"}}
+            autoFocus
+          />
+          {newName&&newName!==target.tag&&(
+            <div style={{fontSize:10,color:C.green,marginTop:4,fontWeight:600}}>
+              ✅ "{target.tag}" → "{newName}"
+            </div>
+          )}
+        </div>
+
+        {/* Hint */}
+        <div style={{background:`${C.accent}10`,border:`1px solid ${C.accent}25`,borderRadius:8,padding:"7px 10px",marginBottom:12,fontSize:10,color:C.muted}}>
+          💡 <b style={{color:C.text}}>classLevel মানগুলো:</b> Masters 1, Masters 2, Honours 1, Honours 2, Honours 3, Honours 4, Class 12, Job
+        </div>
+
+        <div style={{display:"flex",gap:7}}>
+          <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onCancel} disabled={renaming}>বাতিল</button>
+          <button className="btn bp" style={{flex:2,justifyContent:"center"}} onClick={onRename} disabled={renaming||!newName.trim()||newName.trim()===target.tag}>
+            {renaming?"⏳ আপডেট হচ্ছে...":"✅ Rename করুন"}
+          </button>
         </div>
       </div>
     </div>
