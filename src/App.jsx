@@ -12,10 +12,10 @@ const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#2
 /* ══════════ FIREBASE AUTH TOKEN ══════════ */
 // Anonymous sign-in → ID Token দিয়ে secure REST call
 const _fbApp  = initializeApp({
-  apiKey:      "AIzaSyAM4QUyk_uscXOhAvRp9nmQCnn643dKb8Q",
-  authDomain:  "smartentrydb.firebaseapp.com",
-  databaseURL: "https://smartentrydb-default-rtdb.firebaseio.com",
-  projectId:   "smartentrydb",
+  apiKey:      import.meta.env.VITE_FB_API_KEY,
+  authDomain:  import.meta.env.VITE_FB_AUTH_DOMAIN,
+  databaseURL: import.meta.env.VITE_FB_DATABASE_URL,
+  projectId:   import.meta.env.VITE_FB_PROJECT_ID,
 });
 const _auth = getAuth(_fbApp);
 
