@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { initializeApp }        from "firebase/app";
+import { getAuth, signInAnonymously } from "firebase/auth";
 
 /* ══════════ CONFIG ══════════ */
 const FB  = "https://smartentrydb-default-rtdb.firebaseio.com";
@@ -7,12 +9,42 @@ const IMGBB = "3f23d9fd6bdfdb694285773f40569906";
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
-/* ══════════ FIREBASE ══════════ */
-const fbGet   = async p=>{const r=await fetch(`${FB}/${p}.json`);return r.json();};
-const fbPatch  = async(p,d)=>{const r=await fetch(`${FB}/${p}.json`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbSet   = async(p,d)=>{const r=await fetch(`${FB}/${p}.json`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbPush  = async(p,d)=>{const r=await fetch(`${FB}/${p}.json`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbDelete= async p=>{const r=await fetch(`${FB}/${p}.json`,{method:"DELETE"});return r.json();};
+/* ══════════ FIREBASE AUTH TOKEN ══════════ */
+// Anonymous sign-in → ID Token দিয়ে secure REST call
+const _fbApp  = initializeApp({
+  apiKey:      "AIzaSyAM4QUyk_uscXOhAvRp9nmQCnn643dKb8Q",
+  authDomain:  "smartentrydb.firebaseapp.com",
+  databaseURL: "https://smartentrydb-default-rtdb.firebaseio.com",
+  projectId:   "smartentrydb",
+});
+const _auth = getAuth(_fbApp);
+
+// App load এ anonymous sign-in
+signInAnonymously(_auth).catch(e=>console.warn("FB anon sign-in:",e));
+
+// Current valid token নাও (auto-refresh করে)
+async function _getToken(){
+  const user = _auth.currentUser;
+  if(!user){
+    // Not yet signed in — wait briefly then retry
+    await signInAnonymously(_auth);
+    await new Promise(r=>setTimeout(r,1000));
+  }
+  const t = await (_auth.currentUser?.getIdToken(false));
+  return t||"";
+}
+
+async function _authQ(){
+  const t=await _getToken();
+  return t?`?auth=${t}`:"";
+}
+
+/* ══════════ FIREBASE REST ══════════ */
+const fbGet   = async p=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`);return r.json();};
+const fbPatch  = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbSet   = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbPush  = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbDelete= async p=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return r.json();};
 
 /* ══════════ GAS helpers ══════════ */
 const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams(params)).catch(()=>{}),300);
