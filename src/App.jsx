@@ -17,11 +17,19 @@ function _authQ(){
 }
 
 /* ══════════ FIREBASE REST ══════════ */
+async function _checkResp(r){
+  if(!r.ok){
+    let msg=`HTTP ${r.status}`;
+    try{const j=await r.json();msg=j?.error||msg;}catch(_){}
+    throw new Error(msg);
+  }
+  return r.json();
+}
 const fbGet   = async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`);return r.json();};
-const fbPatch  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbSet   = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbPush  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbDelete= async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return r.json();};
+const fbPatch  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbSet   = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbPush  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbDelete= async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return _checkResp(r);};
 
 /* ══════════ GAS helpers ══════════ */
 const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}),300);
