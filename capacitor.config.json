@@ -1,1 +1,9 @@
-{"appId": "com.smartstudy.admin","appName": "Smart Admin","webDir": "dist"}
+{
+  "appId": "com.smartstudy.admin",
+  "appName": "Smart Admin", 
+  "webDir": "dist",
+  "server": {
+    "hostname": "localhost",
+    "androidScheme": "https"
+  }
+}
