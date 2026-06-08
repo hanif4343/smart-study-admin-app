@@ -41,18 +41,48 @@ async function signInWithEmail(email, password) {
   if(!r.ok) throw new Error(d?.error?.message||"Login failed");
   _idToken = d.idToken;
   _tokenExp = Date.now() + (parseInt(d.expiresIn||3600)-60)*1000;
+  // store refresh token so we can get new idToken without password
+  localStorage.setItem("fb_refresh_token", d.refreshToken||"");
   localStorage.setItem("fb_email", email);
-  localStorage.setItem("fb_pass_enc", btoa(password));
+  try{ localStorage.setItem("fb_pass_enc", btoa(unescape(encodeURIComponent(password)))); }catch(_){}
   return d;
+}
+
+async function refreshTokenWithRefreshToken(refreshToken) {
+  try {
+    const r = await fetch(
+      `https://securetoken.googleapis.com/v1/token?key=${FB_KEY}`,
+      {method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},
+       body:`grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`}
+    );
+    const d = await r.json();
+    if(!r.ok || !d.id_token) return null;
+    _idToken = d.id_token;
+    _tokenExp = Date.now() + (parseInt(d.expires_in||3600)-60)*1000;
+    localStorage.setItem("fb_refresh_token", d.refresh_token||refreshToken);
+    return _idToken;
+  } catch(e){ return null; }
 }
 
 async function refreshTokenIfNeeded() {
   if(_idToken && Date.now() < _tokenExp) return _idToken;
+  
+  // Try refresh token first (no password needed)
+  const refreshToken = localStorage.getItem("fb_refresh_token");
+  if(refreshToken){
+    const t = await refreshTokenWithRefreshToken(refreshToken);
+    if(t) return t;
+  }
+  
+  // Fallback: re-login with saved credentials
   const email = localStorage.getItem("fb_email");
   const passEnc = localStorage.getItem("fb_pass_enc");
   if(email && passEnc){
-    try{ await signInWithEmail(email, atob(passEnc)); return _idToken; }
-    catch(e){ _idToken=null; return null; }
+    try{
+      const pass = decodeURIComponent(escape(atob(passEnc)));
+      await signInWithEmail(email, pass);
+      return _idToken;
+    }catch(e){ _idToken=null; return null; }
   }
   return null;
 }
@@ -63,7 +93,14 @@ function _authQ(token){ return token ? `?auth=${token}` : ""; }
 async function _checkResp(r){
   if(!r.ok){
     let msg=`HTTP ${r.status}`;
-    try{const j=await r.json();msg=j?.error||msg;}catch(_){}
+    try{
+      const j=await r.json();
+      // Firebase error: {error: "Permission denied"} or {error: {message:"..."}}
+      if(j?.error){
+        msg = typeof j.error==="string" ? j.error : (j.error?.message||JSON.stringify(j.error));
+      }
+    }catch(_){}
+    console.error("Firebase error:",msg,"path call failed");
     throw new Error(msg);
   }
   return r.json();
@@ -102,10 +139,14 @@ async function loadPath(path, force=false){
   return p;
 }
 
-function invalidate(...paths){ paths.forEach(p=>{if(_store[p])_store[p].ts=0;}); }
-function invalidateAll(){ Object.keys(_store).forEach(p=>{if(_store[p])_store[p].ts=0;}); }
+function invalidate(...paths){
+  paths.forEach(p=>{if(_store[p]){_store[p].ts=0;_store[p].promise=null;}});
+  // Notify all useFB hooks to re-fetch
+  window.dispatchEvent(new CustomEvent("fb-invalidate",{detail:{paths}}));
+}
+function invalidateAll(){ Object.keys(_store).forEach(p=>{if(_store[p]){_store[p].ts=0;_store[p].promise=null;}}); }
 
-/* Simple hook — fetches once, no subscription loop */
+/* Simple hook — fetches once, re-fetches on invalidate */
 function useFB(path, tick=0){
   const [state, setState] = useState(()=>{
     const cached = _store[path];
@@ -113,10 +154,26 @@ function useFB(path, tick=0){
   });
   const lastTick = useRef(-1);
   const lastPath = useRef(null);
+  const localTick = useRef(0);
+  const [_lt, setLt] = useState(0);
+
+  // Listen for invalidate events for this path
+  useEffect(()=>{
+    if(!path) return;
+    const handler=(e)=>{
+      const paths=e.detail?.paths;
+      if(!paths || paths.includes(path)){
+        localTick.current++;
+        setLt(t=>t+1);
+      }
+    };
+    window.addEventListener("fb-invalidate", handler);
+    return()=>window.removeEventListener("fb-invalidate", handler);
+  },[path]);
 
   useEffect(()=>{
     if(!path) return;
-    const force = tick !== lastTick.current || path !== lastPath.current;
+    const force = tick !== lastTick.current || path !== lastPath.current || _lt !== undefined;
     lastTick.current = tick;
     lastPath.current = path;
 
@@ -128,13 +185,13 @@ function useFB(path, tick=0){
 
     let cancelled = false;
     setState(s=>({...s, loading:!s.data}));
-    loadPath(path, force).then(data=>{
+    loadPath(path, true).then(data=>{
       if(!cancelled) setState({data, loading:false});
     }).catch(()=>{
       if(!cancelled) setState(s=>({...s, loading:false}));
     });
     return ()=>{ cancelled=true; };
-  }, [path, tick]);
+  }, [path, tick, _lt]);
 
   return state;
 }
@@ -1101,7 +1158,7 @@ function BrowseTab({push,tick}){
       // gasBg deleteByIds skipped — Firebase already deleted above
       push("success","🗑️ ডিলিট!",`#${qid}`);
       setDelTarget(null);
-    }catch(e){push("error","ডিলিট ব্যর্থ",e.message);}
+    }catch(e){push("error","ডিলিট ব্যর্থ",String(e?.message||e||"unknown"));}
     setDelLoading(false);
   };
 
@@ -1213,7 +1270,7 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
       });
       push("success","✅ আপডেট!",`#${qid}`);
       onSaved();
-    }catch(e){push("error","ব্যর্থ",e.message);}
+    }catch(e){push("error","Edit ব্যর্থ",String(e?.message||e||"unknown"));}
     setSaving(false);
   };
 
@@ -1311,7 +1368,7 @@ function RenameTab({push,tick}){
       // GAS renameField skipped — Firebase already updated above; GAS syncToFirebase would overwrite structure
       push("success","✅ Rename সম্পন্ন!",`"${oldName}" → "${nName}" · ${affected.length}টি`);
       setRenameTarget(null);setNewName("");
-    }catch(e){push("error","Rename ব্যর্থ",e.message);}
+    }catch(e){push("error","Rename ব্যর্থ",String(e?.message||e||"unknown error"));}
     setRenaming(false);
   };
 
