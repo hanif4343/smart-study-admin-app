@@ -5,53 +5,11 @@ const FB     = (import.meta.env.VITE_FB_DATABASE_URL||"").replace(/\/+$/,"");
 const GAS    = import.meta.env.VITE_GAS_URL;
 const IMGBB  = import.meta.env.VITE_IMGBB_API_KEY;
 const SECRET = import.meta.env.VITE_SECRET_KEY;
-const FB_API_KEY = import.meta.env.VITE_FB_API_KEY;
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
-/* ══════════ FIREBASE AUTH — Email/Password ══════════ */
-// Admin Firebase account দিয়ে sign in → proper ID token → write allowed
-let _idToken = "";
-let _tokenExpiry = 0;
-
-async function _signIn(email, password) {
-  const r = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FB_API_KEY}`,
-    {method:"POST", headers:{"Content-Type":"application/json"},
-     body: JSON.stringify({email, password, returnSecureToken:true})}
-  );
-  const data = await r.json();
-  if (!r.ok) throw new Error(data?.error?.message || "Login failed");
-  _idToken = data.idToken;
-  _tokenExpiry = Date.now() + (parseInt(data.expiresIn||3600) - 60) * 1000;
-  try{
-    sessionStorage.setItem("adm_em", email);
-    sessionStorage.setItem("adm_tk", _idToken);
-    sessionStorage.setItem("adm_ex", _tokenExpiry.toString());
-  }catch(_){}
-  return data;
-}
-
-async function _refreshIfNeeded() {
-  if (_idToken && Date.now() < _tokenExpiry) return;
-  try{
-    const t = sessionStorage.getItem("adm_tk");
-    const e = parseInt(sessionStorage.getItem("adm_ex") || "0");
-    if (t && Date.now() < e) { _idToken = t; _tokenExpiry = e; return; }
-  }catch(_){}
-  _idToken = "";
-}
-
-async function _authQ() {
-  await _refreshIfNeeded();
-  return _idToken ? `?auth=${_idToken}` : "";
-}
-
-function _logout() {
-  _idToken = "";
-  _tokenExpiry = 0;
-  try{ sessionStorage.clear(); }catch(_){}
-}
+/* ══════════ AUTH — no auth needed, rules are open ══════════ */
+function _authQ(){ return ""; }
 
 /* ══════════ FIREBASE REST ══════════ */
 async function _checkResp(r){
@@ -62,11 +20,11 @@ async function _checkResp(r){
   }
   return r.json();
 }
-const fbGet   = async p=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`);return r.json();};
-const fbPatch  = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbSet   = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbPush  = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbDelete= async p=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return _checkResp(r);};
+const fbGet   = async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`);return r.json();};
+const fbPatch  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbSet   = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbPush  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbDelete= async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return _checkResp(r);};
 
 /* ══════════ GAS helpers ══════════ */
 const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}),300);
@@ -1277,9 +1235,7 @@ function RenameTab({push,tick}){
     try{
       const oldName=renameTarget.name;
       const nName=newName.trim();
-      // Debug: verify token and URL
-      const dbgToken = await _authQ();
-      if(!dbgToken){push("error","Auth নেই","Login করুন বা Firebase token নেই");setRenaming(false);return;}
+
       const affected=allQ.filter(q=>{
         if(type==="subject")return(q.Subject||q.subject||"").trim()===oldName;
         if(type==="topic")return(q.Topic||q.topic||"").trim()===oldName||(q.Sub_topic||q.sub_topic||"").split(" > ")[0].trim()===oldName;
@@ -2002,99 +1958,12 @@ const NAV=[
   {id:"notify",   icon:"📣",label:"Notify"},
 ];
 
-/* ══════════ ERROR BOUNDARY ══════════ */
-class ErrorBoundary extends React.Component {
-  constructor(props){super(props);this.state={err:null};}
-  static getDerivedStateFromError(e){return{err:e};}
-  render(){
-    if(this.state.err){
-      return(
-        <div style={{padding:24,background:"#1a0a0a",minHeight:"100vh",color:"#ef4444"}}>
-          <div style={{fontSize:18,fontWeight:700,marginBottom:12}}>⚠️ App Error</div>
-          <div style={{fontSize:13,wordBreak:"break-all",color:"#f87171"}}>{this.state.err?.message||String(this.state.err)}</div>
-          <button onClick={()=>{_logout();window.location.reload();}}
-            style={{marginTop:20,padding:"10px 20px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:8,fontSize:15,cursor:"pointer"}}>
-            Logout ও Reload
-          </button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
-/* ══════════ LOGIN SCREEN ══════════ */
-function LoginScreen({onLogin}){
-  const[email,setEmail]=useState(()=>{try{return sessionStorage.getItem("adm_em")||"";}catch(_){return "";}});
-  const[pass,setPass]=useState("");
-  const[loading,setLoading]=useState(false);
-  const[err,setErr]=useState("");
-
-  const doLogin=async()=>{
-    if(!email.trim()||!pass.trim()){setErr("Email ও Password দিন");return;}
-    setLoading(true);setErr("");
-    try{
-      await _signIn(email.trim(),pass.trim());
-      onLogin();
-    }catch(e){
-      setErr(e.message==="INVALID_LOGIN_CREDENTIALS"?"Email বা Password ভুল":e.message);
-    }
-    setLoading(false);
-  };
-
-  return(
-    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:32,width:"100%",maxWidth:380}}>
-        <div style={{textAlign:"center",marginBottom:28}}>
-          <div style={{fontSize:40}}>🛡️</div>
-          <div style={{color:C.text,fontSize:22,fontWeight:700,marginTop:8}}>Smart Study Admin</div>
-          <div style={{color:C.muted,fontSize:13,marginTop:4}}>Admin account দিয়ে login করুন</div>
-        </div>
-        <div style={{marginBottom:14}}>
-          <div style={{color:C.muted,fontSize:12,marginBottom:6}}>Firebase Email</div>
-          <input
-            value={email} onChange={e=>setEmail(e.target.value)}
-            placeholder="admin@gmail.com"
-            style={{width:"100%",background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",color:C.text,fontSize:15,boxSizing:"border-box"}}
-          />
-        </div>
-        <div style={{marginBottom:20}}>
-          <div style={{color:C.muted,fontSize:12,marginBottom:6}}>Password</div>
-          <input
-            type="password" value={pass} onChange={e=>setPass(e.target.value)}
-            onKeyDown={e=>e.key==="Enter"&&doLogin()}
-            placeholder="••••••••"
-            style={{width:"100%",background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",color:C.text,fontSize:15,boxSizing:"border-box"}}
-          />
-        </div>
-        {err&&<div style={{background:"#3f1010",border:"1px solid #ef4444",borderRadius:8,padding:"10px 12px",color:"#ef4444",fontSize:13,marginBottom:16}}>⚠️ {err}</div>}
-        <button
-          onClick={doLogin} disabled={loading}
-          style={{width:"100%",background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"13px 0",fontSize:16,fontWeight:700,cursor:"pointer",opacity:loading?0.7:1}}
-        >{loading?"⏳ লগইন হচ্ছে...":"🔐 Login করুন"}</button>
-        <div style={{color:C.muted,fontSize:11,textAlign:"center",marginTop:16}}>Firebase Authentication — Email/Password</div>
-      </div>
-    </div>
-  );
-}
-
 export default function App(){
-  const[authed,setAuthed]=useState(()=>{
-    try{
-      const t=sessionStorage.getItem("adm_tk");
-      const e=parseInt(sessionStorage.getItem("adm_ex")||"0");
-      if(t&&Date.now()<e){_idToken=t;_tokenExpiry=e;return true;}
-    }catch(_){}
-    return false;
-  });
   const[page,setPage]=useState("dashboard");
   const[toasts,push]=useToasts();
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
   const[searchDetail,setSearchDetail]=useState(null);
-  // Login gate
-  if(!authed) return <LoginScreen onLogin={()=>setAuthed(true)} />;
-
   // Back stack: tracks navigation history for Android back button
   const backStack=useRef(["dashboard"]);
   const modalOpen=useRef(false); // any modal open?
@@ -2231,7 +2100,7 @@ export default function App(){
           <div className="topbar-sub">Smart Study Admin</div>
         </div>
         <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
-        <button className="icon-btn" title="Logout" onClick={()=>{_logout();setAuthed(false);}} style={{fontSize:18}}>🚪</button>
+
       </div>
 
       {/* Pages — always mounted but hidden to avoid re-mount flicker */}
