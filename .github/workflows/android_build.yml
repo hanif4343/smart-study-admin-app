@@ -29,7 +29,20 @@ jobs:
         run: npm run build
 
       - name: Initialize Capacitor
-        run: npx cap init "SmartAdmin" "com.smartstudy.admin" --web-dir dist
+        run: |
+          npx cap init "SmartAdmin" "com.smartstudy.admin" --web-dir dist
+          # Restore server config (cap init overwrites capacitor.config.json)
+          cat > capacitor.config.json << 'EOF'
+          {
+            "appId": "com.smartstudy.admin",
+            "appName": "Smart Admin",
+            "webDir": "dist",
+            "server": {
+              "hostname": "localhost",
+              "androidScheme": "https"
+            }
+          }
+          EOF
 
       - name: Add Android Platform
         run: npx cap add android && npx cap sync android
