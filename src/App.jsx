@@ -1,15 +1,62 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 /* ══════════ CONFIG ══════════ */
-const FB     = (import.meta.env.VITE_FB_DATABASE_URL||"").replace(/\/+$/,"");
-const GAS    = import.meta.env.VITE_GAS_URL;
-const IMGBB  = import.meta.env.VITE_IMGBB_API_KEY;
-const SECRET = import.meta.env.VITE_SECRET_KEY;
+const FB      = (import.meta.env.VITE_FB_DATABASE_URL||"").replace(/\/+$/,"");
+const FB_KEY  = import.meta.env.VITE_FB_API_KEY||"";
+const GAS     = import.meta.env.VITE_GAS_URL;
+const IMGBB   = import.meta.env.VITE_IMGBB_API_KEY;
+const SECRET  = import.meta.env.VITE_SECRET_KEY;
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
-/* ══════════ AUTH — no auth needed, rules are open ══════════ */
-function _authQ(){ return ""; }
+/* ══════════ ERROR BOUNDARY ══════════ */
+class ErrorBoundary extends React.Component {
+  constructor(p){super(p);this.state={err:null};}
+  static getDerivedStateFromError(e){return{err:e};}
+  componentDidCatch(e,info){console.error("App error:",e,info);}
+  render(){
+    if(this.state.err)return(
+      <div style={{padding:32,color:"#ef4444",fontFamily:"monospace",background:"#06080f",minHeight:"100dvh"}}>
+        <div style={{fontSize:28,marginBottom:12}}>⚠️ Error</div>
+        <div style={{fontSize:12,marginBottom:8,color:"#e2e8f0"}}>{this.state.err?.message||"Unknown error"}</div>
+        <button onClick={()=>this.setState({err:null})} style={{marginTop:16,padding:"8px 20px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:8,cursor:"pointer"}}>রিলোড করুন</button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
+/* ══════════ FIREBASE AUTH (email/password via REST) ══════════ */
+let _idToken = null;
+let _tokenExp = 0;
+
+async function signInWithEmail(email, password) {
+  const r = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FB_KEY}`,
+    {method:"POST",headers:{"Content-Type":"application/json"},
+     body:JSON.stringify({email,password,returnSecureToken:true})}
+  );
+  const d = await r.json();
+  if(!r.ok) throw new Error(d?.error?.message||"Login failed");
+  _idToken = d.idToken;
+  _tokenExp = Date.now() + (parseInt(d.expiresIn||3600)-60)*1000;
+  localStorage.setItem("fb_email", email);
+  localStorage.setItem("fb_pass_enc", btoa(password));
+  return d;
+}
+
+async function refreshTokenIfNeeded() {
+  if(_idToken && Date.now() < _tokenExp) return _idToken;
+  const email = localStorage.getItem("fb_email");
+  const passEnc = localStorage.getItem("fb_pass_enc");
+  if(email && passEnc){
+    try{ await signInWithEmail(email, atob(passEnc)); return _idToken; }
+    catch(e){ _idToken=null; return null; }
+  }
+  return null;
+}
+
+function _authQ(token){ return token ? `?auth=${token}` : ""; }
 
 /* ══════════ FIREBASE REST ══════════ */
 async function _checkResp(r){
@@ -20,11 +67,13 @@ async function _checkResp(r){
   }
   return r.json();
 }
-const fbGet   = async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`);return r.json();};
-const fbPatch  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbSet   = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbPush  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbDelete= async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return _checkResp(r);};
+const _tok=()=>refreshTokenIfNeeded();
+const fbGet   = async p=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`);return r.json();};
+const fbPatch  = async(p,d)=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbSet   = async(p,d)=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbPush  = async(p,d)=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbDelete= async p=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"DELETE"});return _checkResp(r);};
+
 
 /* ══════════ GAS helpers ══════════ */
 const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}),300);
@@ -1958,134 +2007,154 @@ const NAV=[
   {id:"notify",   icon:"📣",label:"Notify"},
 ];
 
+/* ══════════ LOGIN SCREEN ══════════ */
+function LoginScreen({onLogin}){
+  const[email,setEmail]=useState(localStorage.getItem("fb_email")||"");
+  const[pass,setPass]=useState("");
+  const[loading,setLoading]=useState(false);
+  const[err,setErr]=useState("");
+
+  // Auto-login if saved credentials exist
+  useEffect(()=>{
+    const savedEmail=localStorage.getItem("fb_email");
+    const savedPass=localStorage.getItem("fb_pass_enc");
+    if(savedEmail&&savedPass){
+      setLoading(true);
+      signInWithEmail(savedEmail,atob(savedPass))
+        .then(()=>onLogin())
+        .catch(()=>{ localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");setLoading(false); });
+    }
+  },[]);
+
+  const doLogin=async()=>{
+    if(!email||!pass){setErr("Email ও Password দিন");return;}
+    setLoading(true);setErr("");
+    try{
+      await signInWithEmail(email,pass);
+      onLogin();
+    }catch(e){setErr(e.message||"Login ব্যর্থ");setLoading(false);}
+  };
+
+  return(
+    <div style={{minHeight:"100dvh",display:"flex",alignItems:"center",justifyContent:"center",background:"#06080f",padding:24}}>
+      <div style={{width:"100%",maxWidth:360}}>
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{fontSize:42,marginBottom:8}}>📊</div>
+          <div style={{fontSize:20,fontWeight:700,color:"#e2e8f0"}}>Smart Study Admin</div>
+          <div style={{fontSize:12,color:"#4b5e7a",marginTop:4}}>Firebase অ্যাডমিন প্যানেল</div>
+        </div>
+        <div style={{background:"#0c1220",border:"1px solid #16253d",borderRadius:16,padding:20}}>
+          <div style={{marginBottom:12}}>
+            <label style={{display:"block",fontSize:10,fontWeight:700,color:"#4b5e7a",letterSpacing:".8px",marginBottom:4,textTransform:"uppercase"}}>Email</label>
+            <input
+              style={{background:"#0e1a2e",border:"1px solid #16253d",borderRadius:9,padding:"10px 12px",color:"#e2e8f0",fontFamily:"inherit",fontSize:13,width:"100%",outline:"none",boxSizing:"border-box"}}
+              type="email" placeholder="admin@example.com"
+              value={email} onChange={e=>setEmail(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&doLogin()}
+            />
+          </div>
+          <div style={{marginBottom:16}}>
+            <label style={{display:"block",fontSize:10,fontWeight:700,color:"#4b5e7a",letterSpacing:".8px",marginBottom:4,textTransform:"uppercase"}}>Password</label>
+            <input
+              style={{background:"#0e1a2e",border:"1px solid #16253d",borderRadius:9,padding:"10px 12px",color:"#e2e8f0",fontFamily:"inherit",fontSize:13,width:"100%",outline:"none",boxSizing:"border-box"}}
+              type="password" placeholder="••••••••"
+              value={pass} onChange={e=>setPass(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&doLogin()}
+            />
+          </div>
+          {err&&<div style={{background:"#ef444418",border:"1px solid #ef444430",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#ef4444",marginBottom:12,fontWeight:600}}>{err}</div>}
+          <button
+            onClick={doLogin} disabled={loading}
+            style={{width:"100%",padding:"11px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer",opacity:loading?0.6:1}}
+          >{loading?"⏳ লগইন হচ্ছে...":"🔐 লগইন করুন"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
+  const[loggedIn,setLoggedIn]=useState(false);
   const[page,setPage]=useState("dashboard");
   const[toasts,push]=useToasts();
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
   const[searchDetail,setSearchDetail]=useState(null);
-  // Back stack: tracks navigation history for Android back button
   const backStack=useRef(["dashboard"]);
-  const modalOpen=useRef(false); // any modal open?
+  const modalOpen=useRef(false);
 
-  // Called when navigating to a page
+  // Show login screen until authenticated
+  if(!loggedIn) return(
+    <ErrorBoundary>
+      <style>{css}</style>
+      <LoginScreen onLogin={()=>setLoggedIn(true)}/>
+    </ErrorBoundary>
+  );
+
   const goPage=useCallback((p)=>{
     setPage(prev=>{
-      if(prev!==p){
-        backStack.current=[...backStack.current.filter(x=>x!==p),p];
-      }
+      if(prev!==p){ backStack.current=[...backStack.current.filter(x=>x!==p),p]; }
       return p;
     });
   },[]);
 
-  // Register modal open state so back button closes modal first
-  // Used by child components via window event
   useEffect(()=>{
     const onModalOpen =()=>{ modalOpen.current=true; };
     const onModalClose=()=>{ modalOpen.current=false; };
     window.addEventListener("modal-open", onModalOpen);
     window.addEventListener("modal-close",onModalClose);
-    return()=>{
-      window.removeEventListener("modal-open", onModalOpen);
-      window.removeEventListener("modal-close",onModalClose);
-    };
+    return()=>{ window.removeEventListener("modal-open",onModalOpen); window.removeEventListener("modal-close",onModalClose); };
   },[]);
 
-  // Android hardware back button
   useEffect(()=>{
     const handleBack=(e)=>{
       if(e&&e.preventDefault) e.preventDefault();
-
-      // If search detail open → close it
-      if(searchDetail){
-        setSearchDetail(null);
-        return;
-      }
-
-      // If any modal open → close it via event
-      if(modalOpen.current){
-        window.dispatchEvent(new Event("back-press"));
-        return;
-      }
-
-      // If not on dashboard → go back in stack
+      if(searchDetail){ setSearchDetail(null); return; }
+      if(modalOpen.current){ window.dispatchEvent(new Event("back-press")); return; }
       if(page!=="dashboard"){
         const stack=backStack.current;
-        if(stack.length>1){
-          const newStack=stack.slice(0,-1);
-          backStack.current=newStack;
-          setPage(newStack[newStack.length-1]);
-        } else {
-          setPage("dashboard");
-          backStack.current=["dashboard"];
-        }
+        if(stack.length>1){ const ns=stack.slice(0,-1);backStack.current=ns;setPage(ns[ns.length-1]); }
+        else { setPage("dashboard");backStack.current=["dashboard"]; }
         return;
       }
-
-      // On dashboard → minimize app (Android behavior)
-      if(window.Capacitor?.Plugins?.App){
-        window.Capacitor.Plugins.App.minimizeApp();
-      } else {
-        // Fallback: history back or do nothing (don't close)
-        if(window.history.length>1) window.history.back();
-      }
+      if(window.Capacitor?.Plugins?.App) window.Capacitor.Plugins.App.minimizeApp();
+      else if(window.history.length>1) window.history.back();
     };
-
-    // Capacitor fires 'backbutton' on document
-    document.addEventListener("backbutton", handleBack, false);
-    return()=>document.removeEventListener("backbutton", handleBack, false);
+    document.addEventListener("backbutton",handleBack,false);
+    return()=>document.removeEventListener("backbutton",handleBack,false);
   },[page,searchDetail]);
 
   const refresh=useCallback(()=>{
-    setSpin(true);
-    invalidateAll();
-    setTick(t=>t+1);
+    setSpin(true);invalidateAll();setTick(t=>t+1);
     setTimeout(()=>setSpin(false),1400);
   },[]);
 
-  // Auto-refresh every 2 minutes
-  useEffect(()=>{
-    const id=setInterval(()=>setTick(t=>t+1),120_000);
-    return()=>clearInterval(id);
-  },[]);
+  useEffect(()=>{ const id=setInterval(()=>setTick(t=>t+1),120_000);return()=>clearInterval(id); },[]);
 
-  // ── Capacitor Push Notification click → সঠিক page এ navigate ──
   useEffect(()=>{
-    // PushNotifications plugin (Capacitor)
     const cap=window.Capacitor;
     if(!cap?.Plugins?.PushNotifications) return;
-
     const handler=(event)=>{
       try{
         const data=event?.notification?.data||event?.data||{};
         const url=data.url||data.url_key||"";
-        const pageMap={
-          techniques   : "techniques",
-          reports      : "reports",
-          signups      : "signups",
-          students     : "students",
-          dashboard    : "dashboard",
-          notify       : "notify",
-          content      : "content",
-        };
+        const pageMap={techniques:"techniques",reports:"reports",signups:"signups",students:"students",dashboard:"dashboard",notify:"notify",content:"content"};
         const target=pageMap[url]||pageMap[data.type?.replace("admin_","")]||null;
         if(target) goPage(target);
       } catch(e){ console.warn("Push nav error",e); }
     };
-
-    // Capacitor v5 event style
     cap.Plugins.PushNotifications.addListener("pushNotificationActionPerformed", handler);
-    return()=>{
-      try{ cap.Plugins.PushNotifications.removeAllListeners(); }catch(e){}
-    };
+    return()=>{ try{ cap.Plugins.PushNotifications.removeAllListeners(); }catch(e){} };
   },[goPage]);
 
   if(searchDetail)return(
-    <>
+    <ErrorBoundary>
+      <>
       <style>{css}</style>
       <StudentDetail user={searchDetail} onBack={()=>setSearchDetail(null)} push={push}/>
       <Toasts t={toasts}/>
-    </>
+      </>
+    </ErrorBoundary>
   );
 
   const pageLabel=NAV.find(n=>n.id===page);
@@ -2099,11 +2168,12 @@ export default function App(){
           <div className="topbar-title">{pageLabel?.icon} {pageLabel?.label}</div>
           <div className="topbar-sub">Smart Study Admin</div>
         </div>
-        <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
-
+        <div style={{display:"flex",gap:6}}>
+          <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
+          <button className="icon-btn" title="Logout" onClick={()=>{localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");_idToken=null;setLoggedIn(false);}}>🚪</button>
+        </div>
       </div>
 
-      {/* Pages — always mounted but hidden to avoid re-mount flicker */}
       <div style={{display:page==="dashboard"?"block":"none"}}><DashboardPage push={push} tick={tick}/></div>
       <div style={{display:page==="signups"  ?"block":"none"}}><SignupsPage   push={push} tick={tick}/></div>
       <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} tick={tick}/></div>
