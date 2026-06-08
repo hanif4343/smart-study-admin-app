@@ -1246,20 +1246,19 @@ function RenameTab({push,tick}){
         return(q.Sub_topic||q.sub_topic||"").trim()===oldName;
       });
 
-      // Batch update — chunks of 50 to avoid request size issues
-      const CHUNK=50;
-      for(let i=0;i<affected.length;i+=CHUNK){
-        const updates={};
-        affected.slice(i,i+CHUNK).forEach(q=>{
-          const fkey=q._fbKey;if(!fkey)return;
-          if(type==="subject"){updates[`${sheet}/${fkey}/Subject`]=nName;}
-          else if(type==="topic"){
-            updates[`${sheet}/${fkey}/Topic`]=nName;
-            const st=q.Sub_topic||q.sub_topic||"";
-            if(st.includes(" > ")){const parts=st.split(" > ");if(parts[0].trim()===oldName)updates[`${sheet}/${fkey}/Sub_topic`]=`${nName} > ${parts.slice(1).join(" > ")}`;}
-          } else {updates[`${sheet}/${fkey}/Sub_topic`]=nName;}
-        });
-        if(Object.keys(updates).length>0)await fbPatch("",updates);
+      // Per-item PATCH — Firebase REST does not support slash-key multi-path
+      for(const q of affected){
+        const fkey=q._fbKey;if(!fkey)continue;
+        if(type==="subject"){
+          await fbPatch(`${sheet}/${fkey}`,{Subject:nName});
+        } else if(type==="topic"){
+          const patch={Topic:nName};
+          const st=q.Sub_topic||q.sub_topic||"";
+          if(st.includes(" > ")){const parts=st.split(" > ");if(parts[0].trim()===oldName)patch.Sub_topic=`${nName} > ${parts.slice(1).join(" > ")}`;}
+          await fbPatch(`${sheet}/${fkey}`,patch);
+        } else {
+          await fbPatch(`${sheet}/${fkey}`,{Sub_topic:nName});
+        }
       }
       invalidate(sheet);
 
@@ -1380,19 +1379,12 @@ function AudienceTagRenameTab({push,tick}){
         });
         if(affected.length===0)continue;
 
-        // Batch update — chunks of 50
-        const CHUNK=50;
-        for(let i=0;i<affected.length;i+=CHUNK){
-          const updates={};
-          affected.slice(i,i+CHUNK).forEach(q=>{
-            const fkey=q._fbKey;
-            if(!fkey)return;
-            // Detect field name used in this record
-            const fieldKey=q.AudienceTags!=null?"AudienceTags":q.audienceTags!=null?"audienceTags":"audience_tags";
-            updates[`${sheet}/${fkey}/${fieldKey}`]=nTag;
-          });
-          if(Object.keys(updates).length>0)await fbPatch("",updates);
-          totalUpdated+=affected.slice(i,i+CHUNK).length;
+        // Per-item PATCH — Firebase REST does not support slash-key multi-path
+        for(const q of affected){
+          const fkey=q._fbKey;if(!fkey)continue;
+          const fieldKey=q.AudienceTags!=null?"AudienceTags":q.audienceTags!=null?"audienceTags":"audience_tags";
+          await fbPatch(`${sheet}/${fkey}`,{[fieldKey]:nTag});
+          totalUpdated++;
         }
 
         // Also invalidate the sheet cache
@@ -1554,11 +1546,9 @@ function DeleteTab({push,tick}){
     setDelLoading(true);
     try{
       const[groupName,qs]=delTarget;
-      const CHUNK=50;
-      for(let i=0;i<qs.length;i+=CHUNK){
-        const updates={};
-        qs.slice(i,i+CHUNK).forEach(q=>{if(q._fbKey)updates[`${sheet}/${q._fbKey}`]=null;});
-        if(Object.keys(updates).length>0)await fbPatch("",updates);
+      // Delete per item — Firebase REST root PATCH with slash-key does not work
+      for(const q of qs){
+        if(q._fbKey) await fbDelete(`${sheet}/${q._fbKey}`);
       }
       invalidate(sheet);
       // GAS deleteByIds — all question IDs comma-separated
