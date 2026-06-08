@@ -13,6 +13,12 @@ jobs:
         with:
           node-version: 20
 
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
       - name: Install Dependencies
         run: npm install
 
@@ -25,36 +31,30 @@ jobs:
           VITE_GAS_URL:         ${{ secrets.VITE_GAS_URL }}
           VITE_IMGBB_API_KEY:   ${{ secrets.VITE_IMGBB_API_KEY }}
           VITE_SECRET_KEY:      ${{ secrets.VITE_SECRET_KEY }}
-          VITE_FB_DB_SECRET: ${{ secrets.VITE_FB_DB_SECRET }}
+          VITE_FB_DB_SECRET:    ${{ secrets.VITE_FB_DB_SECRET }}
         run: npm run build
 
       - name: Initialize Capacitor
         run: |
           npx cap init "SmartAdmin" "com.smartstudy.admin" --web-dir dist
-          # Restore server config (cap init overwrites capacitor.config.json)
-          cat > capacitor.config.json << 'EOF'
-          {
-            "appId": "com.smartstudy.admin",
-            "appName": "Smart Admin",
-            "webDir": "dist",
-            "server": {
-              "hostname": "localhost",
-              "androidScheme": "https"
-            }
-          }
-          EOF
+          # cap init overwrites capacitor.config.json — restore server block
+          printf '{\n  "appId": "com.smartstudy.admin",\n  "appName": "Smart Admin",\n  "webDir": "dist",\n  "server": {\n    "hostname": "localhost",\n    "androidScheme": "https"\n  }\n}\n' > capacitor.config.json
 
       - name: Add Android Platform
         run: npx cap add android && npx cap sync android
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - name: Cache Gradle
+        uses: actions/cache@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
       - name: Decode Keystore
-        run: |
-          echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
+
       - name: Build Android Release APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
@@ -68,6 +68,7 @@ jobs:
             -Pandroid.injected.signing.store.password=$KEYSTORE_PASSWORD \
             -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
             -Pandroid.injected.signing.key.password=$KEY_PASSWORD
+
       - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
