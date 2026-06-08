@@ -2074,7 +2074,10 @@ function LoginScreen({onLogin}){
 }
 
 export default function App(){
-  const[loggedIn,setLoggedIn]=useState(false);
+  const[loggedIn,setLoggedIn]=useState(()=>{
+    // Check if we have saved credentials — will auto-login in LoginScreen
+    return false;
+  });
   const[page,setPage]=useState("dashboard");
   const[toasts,push]=useToasts();
   const[tick,setTick]=useState(0);
@@ -2083,14 +2086,7 @@ export default function App(){
   const backStack=useRef(["dashboard"]);
   const modalOpen=useRef(false);
 
-  // Show login screen until authenticated
-  if(!loggedIn) return(
-    <ErrorBoundary>
-      <style>{css}</style>
-      <LoginScreen onLogin={()=>setLoggedIn(true)}/>
-    </ErrorBoundary>
-  );
-
+  // ALL hooks must be called unconditionally (Rules of Hooks)
   const goPage=useCallback((p)=>{
     setPage(prev=>{
       if(prev!==p){ backStack.current=[...backStack.current.filter(x=>x!==p),p]; }
@@ -2099,14 +2095,16 @@ export default function App(){
   },[]);
 
   useEffect(()=>{
+    if(!loggedIn) return;
     const onModalOpen =()=>{ modalOpen.current=true; };
     const onModalClose=()=>{ modalOpen.current=false; };
     window.addEventListener("modal-open", onModalOpen);
     window.addEventListener("modal-close",onModalClose);
     return()=>{ window.removeEventListener("modal-open",onModalOpen); window.removeEventListener("modal-close",onModalClose); };
-  },[]);
+  },[loggedIn]);
 
   useEffect(()=>{
+    if(!loggedIn) return;
     const handleBack=(e)=>{
       if(e&&e.preventDefault) e.preventDefault();
       if(searchDetail){ setSearchDetail(null); return; }
@@ -2122,16 +2120,21 @@ export default function App(){
     };
     document.addEventListener("backbutton",handleBack,false);
     return()=>document.removeEventListener("backbutton",handleBack,false);
-  },[page,searchDetail]);
+  },[loggedIn,page,searchDetail]);
 
   const refresh=useCallback(()=>{
     setSpin(true);invalidateAll();setTick(t=>t+1);
     setTimeout(()=>setSpin(false),1400);
   },[]);
 
-  useEffect(()=>{ const id=setInterval(()=>setTick(t=>t+1),120_000);return()=>clearInterval(id); },[]);
+  useEffect(()=>{
+    if(!loggedIn) return;
+    const id=setInterval(()=>setTick(t=>t+1),120_000);
+    return()=>clearInterval(id);
+  },[loggedIn]);
 
   useEffect(()=>{
+    if(!loggedIn) return;
     const cap=window.Capacitor;
     if(!cap?.Plugins?.PushNotifications) return;
     const handler=(event)=>{
@@ -2145,7 +2148,15 @@ export default function App(){
     };
     cap.Plugins.PushNotifications.addListener("pushNotificationActionPerformed", handler);
     return()=>{ try{ cap.Plugins.PushNotifications.removeAllListeners(); }catch(e){} };
-  },[goPage]);
+  },[loggedIn,goPage]);
+
+  // ── Render ──
+  if(!loggedIn) return(
+    <ErrorBoundary>
+      <style>{css}</style>
+      <LoginScreen onLogin={()=>setLoggedIn(true)}/>
+    </ErrorBoundary>
+  );
 
   if(searchDetail)return(
     <ErrorBoundary>
