@@ -1,51 +1,27 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { initializeApp }        from "firebase/app";
-import { getAuth, signInAnonymously } from "firebase/auth";
 
 /* ══════════ CONFIG ══════════ */
 const FB     = import.meta.env.VITE_FB_DATABASE_URL;
 const GAS    = import.meta.env.VITE_GAS_URL;
 const IMGBB  = import.meta.env.VITE_IMGBB_API_KEY;
 const SECRET = import.meta.env.VITE_SECRET_KEY;
+const DB_SECRET = import.meta.env.VITE_FB_DB_SECRET;
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
-/* ══════════ FIREBASE AUTH TOKEN ══════════ */
-// Anonymous sign-in → ID Token দিয়ে secure REST call
-const _fbApp  = initializeApp({
-  apiKey:      import.meta.env.VITE_FB_API_KEY,
-  authDomain:  import.meta.env.VITE_FB_AUTH_DOMAIN,
-  databaseURL: import.meta.env.VITE_FB_DATABASE_URL,
-  projectId:   import.meta.env.VITE_FB_PROJECT_ID,
-});
-const _auth = getAuth(_fbApp);
-
-// App load এ anonymous sign-in
-signInAnonymously(_auth).catch(e=>console.warn("FB anon sign-in:",e));
-
-// Current valid token নাও (auto-refresh করে)
-async function _getToken(){
-  const user = _auth.currentUser;
-  if(!user){
-    // Not yet signed in — wait briefly then retry
-    await signInAnonymously(_auth);
-    await new Promise(r=>setTimeout(r,1000));
-  }
-  const t = await (_auth.currentUser?.getIdToken(false));
-  return t||"";
-}
-
-async function _authQ(){
-  const t=await _getToken();
-  return t?`?auth=${t}`:"";
+/* ══════════ FIREBASE AUTH — DB Secret ══════════ */
+// Anonymous auth এর বদলে Database Secret use করি
+// এটা সব read/write এ কাজ করে, domain restriction নেই
+function _authQ(){
+  return DB_SECRET ? `?auth=${DB_SECRET}` : "";
 }
 
 /* ══════════ FIREBASE REST ══════════ */
-const fbGet   = async p=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`);return r.json();};
-const fbPatch  = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbSet   = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbPush  = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
-const fbDelete= async p=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return r.json();};
+const fbGet   = async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`);return r.json();};
+const fbPatch  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbSet   = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbPush  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbDelete= async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return r.json();};
 
 /* ══════════ GAS helpers ══════════ */
 const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}),300);
