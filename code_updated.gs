@@ -61,8 +61,17 @@ function getFCMTokenByPhone(phone) {
     var cfg = getProps();
     var dbSecret = PropertiesService.getScriptProperties().getProperty("FIREBASE_DB_SECRET") || cfg.SECRET_KEY;
     var safePhone = phone.toString().trim().replace(/[.#$\[\]\s]/g,'_');
-    var resp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"FCMTokens/"+safePhone+".json?auth="+dbSecret,{muteHttpExceptions:true});
-    var data = JSON.parse(resp.getContentText());
+    // Try users/{phone}/fcmToken first (actual path in Firebase)
+    var resp1 = UrlFetchApp.fetch(cfg.FIREBASE_URL+"users/"+safePhone+"/fcmToken.json?auth="+dbSecret,{muteHttpExceptions:true});
+    var t1 = JSON.parse(resp1.getContentText());
+    if(t1 && typeof t1==="string" && t1.length>10) return t1;
+    // Also try Users/{phone}/fcmToken (capital U)
+    var resp2 = UrlFetchApp.fetch(cfg.FIREBASE_URL+"Users/"+safePhone+"/fcmToken.json?auth="+dbSecret,{muteHttpExceptions:true});
+    var t2 = JSON.parse(resp2.getContentText());
+    if(t2 && typeof t2==="string" && t2.length>10) return t2;
+    // Fallback: old FCMTokens path
+    var resp3 = UrlFetchApp.fetch(cfg.FIREBASE_URL+"FCMTokens/"+safePhone+".json?auth="+dbSecret,{muteHttpExceptions:true});
+    var data = JSON.parse(resp3.getContentText());
     return (data&&data.token) ? data.token : null;
   } catch(e) { return null; }
 }
@@ -77,14 +86,31 @@ function sendFCMToAll(title, body, extraData) {
   try {
     var cfg = getProps();
     var dbSecret = PropertiesService.getScriptProperties().getProperty("FIREBASE_DB_SECRET") || cfg.SECRET_KEY;
-    var resp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"FCMTokens.json?auth="+dbSecret,{muteHttpExceptions:true});
-    var tokens = JSON.parse(resp.getContentText());
-    if (!tokens||typeof tokens!=='object') return {error:"No tokens"};
     var sent=0, failed=0;
-    Object.keys(tokens).forEach(function(phone){
-      var token = tokens[phone]&&tokens[phone].token;
-      if(token){ var r=sendFCMToToken(token,title,body,extraData||{}); if(r.error)failed++;else sent++; Utilities.sleep(100); }
-    });
+    // Read from users path (where fcmToken is stored)
+    var resp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"users.json?auth="+dbSecret,{muteHttpExceptions:true});
+    var users = JSON.parse(resp.getContentText());
+    if(users && typeof users==='object'){
+      Object.keys(users).forEach(function(phone){
+        var token = users[phone] && users[phone].fcmToken;
+        if(token && typeof token==="string" && token.length>10){
+          var r=sendFCMToToken(token,title,body,extraData||{});
+          if(r.error)failed++;else sent++;
+          Utilities.sleep(80);
+        }
+      });
+    }
+    // Also try old FCMTokens path as fallback
+    if(sent===0){
+      var resp2 = UrlFetchApp.fetch(cfg.FIREBASE_URL+"FCMTokens.json?auth="+dbSecret,{muteHttpExceptions:true});
+      var tokens = JSON.parse(resp2.getContentText());
+      if(tokens && typeof tokens==='object'){
+        Object.keys(tokens).forEach(function(phone){
+          var token = tokens[phone]&&tokens[phone].token;
+          if(token){ var r=sendFCMToToken(token,title,body,extraData||{}); if(r.error)failed++;else sent++; Utilities.sleep(80); }
+        });
+      }
+    }
     return {sent:sent,failed:failed};
   } catch(e) { return {error:e.toString()}; }
 }
