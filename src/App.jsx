@@ -5,15 +5,51 @@ const FB     = import.meta.env.VITE_FB_DATABASE_URL;
 const GAS    = import.meta.env.VITE_GAS_URL;
 const IMGBB  = import.meta.env.VITE_IMGBB_API_KEY;
 const SECRET = import.meta.env.VITE_SECRET_KEY;
-const DB_SECRET = import.meta.env.VITE_FB_DB_SECRET;
+const FB_API_KEY = import.meta.env.VITE_FB_API_KEY;
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
-/* ══════════ FIREBASE AUTH — DB Secret ══════════ */
-// Anonymous auth এর বদলে Database Secret use করি
-// এটা সব read/write এ কাজ করে, domain restriction নেই
-function _authQ(){
-  return DB_SECRET ? `?auth=${DB_SECRET}` : "";
+/* ══════════ FIREBASE AUTH — Email/Password ══════════ */
+// Admin Firebase account দিয়ে sign in → proper ID token → write allowed
+let _idToken = "";
+let _tokenExpiry = 0;
+
+async function _signIn(email, password) {
+  const r = await fetch(
+    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FB_API_KEY}`,
+    {method:"POST", headers:{"Content-Type":"application/json"},
+     body: JSON.stringify({email, password, returnSecureToken:true})}
+  );
+  const data = await r.json();
+  if (!r.ok) throw new Error(data?.error?.message || "Login failed");
+  _idToken = data.idToken;
+  _tokenExpiry = Date.now() + (parseInt(data.expiresIn||3600) - 60) * 1000;
+  localStorage.setItem("admin_email", email);
+  localStorage.setItem("admin_token", _idToken);
+  localStorage.setItem("admin_token_expiry", _tokenExpiry.toString());
+  return data;
+}
+
+async function _refreshIfNeeded() {
+  if (_idToken && Date.now() < _tokenExpiry) return;
+  // Try from localStorage
+  const t = localStorage.getItem("admin_token");
+  const e = parseInt(localStorage.getItem("admin_token_expiry") || "0");
+  if (t && Date.now() < e) { _idToken = t; _tokenExpiry = e; return; }
+  _idToken = "";
+}
+
+async function _authQ() {
+  await _refreshIfNeeded();
+  return _idToken ? `?auth=${_idToken}` : "";
+}
+
+function _logout() {
+  _idToken = "";
+  _tokenExpiry = 0;
+  localStorage.removeItem("admin_token");
+  localStorage.removeItem("admin_token_expiry");
+  localStorage.removeItem("admin_email");
 }
 
 /* ══════════ FIREBASE REST ══════════ */
@@ -1962,12 +1998,77 @@ const NAV=[
   {id:"notify",   icon:"📣",label:"Notify"},
 ];
 
+/* ══════════ LOGIN SCREEN ══════════ */
+function LoginScreen({onLogin}){
+  const[email,setEmail]=useState(localStorage.getItem("admin_email")||"");
+  const[pass,setPass]=useState("");
+  const[loading,setLoading]=useState(false);
+  const[err,setErr]=useState("");
+
+  const doLogin=async()=>{
+    if(!email.trim()||!pass.trim()){setErr("Email ও Password দিন");return;}
+    setLoading(true);setErr("");
+    try{
+      await _signIn(email.trim(),pass.trim());
+      onLogin();
+    }catch(e){
+      setErr(e.message==="INVALID_LOGIN_CREDENTIALS"?"Email বা Password ভুল":e.message);
+    }
+    setLoading(false);
+  };
+
+  return(
+    <div style={{minHeight:"100vh",background:C.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,padding:32,width:"100%",maxWidth:380}}>
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{fontSize:40}}>🛡️</div>
+          <div style={{color:C.text,fontSize:22,fontWeight:700,marginTop:8}}>Smart Study Admin</div>
+          <div style={{color:C.muted,fontSize:13,marginTop:4}}>Admin account দিয়ে login করুন</div>
+        </div>
+        <div style={{marginBottom:14}}>
+          <div style={{color:C.muted,fontSize:12,marginBottom:6}}>Firebase Email</div>
+          <input
+            value={email} onChange={e=>setEmail(e.target.value)}
+            placeholder="admin@gmail.com"
+            style={{width:"100%",background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",color:C.text,fontSize:15,boxSizing:"border-box"}}
+          />
+        </div>
+        <div style={{marginBottom:20}}>
+          <div style={{color:C.muted,fontSize:12,marginBottom:6}}>Password</div>
+          <input
+            type="password" value={pass} onChange={e=>setPass(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&doLogin()}
+            placeholder="••••••••"
+            style={{width:"100%",background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",color:C.text,fontSize:15,boxSizing:"border-box"}}
+          />
+        </div>
+        {err&&<div style={{background:"#3f1010",border:"1px solid #ef4444",borderRadius:8,padding:"10px 12px",color:"#ef4444",fontSize:13,marginBottom:16}}>⚠️ {err}</div>}
+        <button
+          onClick={doLogin} disabled={loading}
+          style={{width:"100%",background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"13px 0",fontSize:16,fontWeight:700,cursor:"pointer",opacity:loading?0.7:1}}
+        >{loading?"⏳ লগইন হচ্ছে...":"🔐 Login করুন"}</button>
+        <div style={{color:C.muted,fontSize:11,textAlign:"center",marginTop:16}}>Firebase Authentication — Email/Password</div>
+      </div>
+    </div>
+  );
+}
+
 export default function App(){
+  const[authed,setAuthed]=useState(()=>{
+    // Check if we have a valid token in localStorage
+    const t=localStorage.getItem("admin_token");
+    const e=parseInt(localStorage.getItem("admin_token_expiry")||"0");
+    if(t&&Date.now()<e){_idToken=t;_tokenExpiry=e;return true;}
+    return false;
+  });
   const[page,setPage]=useState("dashboard");
   const[toasts,push]=useToasts();
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
   const[searchDetail,setSearchDetail]=useState(null);
+  // Login gate
+  if(!authed) return <LoginScreen onLogin={()=>setAuthed(true)} />;
+
   // Back stack: tracks navigation history for Android back button
   const backStack=useRef(["dashboard"]);
   const modalOpen=useRef(false); // any modal open?
@@ -2103,6 +2204,7 @@ export default function App(){
           <div className="topbar-sub">Smart Study Admin</div>
         </div>
         <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
+        <button className="icon-btn" title="Logout" onClick={()=>{_logout();setAuthed(false);}} style={{fontSize:18}}>🚪</button>
       </div>
 
       {/* Pages — always mounted but hidden to avoid re-mount flicker */}
