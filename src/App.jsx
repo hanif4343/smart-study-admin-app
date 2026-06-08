@@ -91,26 +91,43 @@ function _authQ(token){ return token ? `?auth=${token}` : ""; }
 
 /* ══════════ FIREBASE REST ══════════ */
 async function _checkResp(r){
+  const txt = await r.text();
   if(!r.ok){
     let msg=`HTTP ${r.status}`;
     try{
-      const j=await r.json();
-      // Firebase error: {error: "Permission denied"} or {error: {message:"..."}}
+      const j=JSON.parse(txt);
       if(j?.error){
         msg = typeof j.error==="string" ? j.error : (j.error?.message||JSON.stringify(j.error));
       }
     }catch(_){}
-    console.error("Firebase error:",msg,"path call failed");
+    console.error("Firebase write error:",r.status, msg, r.url);
     throw new Error(msg);
   }
-  return r.json();
+  try{ return JSON.parse(txt); }catch(_){ return txt; }
 }
 const _tok=()=>refreshTokenIfNeeded();
 const fbGet   = async p=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`);return r.json();};
-const fbPatch  = async(p,d)=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbSet   = async(p,d)=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbPatch  = async(p,d)=>{
+  const t=await _tok();
+  if(!t){throw new Error("Not authenticated — please re-login");}
+  if(!p||p.includes("/undefined")||p.includes("/null")){throw new Error("Invalid path: "+p);}
+  const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
+  return _checkResp(r);
+};
+const fbSet   = async(p,d)=>{
+  const t=await _tok();
+  if(!t){throw new Error("Not authenticated — please re-login");}
+  const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
+  return _checkResp(r);
+};
 const fbPush  = async(p,d)=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbDelete= async p=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"DELETE"});return _checkResp(r);};
+const fbDelete= async p=>{
+  const t=await _tok();
+  if(!t){throw new Error("Not authenticated — please re-login");}
+  if(!p||p.includes("/undefined")||p.includes("/null")){throw new Error("Invalid path: "+p);}
+  const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"DELETE"});
+  return _checkResp(r);
+};
 
 
 /* ══════════ GAS helpers ══════════ */
@@ -214,8 +231,12 @@ const timeAgo=ts=>{
 };
 const toArr=raw=>{
   if(!raw)return[];
-  if(Array.isArray(raw))return raw.filter(Boolean);
-  return Object.entries(raw).map(([k,v])=>v?{...v,_fbKey:k}:null).filter(Boolean);
+  // IMPORTANT: never treat as plain array — Firebase numeric keys lose _fbKey
+  // Convert array to indexed object so _fbKey is always set
+  if(Array.isArray(raw)){
+    return raw.map((v,i)=>v&&typeof v==="object"?{...v,_fbKey:String(i)}:null).filter(Boolean);
+  }
+  return Object.entries(raw).map(([k,v])=>v&&typeof v==="object"?{...v,_fbKey:k}:null).filter(Boolean);
 };
 const phoneKey=ph=>(ph||"").replace(/^'+/,"").trim().replace(/[.#$\[\]\s]/g,"_");
 const matchPhone=(key,phone)=>{
