@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 /* ══════════ CONFIG ══════════ */
-const FB     = import.meta.env.VITE_FB_DATABASE_URL;
+const FB     = (import.meta.env.VITE_FB_DATABASE_URL||"").replace(/\/+$/,"");
 const GAS    = import.meta.env.VITE_GAS_URL;
 const IMGBB  = import.meta.env.VITE_IMGBB_API_KEY;
 const SECRET = import.meta.env.VITE_SECRET_KEY;
@@ -24,18 +24,21 @@ async function _signIn(email, password) {
   if (!r.ok) throw new Error(data?.error?.message || "Login failed");
   _idToken = data.idToken;
   _tokenExpiry = Date.now() + (parseInt(data.expiresIn||3600) - 60) * 1000;
-  localStorage.setItem("admin_email", email);
-  localStorage.setItem("admin_token", _idToken);
-  localStorage.setItem("admin_token_expiry", _tokenExpiry.toString());
+  try{
+    sessionStorage.setItem("adm_em", email);
+    sessionStorage.setItem("adm_tk", _idToken);
+    sessionStorage.setItem("adm_ex", _tokenExpiry.toString());
+  }catch(_){}
   return data;
 }
 
 async function _refreshIfNeeded() {
   if (_idToken && Date.now() < _tokenExpiry) return;
-  // Try from localStorage
-  const t = localStorage.getItem("admin_token");
-  const e = parseInt(localStorage.getItem("admin_token_expiry") || "0");
-  if (t && Date.now() < e) { _idToken = t; _tokenExpiry = e; return; }
+  try{
+    const t = sessionStorage.getItem("adm_tk");
+    const e = parseInt(sessionStorage.getItem("adm_ex") || "0");
+    if (t && Date.now() < e) { _idToken = t; _tokenExpiry = e; return; }
+  }catch(_){}
   _idToken = "";
 }
 
@@ -47,9 +50,7 @@ async function _authQ() {
 function _logout() {
   _idToken = "";
   _tokenExpiry = 0;
-  localStorage.removeItem("admin_token");
-  localStorage.removeItem("admin_token_expiry");
-  localStorage.removeItem("admin_email");
+  try{ sessionStorage.clear(); }catch(_){}
 }
 
 /* ══════════ FIREBASE REST ══════════ */
@@ -1276,6 +1277,9 @@ function RenameTab({push,tick}){
     try{
       const oldName=renameTarget.name;
       const nName=newName.trim();
+      // Debug: verify token and URL
+      const dbgToken = await _authQ();
+      if(!dbgToken){push("error","Auth নেই","Login করুন বা Firebase token নেই");setRenaming(false);return;}
       const affected=allQ.filter(q=>{
         if(type==="subject")return(q.Subject||q.subject||"").trim()===oldName;
         if(type==="topic")return(q.Topic||q.topic||"").trim()===oldName||(q.Sub_topic||q.sub_topic||"").split(" > ")[0].trim()===oldName;
@@ -2021,7 +2025,7 @@ class ErrorBoundary extends React.Component {
 
 /* ══════════ LOGIN SCREEN ══════════ */
 function LoginScreen({onLogin}){
-  const[email,setEmail]=useState(localStorage.getItem("admin_email")||"");
+  const[email,setEmail]=useState(()=>{try{return sessionStorage.getItem("adm_em")||"";}catch(_){return "";}});
   const[pass,setPass]=useState("");
   const[loading,setLoading]=useState(false);
   const[err,setErr]=useState("");
@@ -2076,10 +2080,11 @@ function LoginScreen({onLogin}){
 
 export default function App(){
   const[authed,setAuthed]=useState(()=>{
-    // Check if we have a valid token in localStorage
-    const t=localStorage.getItem("admin_token");
-    const e=parseInt(localStorage.getItem("admin_token_expiry")||"0");
-    if(t&&Date.now()<e){_idToken=t;_tokenExpiry=e;return true;}
+    try{
+      const t=sessionStorage.getItem("adm_tk");
+      const e=parseInt(sessionStorage.getItem("adm_ex")||"0");
+      if(t&&Date.now()<e){_idToken=t;_tokenExpiry=e;return true;}
+    }catch(_){}
     return false;
   });
   const[page,setPage]=useState("dashboard");
