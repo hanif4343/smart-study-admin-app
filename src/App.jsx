@@ -3,6 +3,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 /* ══════════ CONFIG ══════════ */
 const FB      = (import.meta.env.VITE_FB_DATABASE_URL||"").replace(/\/+$/,"");
 const FB_KEY  = import.meta.env.VITE_FB_API_KEY||"";
+const FB_PROJ  = import.meta.env.VITE_FB_PROJECT_ID||"";
 const GAS     = import.meta.env.VITE_GAS_URL;
 const IMGBB   = import.meta.env.VITE_IMGBB_API_KEY;
 const SECRET  = import.meta.env.VITE_SECRET_KEY;
@@ -1097,7 +1098,7 @@ function BrowseTab({push,tick}){
       const fkey=delTarget._fbKey;
       const qid=(delTarget.ID||delTarget.id||"").toString();
       if(fkey){await fbDelete(`${sheet}/${fkey}`);invalidate(sheet);}
-      gasBg({action:"deleteByIds",sheet,ids:encodeURIComponent(qid)});
+      // gasBg deleteByIds skipped — Firebase already deleted above
       push("success","🗑️ ডিলিট!",`#${qid}`);
       setDelTarget(null);
     }catch(e){push("error","ডিলিট ব্যর্থ",e.message);}
@@ -1307,9 +1308,7 @@ function RenameTab({push,tick}){
       }
       invalidate(sheet);
 
-      // GAS renameField: field=subject/topic/sub_topic, oldVal, newVal
-      const gasField = type==="subject"?"subject":type==="topic"?"topic":"sub_topic";
-      gasBg({action:"renameField",sheet,field:gasField,oldVal:encodeURIComponent(oldName),newVal:encodeURIComponent(nName)});
+      // GAS renameField skipped — Firebase already updated above; GAS syncToFirebase would overwrite structure
       push("success","✅ Rename সম্পন্ন!",`"${oldName}" → "${nName}" · ${affected.length}টি`);
       setRenameTarget(null);setNewName("");
     }catch(e){push("error","Rename ব্যর্থ",e.message);}
@@ -1596,9 +1595,7 @@ function DeleteTab({push,tick}){
         if(q._fbKey) await fbDelete(`${sheet}/${q._fbKey}`);
       }
       invalidate(sheet);
-      // GAS deleteByIds — all question IDs comma-separated
-      const allIds=qs.map(q=>(q.ID||q.id||"").toString()).filter(Boolean).join(",");
-      if(allIds) gasBg({action:"deleteByIds",sheet,ids:encodeURIComponent(allIds)});
+      // gasBg deleteByIds skipped — Firebase already deleted above
       push("success","🗑️ Bulk Delete!",`"${groupName}" · ${qs.length}টি মুছে গেছে`);
       setDelTarget(null);
     }catch(e){push("error","Delete ব্যর্থ",e.message);}
@@ -1723,12 +1720,16 @@ function NotifyPage({push}){
         if(!phK)return Promise.resolve();
         return fbSet(`Notifications/${phK}/${notifKey}`,{type:"broadcast",title,body,time:ts,read:false});
       }));
+      // FCM: GAS এ পাঠাও (GAS নিজে FCMTokens থেকে পড়ে পাঠাবে)
+      let fcmSent=0;
       try{
-        const r=await gasCall({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)});
-        push("success","📣 পাঠানো হয়েছে!",`${active.length}জন · FCM: ${r?.fcm?.sent||0}জন`);
-      }catch{
-        push("success","✅ পাঠানো হয়েছে",`${active.length} জন`);
-      }
+        const r=await Promise.race([
+          gasCall({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)}),
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),10000))
+        ]);
+        fcmSent=r?.fcm?.sent||0;
+      }catch(_){}
+      push("success","📣 পাঠানো হয়েছে!",`Notification: ${active.length}জন · FCM: ${fcmSent}জন`);
       setHist(p=>[{title,body,time:ts,count:active.length},...p.slice(0,9)]);
       setTitle("");setBody("");
     }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
@@ -1768,13 +1769,15 @@ function NotifyModal({user,onClose,push,inline}){
       const phone=(user.Phone||user.phone||"").toString();
       const phK=phoneKey(phone);
       await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"personal",title,body,time:nowTs(),read:false});
+      let fcmOk=false;
       try{
-        await Promise.race([
-          fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(title),body:encodeURIComponent(body)})),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("t")),6000))
+        const fr=await Promise.race([
+          gasCall({action:"personalNotify",phone,title:encodeURIComponent(title),body:encodeURIComponent(body)}),
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000))
         ]);
+        fcmOk=!fr?.fcm?.error;
       }catch(_){}
-      push("success","✅ পাঠানো হয়েছে",nm);
+      push("success","✅ পাঠানো হয়েছে",(fcmOk?"📲 FCM ✓ ":"📲 FCM ✗ ")+nm);
       if(!inline)onClose();
     }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
     setSending(false);
