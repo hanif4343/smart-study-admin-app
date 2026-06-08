@@ -61,11 +61,11 @@ async function _checkResp(r){
   }
   return r.json();
 }
-const fbGet   = async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`);return r.json();};
-const fbPatch  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbSet   = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbPush  = async(p,d)=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbDelete= async p=>{const a=_authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return _checkResp(r);};
+const fbGet   = async p=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`);return r.json();};
+const fbPatch  = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbSet   = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbPush  = async(p,d)=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbDelete= async p=>{const a=await _authQ();const r=await fetch(`${FB}/${p}.json${a}`,{method:"DELETE"});return _checkResp(r);};
 
 /* ══════════ GAS helpers ══════════ */
 const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}),300);
@@ -1998,6 +1998,27 @@ const NAV=[
   {id:"notify",   icon:"📣",label:"Notify"},
 ];
 
+/* ══════════ ERROR BOUNDARY ══════════ */
+class ErrorBoundary extends React.Component {
+  constructor(props){super(props);this.state={err:null};}
+  static getDerivedStateFromError(e){return{err:e};}
+  render(){
+    if(this.state.err){
+      return(
+        <div style={{padding:24,background:"#1a0a0a",minHeight:"100vh",color:"#ef4444"}}>
+          <div style={{fontSize:18,fontWeight:700,marginBottom:12}}>⚠️ App Error</div>
+          <div style={{fontSize:13,wordBreak:"break-all",color:"#f87171"}}>{this.state.err?.message||String(this.state.err)}</div>
+          <button onClick={()=>{_logout();window.location.reload();}}
+            style={{marginTop:20,padding:"10px 20px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:8,fontSize:15,cursor:"pointer"}}>
+            Logout ও Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 /* ══════════ LOGIN SCREEN ══════════ */
 function LoginScreen({onLogin}){
   const[email,setEmail]=useState(localStorage.getItem("admin_email")||"");
@@ -2196,7 +2217,8 @@ export default function App(){
   const pageLabel=NAV.find(n=>n.id===page);
 
   return(
-    <>
+    <ErrorBoundary>
+      <>
       <style>{css}</style>
       <div className="topbar">
         <div>
@@ -2227,5 +2249,6 @@ export default function App(){
       </nav>
       <Toasts t={toasts}/>
     </>
+    </ErrorBoundary>
   );
 }
