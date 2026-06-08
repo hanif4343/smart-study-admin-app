@@ -22,6 +22,7 @@ function getProps() {
     PRIVATE_KEY:      p.getProperty("PRIVATE_KEY")      || "",
     GEMINI_API_KEY:   p.getProperty("GEMINI_API_KEY")   || "",
     ADMIN_PHONE:      p.getProperty("ADMIN_PHONE")      || "",
+    FIREBASE_DB_SECRET: p.getProperty("FIREBASE_DB_SECRET") || "",
   };
 }
 
@@ -58,8 +59,9 @@ function sendFCMToToken(fcmToken, title, body, data) {
 function getFCMTokenByPhone(phone) {
   try {
     var cfg = getProps();
+    var dbSecret = PropertiesService.getScriptProperties().getProperty("FIREBASE_DB_SECRET") || cfg.SECRET_KEY;
     var safePhone = phone.toString().trim().replace(/[.#$\[\]\s]/g,'_');
-    var resp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"FCMTokens/"+safePhone+".json?auth="+cfg.SECRET_KEY,{muteHttpExceptions:true});
+    var resp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"FCMTokens/"+safePhone+".json?auth="+dbSecret,{muteHttpExceptions:true});
     var data = JSON.parse(resp.getContentText());
     return (data&&data.token) ? data.token : null;
   } catch(e) { return null; }
@@ -74,7 +76,8 @@ function sendFCMToPhone(phone, title, body, extraData) {
 function sendFCMToAll(title, body, extraData) {
   try {
     var cfg = getProps();
-    var resp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"FCMTokens.json?auth="+cfg.SECRET_KEY,{muteHttpExceptions:true});
+    var dbSecret = PropertiesService.getScriptProperties().getProperty("FIREBASE_DB_SECRET") || cfg.SECRET_KEY;
+    var resp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"FCMTokens.json?auth="+dbSecret,{muteHttpExceptions:true});
     var tokens = JSON.parse(resp.getContentText());
     if (!tokens||typeof tokens!=='object') return {error:"No tokens"};
     var sent=0, failed=0;
@@ -297,8 +300,7 @@ function doGet(e) {
         }
       }
     }
-    // Sync to Firebase
-    try{syncToFirebase(shName,shName);}catch(_){}
+    // Firebase already updated directly from app - DO NOT sync (would overwrite with array)
     return json({result:"success",count:count,field:field,old:oldV,new:newV});
   }
 
@@ -320,8 +322,7 @@ function doGet(e) {
       var rowId=idIdx>=0?d4[i4][idIdx].toString():"";
       if(ids.indexOf(rowId)>=0){sh4.deleteRow(i4+1);deleted++;}
     }
-    // Sync to Firebase after bulk delete
-    try{syncToFirebase(shName2,shName2);}catch(_){}
+    // Firebase already updated directly from app - DO NOT sync (would overwrite with array)
     return json({result:"success",deleted:deleted,sheet:shName2});
   }
 
