@@ -1129,6 +1129,8 @@ function BulkUploaderPage({push}){
   const[tagInput,setTagInput]=useState("");
   const[subjects,setSubjects]=useState([]);
   const[validStats,setValidStats]=useState(null);
+  const[validDetail,setValidDetail]=useState(null); // detail modal data
+  const[showDetail,setShowDetail]=useState(false);
   const[running,setRunning]=useState(false);
   const[stopped,setStopped]=useState(false);
   const[progress,setProgress]=useState({done:0,total:0,sent:0,failed:0});
@@ -1145,66 +1147,85 @@ function BulkUploaderPage({push}){
     }).catch(()=>{});
   },[mode]);
 
-  /* Parse & validate bulk text */
-  const parseLine=(entry)=>{
-    const tr=entry.trim();
-    if(!tr||tr.startsWith("#"))return{skip:true};
-
-    const currentQtype=mode==="Study"?"Study":qtype;
-
-    if(currentQtype==="Study"){
-      // {} ভেতরে: প্রশ্ন ; উত্তর (multiline উত্তর সম্ভব)
-      const si=tr.indexOf(";");
-      if(si===-1)return{err:true,reason:"Study: ; দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
-      const q=tr.substring(0,si).trim();
-      const ans=tr.substring(si+1).trim();
-      if(!q||!ans)return{err:true,reason:"Study: প্রশ্ন বা উত্তর খালি"};
-      return{ok:true,q,correct:ans,explanation:""};
-    } else if(currentQtype==="Written"){
-      // {} ভেতরে: প্রশ্ন ; উত্তর ; ব্যাখ্যা(optional) — উত্তর multiline হতে পারে
-      const si=tr.indexOf(";");
-      if(si===-1)return{err:true,reason:"Written: ; দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
-      const q=tr.substring(0,si).trim();
-      const rest=tr.substring(si+1);
-      const si2=rest.indexOf(";");
-      const ans=si2===-1?rest.trim():rest.substring(0,si2).trim();
-      const exp=si2===-1?"":rest.substring(si2+1).trim();
-      if(!q||!ans)return{err:true,reason:"Written: প্রশ্ন বা উত্তর খালি"};
-      return{ok:true,q,correct:ans,explanation:exp};
-    } else {
-      // MCQ: প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; ব্যাখ্যা(optional)
-      // {} ভেতরে সব একই entry — newline থাকলেও একটাই row
-      const flat=tr.replace(/\n/g," "); // multiline হলেও flatten
-      const parts=flat.split(";").map(p=>p.trim());
-      if(parts.length<6)return{err:true,reason:`MCQ: ${parts.length} কলাম পাওয়া গেছে (দরকার ৬+)`};
-      return{ok:true,q:parts[0],opt1:parts[1],opt2:parts[2],opt3:parts[3],opt4:parts[4],correct:parts[5],explanation:parts[6]||""};
-    }
-  };
-
-  // {} bracket দিয়ে ঘেরা প্রতিটি block = একটি entry (সব mode এ)
-  // fallback: প্রতিটি লাইন = একটি entry
+  /* ── Parse helpers — explicit qtype/mode params এড়াতে pure functions ── */
   const getEntries=(raw)=>{
     const entries=[];
     const re=/\{([\s\S]+?)\}/g;
     let m;
-    while((m=re.exec(raw))!==null){
-      const e=m[1].trim();
-      if(e)entries.push(e);
-    }
+    while((m=re.exec(raw))!==null){const e=m[1].trim();if(e)entries.push(e);}
     if(entries.length>0)return entries;
-    // fallback — লাইন বাই লাইন (পুরাতন format সাপোর্ট)
     return raw.split("\n").map(s=>s.trim()).filter(Boolean);
   };
 
-  const validate=(text,overrideMode)=>{
-    if(!text.trim()){setValidStats(null);return;}
-    let total=0,ok=0,skip=0,err=0;
-    getEntries(text).forEach(l=>{total++;const r=parseLine(l);if(r.skip)skip++;else if(r.err)err++;else ok++;});
-    setValidStats({total,ok,skip,err});
+  // effectiveType: "Study" | "Written" | "MCQ"  — caller বলে দেয়
+  const parseEntry=(entry, effectiveType)=>{
+    const tr=entry.trim();
+    if(!tr||tr.startsWith("#"))return{skip:true};
+
+    if(effectiveType==="Study"){
+      const si=tr.indexOf(";");
+      if(si===-1)return{err:true,reason:"Study: প্রথম ';' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
+      const q=tr.substring(0,si).trim();
+      const ans=tr.substring(si+1).trim();
+      if(!q)return{err:true,reason:"Study: প্রশ্ন খালি"};
+      if(!ans)return{err:true,reason:"Study: উত্তর খালি"};
+      return{ok:true,q,correct:ans,explanation:""};
+
+    } else if(effectiveType==="Written"){
+      // প্রশ্ন ; উত্তর(multiline ok) ; ব্যাখ্যা(optional)
+      const si=tr.indexOf(";");
+      if(si===-1)return{err:true,reason:"Written: ';' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
+      const q=tr.substring(0,si).trim();
+      const rest=tr.substring(si+1);
+      // ব্যাখ্যা optional — শেষ ';' এর পরে থাকলে নেব
+      const lastSemi=rest.lastIndexOf(";");
+      let ans,exp;
+      // যদি rest-এ আরো ';' থাকে সেটাকে explanation ধরি
+      if(lastSemi>0){
+        ans=rest.substring(0,lastSemi).trim();
+        exp=rest.substring(lastSemi+1).trim();
+      } else {
+        ans=rest.trim();exp="";
+      }
+      if(!q)return{err:true,reason:"Written: প্রশ্ন খালি"};
+      if(!ans)return{err:true,reason:"Written: উত্তর খালি"};
+      return{ok:true,q,correct:ans,explanation:exp};
+
+    } else {
+      // MCQ — {} ভেতরে newline থাকলেও flatten করে parse
+      const flat=tr.replace(/\r?\n/g," ").replace(/\s+/g," ");
+      const parts=flat.split(";").map(p=>p.trim());
+      if(parts.length<6)return{err:true,reason:`MCQ: ${parts.length}টি কলাম পেয়েছি, দরকার কমপক্ষে ৬টি (প্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;উত্তর)`};
+      if(!parts[0])return{err:true,reason:"MCQ: প্রশ্ন খালি"};
+      if(!parts[5])return{err:true,reason:"MCQ: সঠিক উত্তর খালি"};
+      return{ok:true,q:parts[0],opt1:parts[1],opt2:parts[2],opt3:parts[3],opt4:parts[4],correct:parts[5],explanation:parts[6]||""};
+    }
   };
 
-  const handleText=(v)=>{setBulkText(v);validate(v);};
-  const handleQtype=(v)=>{setQtype(v);setTimeout(()=>validate(bulkText),0);};
+  // current state থেকে effectiveType বের করে
+  const getEffectiveType=(m,qt)=> m==="Study"?"Study":qt;
+
+  const parseLine=(entry)=>parseEntry(entry, getEffectiveType(mode,qtype));
+
+  /* Validate — detail list সহ */
+  const runValidate=(text,m,qt)=>{
+    if(!text.trim()){setValidStats(null);setValidDetail(null);return;}
+    const eff=getEffectiveType(m,qt);
+    const entries=getEntries(text);
+    const rows=entries.map((e,i)=>{
+      const r=parseEntry(e,eff);
+      return{idx:i+1, entry:e, ...r};
+    });
+    const ok=rows.filter(r=>r.ok).length;
+    const skip=rows.filter(r=>r.skip).length;
+    const err=rows.filter(r=>r.err).length;
+    setValidStats({total:rows.length,ok,skip,err});
+    setValidDetail(rows);
+  };
+
+  const handleText=(v)=>{setBulkText(v);runValidate(v,mode,qtype);};
+  const handleQtype=(v)=>{setQtype(v);runValidate(bulkText,mode,v);};
+  const handleMode=(v)=>{setMode(v);runValidate(bulkText,v,qtype);};
 
   /* Audience tag helpers */
   const addTag=()=>{
@@ -1266,8 +1287,9 @@ function BulkUploaderPage({push}){
   const startUpload=async()=>{
     if(!subject.trim()){push("warn","⚠️ Subject লিখুন","");return;}
     if(!bulkText.trim()){push("warn","⚠️ প্রশ্ন লিখুন","");return;}
-    const entries=getEntries(bulkText).map(l=>parseLine(l)).filter(r=>r.ok);
-    if(!entries.length){push("warn","⚠️ কোনো valid প্রশ্ন নেই","");return;}
+    const eff=getEffectiveType(mode,qtype);
+    const entries=getEntries(bulkText).map(l=>parseEntry(l,eff)).filter(r=>r.ok);
+    if(!entries.length){push("warn","⚠️ কোনো valid প্রশ্ন নেই — Validation chips-এ ক্লিক করে দেখুন","");return;}
 
     setRunning(true);setDone(false);setStopped(false);
     stopRef.current=false;
@@ -1321,7 +1343,7 @@ function BulkUploaderPage({push}){
       {/* Target Sheet */}
       <div style={{display:"flex",gap:6,marginBottom:12}}>
         {["Quiz","QBank","Study"].map(m=>(
-          <button key={m} className={`ftab${mode===m?" on":""}`} onClick={()=>setMode(m)} style={{flex:1}}>{m}</button>
+          <button key={m} className={`ftab${mode===m?" on":""}`} onClick={()=>handleMode(m)} style={{flex:1}}>{m}</button>
         ))}
       </div>
 
@@ -1379,17 +1401,69 @@ function BulkUploaderPage({push}){
         <div><span style={{color:"#818cf8",fontWeight:700}}>Study →</span> {"{"} প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২... {"}"}</div>
       </div>
 
-      {/* Validation Stats */}
+      {/* Validation Stats — clickable */}
       {validStats&&(
         <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
           {[
-            {label:`Total: ${validStats.total}`,color:"#475569",bg:"#1e293b"},
-            {label:`✔ Valid: ${validStats.ok}`,color:"#10b981",bg:"#052e16"},
-            {label:`Skip: ${validStats.skip}`,color:"#d97706",bg:"#1c1004"},
-            {label:`✗ Wrong: ${validStats.err}`,color:"#ef4444",bg:"#1f0a0a"},
+            {label:`Total: ${validStats.total}`,color:"#94a3b8",bg:"#1e293b",filter:"all"},
+            {label:`✔ Valid: ${validStats.ok}`,color:"#10b981",bg:"#052e16",filter:"ok"},
+            {label:`Skip: ${validStats.skip}`,color:"#d97706",bg:"#1c1004",filter:"skip"},
+            {label:`✗ Wrong: ${validStats.err}`,color:"#ef4444",bg:"#1f0a0a",filter:"err"},
           ].map(x=>(
-            <span key={x.label} style={{fontSize:11,fontWeight:800,padding:"3px 12px",borderRadius:20,color:x.color,background:x.bg}}>{x.label}</span>
+            <span key={x.label} onClick={()=>{setShowDetail(x.filter);}} style={{fontSize:11,fontWeight:800,padding:"4px 12px",borderRadius:20,color:x.color,background:x.bg,cursor:"pointer",border:`1px solid ${x.color}44`}}>{x.label} 👁</span>
           ))}
+        </div>
+      )}
+
+      {/* Validation Detail Modal */}
+      {showDetail&&validDetail&&(
+        <div style={{position:"fixed",inset:0,background:"#000000cc",zIndex:300,display:"flex",flexDirection:"column"}} onClick={()=>setShowDetail(false)}>
+          <div style={{background:C.bg,marginTop:"auto",borderRadius:"18px 18px 0 0",maxHeight:"80vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
+            {/* Modal Header */}
+            <div style={{padding:"14px 16px 10px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
+              <div style={{fontWeight:900,fontSize:14,color:C.text}}>
+                {showDetail==="all"?"📋 সব এন্ট্রি":showDetail==="ok"?"✅ Valid এন্ট্রি":showDetail==="err"?"❌ Error এন্ট্রি":"⏭ Skip এন্ট্রি"}
+              </div>
+              <button onClick={()=>setShowDetail(false)} style={{background:"transparent",border:"none",color:C.muted,fontSize:18,cursor:"pointer"}}>✕</button>
+            </div>
+            {/* Modal Body */}
+            <div style={{overflowY:"auto",padding:"10px 14px",flex:1}}>
+              {validDetail
+                .filter(r=>showDetail==="all"||r[showDetail])
+                .map((r,i)=>(
+                  <div key={i} style={{
+                    background:r.ok?"#052e16":r.err?"#1f0a0a":r.skip?"#1c1004":C.panel,
+                    border:`1px solid ${r.ok?"#10b98133":r.err?"#ef444433":"#d9770633"}`,
+                    borderRadius:10,padding:"8px 12px",marginBottom:8
+                  }}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                      <span style={{fontSize:10,fontWeight:800,color:C.muted}}>#{r.idx}</span>
+                      <span style={{fontSize:10,fontWeight:800,
+                        color:r.ok?"#10b981":r.err?"#ef4444":"#d97706",
+                        background:r.ok?"#10b98122":r.err?"#ef444422":"#d9770622",
+                        padding:"1px 8px",borderRadius:10
+                      }}>
+                        {r.ok?"✔ VALID":r.err?"✗ ERROR":"⏭ SKIP"}
+                      </span>
+                    </div>
+                    {r.err&&<div style={{fontSize:11,color:"#ef4444",fontWeight:700,marginBottom:4}}>⚠ {r.reason}</div>}
+                    <div style={{fontSize:11,color:C.muted,lineHeight:1.5,
+                      maxHeight:80,overflowY:"auto",
+                      whiteSpace:"pre-wrap",wordBreak:"break-word"
+                    }}>
+                      {r.entry?r.entry.substring(0,200)+(r.entry.length>200?"...":""):"(খালি)"}
+                    </div>
+                    {r.ok&&<div style={{fontSize:10,color:"#10b981",marginTop:4}}>
+                      ❓ {(r.q||"").substring(0,60)}{r.q?.length>60?"...":""}
+                    </div>}
+                  </div>
+                ))
+              }
+              {validDetail.filter(r=>showDetail==="all"||r[showDetail]).length===0&&(
+                <div style={{textAlign:"center",color:C.muted,padding:24,fontSize:13}}>কোনো এন্ট্রি নেই</div>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
