@@ -1118,6 +1118,335 @@ function EntryPage({push}){
   );
 }
 
+/* ══════════ BULK UPLOADER PAGE ══════════ */
+function BulkUploaderPage({push}){
+  const[mode,setMode]=useState("Quiz");
+  const[qtype,setQtype]=useState("MCQ");
+  const[subject,setSubject]=useState("");
+  const[subtopic,setSubtopic]=useState("");
+  const[bulkText,setBulkText]=useState("");
+  const[audienceTags,setAudienceTags]=useState([]);
+  const[tagInput,setTagInput]=useState("");
+  const[subjects,setSubjects]=useState([]);
+  const[validStats,setValidStats]=useState(null);
+  const[running,setRunning]=useState(false);
+  const[stopped,setStopped]=useState(false);
+  const[progress,setProgress]=useState({done:0,total:0,sent:0,failed:0});
+  const[log,setLog]=useState([]);
+  const[done,setDone]=useState(false);
+  const stopRef=useRef(false);
+
+  /* Load subjects for autocomplete */
+  useEffect(()=>{
+    loadPath(mode).then(raw=>{
+      const arr=toArr(raw);
+      const subs=[...new Set(arr.map(q=>q.subject||q.Subject||"").filter(Boolean))];
+      setSubjects(subs);
+    }).catch(()=>{});
+  },[mode]);
+
+  /* Parse & validate bulk text */
+  const parseLine=(entry)=>{
+    const tr=entry.trim();
+    if(!tr||tr.startsWith("#"))return{skip:true};
+
+    const currentQtype=mode==="Study"?"Study":qtype;
+
+    if(currentQtype==="Study"){
+      // {} ভেতরে: প্রশ্ন ; উত্তর (multiline উত্তর সম্ভব)
+      const si=tr.indexOf(";");
+      if(si===-1)return{err:true,reason:"Study: ; দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
+      const q=tr.substring(0,si).trim();
+      const ans=tr.substring(si+1).trim();
+      if(!q||!ans)return{err:true,reason:"Study: প্রশ্ন বা উত্তর খালি"};
+      return{ok:true,q,correct:ans,explanation:""};
+    } else if(currentQtype==="Written"){
+      // {} ভেতরে: প্রশ্ন ; উত্তর ; ব্যাখ্যা(optional) — উত্তর multiline হতে পারে
+      const si=tr.indexOf(";");
+      if(si===-1)return{err:true,reason:"Written: ; দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
+      const q=tr.substring(0,si).trim();
+      const rest=tr.substring(si+1);
+      const si2=rest.indexOf(";");
+      const ans=si2===-1?rest.trim():rest.substring(0,si2).trim();
+      const exp=si2===-1?"":rest.substring(si2+1).trim();
+      if(!q||!ans)return{err:true,reason:"Written: প্রশ্ন বা উত্তর খালি"};
+      return{ok:true,q,correct:ans,explanation:exp};
+    } else {
+      // MCQ: প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; ব্যাখ্যা(optional)
+      // {} ভেতরে সব একই entry — newline থাকলেও একটাই row
+      const flat=tr.replace(/\n/g," "); // multiline হলেও flatten
+      const parts=flat.split(";").map(p=>p.trim());
+      if(parts.length<6)return{err:true,reason:`MCQ: ${parts.length} কলাম পাওয়া গেছে (দরকার ৬+)`};
+      return{ok:true,q:parts[0],opt1:parts[1],opt2:parts[2],opt3:parts[3],opt4:parts[4],correct:parts[5],explanation:parts[6]||""};
+    }
+  };
+
+  // {} bracket দিয়ে ঘেরা প্রতিটি block = একটি entry (সব mode এ)
+  // fallback: প্রতিটি লাইন = একটি entry
+  const getEntries=(raw)=>{
+    const entries=[];
+    const re=/\{([\s\S]+?)\}/g;
+    let m;
+    while((m=re.exec(raw))!==null){
+      const e=m[1].trim();
+      if(e)entries.push(e);
+    }
+    if(entries.length>0)return entries;
+    // fallback — লাইন বাই লাইন (পুরাতন format সাপোর্ট)
+    return raw.split("\n").map(s=>s.trim()).filter(Boolean);
+  };
+
+  const validate=(text,overrideMode)=>{
+    if(!text.trim()){setValidStats(null);return;}
+    let total=0,ok=0,skip=0,err=0;
+    getEntries(text).forEach(l=>{total++;const r=parseLine(l);if(r.skip)skip++;else if(r.err)err++;else ok++;});
+    setValidStats({total,ok,skip,err});
+  };
+
+  const handleText=(v)=>{setBulkText(v);validate(v);};
+  const handleQtype=(v)=>{setQtype(v);setTimeout(()=>validate(bulkText),0);};
+
+  /* Audience tag helpers */
+  const addTag=()=>{
+    const t=tagInput.trim();
+    if(t&&!audienceTags.includes(t)){setAudienceTags(p=>[...p,t]);}
+    setTagInput("");
+  };
+  const removeTag=(t)=>setAudienceTags(p=>p.filter(x=>x!==t));
+  const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1st"];
+
+  /* Build Firebase record — same as admin EntryPage pattern */
+  const buildRec=(item,ts,id)=>{
+    const tagStr=audienceTags.join(",");
+    const isStudy=mode==="Study";
+    const isWritten=qtype==="Written";
+    if(mode==="Quiz"){
+      return{
+        id,question:item.q,
+        option1:isStudy||isWritten?"":item.opt1||"",
+        option2:isStudy||isWritten?"":item.opt2||"",
+        option3:isStudy||isWritten?"":item.opt3||"",
+        option4:isStudy||isWritten?"":item.opt4||"",
+        correct:item.correct||"",
+        subject,sub_topic:subtopic||subject,
+        explanation:item.explanation||"",
+        "Question Type":isWritten?"Written":"MCQ",
+        AudienceTags:tagStr,
+        Timestamp:ts,
+        technique:"",Previous_Exam:"",
+      };
+    }
+    if(mode==="QBank"){
+      return{
+        id,question:item.q,
+        option1:isWritten?"":item.opt1||"",
+        option2:isWritten?"":item.opt2||"",
+        option3:isWritten?"":item.opt3||"",
+        option4:isWritten?"":item.opt4||"",
+        correct:item.correct||"",
+        subject,sub_topic:subtopic||subject,topic:"",
+        explanation:item.explanation||"",
+        "Question Type":isWritten?"Written":"MCQ",
+        AudienceTags:tagStr,
+        Timestamp:ts,technique:"",
+      };
+    }
+    /* Study */
+    return{
+      id,question:item.q,correct:item.correct||"",
+      subject,sub_topic:subtopic||subject,
+      explanation:item.explanation||"",
+      "Question Type":"Study",
+      AudienceTags:tagStr,
+      Timestamp:ts,technique:"",
+    };
+  };
+
+  /* Main upload */
+  const startUpload=async()=>{
+    if(!subject.trim()){push("warn","⚠️ Subject লিখুন","");return;}
+    if(!bulkText.trim()){push("warn","⚠️ প্রশ্ন লিখুন","");return;}
+    const entries=getEntries(bulkText).map(l=>parseLine(l)).filter(r=>r.ok);
+    if(!entries.length){push("warn","⚠️ কোনো valid প্রশ্ন নেই","");return;}
+
+    setRunning(true);setDone(false);setStopped(false);
+    stopRef.current=false;
+    setLog([]);
+    setProgress({done:0,total:entries.length,sent:0,failed:0});
+    const addLog=(msg,type)=>setLog(p=>[...p.slice(-99),{msg,type,id:Date.now()+Math.random()}]);
+
+    let sent=0,failed=0;
+    const BATCH=8;
+    for(let i=0;i<entries.length;i+=BATCH){
+      if(stopRef.current){addLog("⛔ বন্ধ করা হয়েছে","err");break;}
+      const batch=entries.slice(i,i+BATCH);
+      await Promise.all(batch.map(async(item)=>{
+        const ts=nowTs();
+        const id=Date.now()+Math.floor(Math.random()*9999);
+        const rec=buildRec(item,ts,id);
+        try{
+          const res=await fbPush(mode,rec);
+          /* Set id field to the firebase push key — same as entry app */
+          if(res?.name){
+            await fbSet(`${mode}/${res.name}/id`,res.name);
+          }
+          gasPost({targetTab:mode,question:item.q,opt1:item.opt1||"",opt2:item.opt2||"",opt3:item.opt3||"",opt4:item.opt4||"",correct:item.correct||"",subject,sub_topic:subtopic||subject,explanation:item.explanation||"",technique:"",qType:qtype,timestamp:ts});
+          invalidate(mode);
+          sent++;
+          addLog(`✔ ${(item.q||"").substring(0,55)}...`,"ok");
+        }catch(e){
+          failed++;
+          addLog(`✗ ব্যর্থ: ${(item.q||"").substring(0,45)}... [${e.message}]`,"err");
+        }
+        setProgress(p=>({...p,done:p.done+1,sent,failed}));
+      }));
+    }
+    setRunning(false);setDone(true);
+    if(sent>0)push("success",`✅ ${sent}টি সফলভাবে যোগ হয়েছে!`,`${mode} — ${subject}`);
+    if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"আবার চেষ্টা করুন");
+  };
+
+  const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setSubtopic("");};
+
+  const pct=progress.total?Math.round(progress.done/progress.total*100):0;
+
+  return(
+    <div className="page">
+      {/* Header */}
+      <div style={{background:`linear-gradient(135deg,${C.accent},#7c3aed)`,borderRadius:14,padding:"14px 16px",marginBottom:16,color:"#fff"}}>
+        <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>⚡ বাল্ক প্রশ্ন আপলোড</div>
+        <div style={{fontSize:11,opacity:.8}}>একসাথে একাধিক প্রশ্ন Firebase-এ যোগ করুন</div>
+      </div>
+
+      {/* Target Sheet */}
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        {["Quiz","QBank","Study"].map(m=>(
+          <button key={m} className={`ftab${mode===m?" on":""}`} onClick={()=>setMode(m)} style={{flex:1}}>{m}</button>
+        ))}
+      </div>
+
+      {/* Question Type */}
+      {mode!=="Study"&&(
+        <div style={{display:"flex",gap:6,marginBottom:12}}>
+          {["MCQ","Written"].map(t=>(
+            <button key={t} className={`tp2${qtype===t?" on":""}`} onClick={()=>handleQtype(t)}>{t}</button>
+          ))}
+        </div>
+      )}
+
+      {/* Audience Tags */}
+      <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12}}>
+        <div style={{fontSize:10,fontWeight:800,color:C.muted,letterSpacing:".7px",marginBottom:7,textTransform:"uppercase"}}>🏷 Audience Tags</div>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:7}}>
+          {QUICK_TAGS.map(t=>(
+            <button key={t} onClick={()=>{if(!audienceTags.includes(t))setAudienceTags(p=>[...p,t]);}}
+              style={{fontSize:10,padding:"3px 9px",borderRadius:20,border:`1px solid ${audienceTags.includes(t)?C.accent:C.border}`,background:audienceTags.includes(t)?C.accent+"22":"transparent",color:audienceTags.includes(t)?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>{t}</button>
+          ))}
+        </div>
+        {audienceTags.length>0&&(
+          <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:7}}>
+            {audienceTags.map(t=>(
+              <span key={t} style={{fontSize:11,padding:"2px 9px",borderRadius:20,background:C.accent,color:"#fff",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+                {t}<span onClick={()=>removeTag(t)} style={{cursor:"pointer",opacity:.8,marginLeft:2}}>×</span>
+              </span>
+            ))}
+          </div>
+        )}
+        <div style={{display:"flex",gap:6}}>
+          <input className="inp" style={{flex:1,marginBottom:0}} value={tagInput} onChange={e=>setTagInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addTag();}}} placeholder="Tag লিখুন..."/>
+          <button className="btn bp" style={{padding:"0 14px",fontSize:13}} onClick={addTag}>+</button>
+        </div>
+      </div>
+
+      {/* Subject & Subtopic */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+        <div className="fld" style={{marginBottom:0}}>
+          <label>📚 Subject</label>
+          <input className="inp" list="bulk-sl" value={subject} onChange={e=>setSubject(e.target.value)} placeholder="Subject..."/>
+          <datalist id="bulk-sl">{subjects.map((s,i)=><option key={i} value={s}/>)}</datalist>
+        </div>
+        <div className="fld" style={{marginBottom:0}}>
+          <label>📌 Sub-Topic</label>
+          <input className="inp" value={subtopic} onChange={e=>setSubtopic(e.target.value)} placeholder="Sub topic..."/>
+        </div>
+      </div>
+
+      {/* Format Guide */}
+      <div style={{background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:10,fontSize:11,color:C.muted,lineHeight:1.7}}>
+        <div style={{fontWeight:800,color:C.text,marginBottom:4}}>📋 ফরম্যাট (প্রতি লাইন = একটি প্রশ্ন):</div>
+        <div><span style={{color:"#10b981",fontWeight:700}}>MCQ →</span> প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; ব্যাখ্যা(optional)</div>
+        <div><span style={{color:"#f59e0b",fontWeight:700}}>Written →</span> প্রশ্ন ; উত্তর ; ব্যাখ্যা(optional)</div>
+        <div><span style={{color:"#818cf8",fontWeight:700}}>Study →</span> {"{"} প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২... {"}"}</div>
+      </div>
+
+      {/* Validation Stats */}
+      {validStats&&(
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+          {[
+            {label:`Total: ${validStats.total}`,color:"#475569",bg:"#1e293b"},
+            {label:`✔ Valid: ${validStats.ok}`,color:"#10b981",bg:"#052e16"},
+            {label:`Skip: ${validStats.skip}`,color:"#d97706",bg:"#1c1004"},
+            {label:`✗ Wrong: ${validStats.err}`,color:"#ef4444",bg:"#1f0a0a"},
+          ].map(x=>(
+            <span key={x.label} style={{fontSize:11,fontWeight:800,padding:"3px 12px",borderRadius:20,color:x.color,background:x.bg}}>{x.label}</span>
+          ))}
+        </div>
+      )}
+
+      {/* Bulk Textarea */}
+      <div className="fld">
+        <label>প্রশ্নগুলো লিখুন / পেস্ট করুন</label>
+        <textarea className="ta" style={{minHeight:160,fontFamily:"monospace",fontSize:12}} value={bulkText}
+          onChange={e=>handleText(e.target.value)}
+          placeholder={mode==="Study"
+            ?"{ প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২ }\n{ পরের প্রশ্ন ; উত্তর }"
+            :qtype==="Written"
+            ?"{ প্রশ্ন ; উত্তর ; ব্যাখ্যা }\n{ পরের প্রশ্ন ; উত্তর }"
+            :"{ প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; ব্যাখ্যা }\n{ প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর }"}
+        />
+      </div>
+
+      {/* Progress Bar */}
+      {(running||done)&&(
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:6}}>
+            <span style={{color:C.text,fontWeight:700}}>{done?"✅ সম্পন্ন!":"⏳ আপলোড হচ্ছে..."}</span>
+            <span style={{color:C.accent,fontWeight:900}}>{pct}% ({progress.done}/{progress.total})</span>
+          </div>
+          <div style={{background:C.border,borderRadius:999,height:8,overflow:"hidden",marginBottom:8}}>
+            <div style={{height:"100%",width:`${pct}%`,background:"linear-gradient(90deg,#6366f1,#3b82f6,#10b981)",borderRadius:999,transition:"width .25s ease"}}/>
+          </div>
+          <div style={{display:"flex",gap:12,fontSize:11}}>
+            <span style={{color:"#10b981",fontWeight:700}}>✔ {progress.sent} সফল</span>
+            {progress.failed>0&&<span style={{color:"#ef4444",fontWeight:700}}>✗ {progress.failed} ব্যর্থ</span>}
+          </div>
+          {/* Log */}
+          {log.length>0&&(
+            <div style={{maxHeight:110,overflowY:"auto",marginTop:8,fontSize:10,lineHeight:1.7,background:"#060c18",borderRadius:8,padding:"6px 10px"}}>
+              {log.map(l=>(
+                <div key={l.id} style={{color:l.type==="ok"?"#10b981":l.type==="err"?"#ef4444":"#d97706"}}>{l.msg}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Action Buttons */}
+      <div style={{display:"flex",gap:8,marginTop:4}}>
+        <button className="btn bp bb" style={{flex:2}} disabled={running} onClick={startUpload}>
+          {running?"⏳ আপলোড হচ্ছে...":"📤 Submit Bulk Question"}
+        </button>
+        {running&&(
+          <button className="btn" style={{flex:1,background:"#7f1d1d",color:"#fca5a5",borderColor:"#991b1b"}} onClick={()=>{stopRef.current=true;setStopped(true);}}>⛔ স্টপ</button>
+        )}
+        {(done||stopped)&&(
+          <button className="btn" style={{flex:1,background:C.panel,color:C.muted,borderColor:C.border}} onClick={reset}>🗑 Clear</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ══════════ CONTENT MANAGER ══════════ */
 function ContentManagerPage({push,tick}){
   const[tab,setTab]=useState("browse");
@@ -2086,6 +2415,7 @@ const NAV=[
   {id:"content",  icon:"📋",label:"Content"},
   {id:"techniques",icon:"🧠",label:"টেকনিক",badge:true},
   {id:"notify",   icon:"📣",label:"Notify"},
+  {id:"uploader", icon:"📤",label:"Uploader"},
 ];
 
 /* ══════════ LOGIN SCREEN ══════════ */
@@ -2273,6 +2603,7 @@ export default function App(){
       <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick}/></div>
       <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push}/></div>
+      <div style={{display:page==="uploader" ?"block":"none"}}><BulkUploaderPage push={push}/></div>
 
       <nav className="bottom-nav">
         {NAV.map(n=>(
