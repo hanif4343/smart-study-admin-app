@@ -43,16 +43,125 @@ jobs:
       - name: Add Android Platform
         run: |
           npx cap add android
-          # MLKit Text Recognition — Bengali/Devanagari model dependency
-          cat >> android/app/build.gradle << 'GRADLE'
-
-// MLKit Text Recognition
-dependencies {
-    implementation 'com.google.mlkit:text-recognition:16.0.0'
-    implementation 'com.google.mlkit:text-recognition-bengali:16.0.0'
-}
-GRADLE
           npx cap sync android
+
+      - name: Inject MLKit OCR Plugin
+        run: |
+          PKG="com/smartstudy/admin"
+          DIR="android/app/src/main/java/${PKG}"
+          mkdir -p "$DIR"
+
+          # ── OcrPlugin.kt ──────────────────────────────────────────────
+          cat > "$DIR/OcrPlugin.kt" << 'KOTLIN'
+package com.smartstudy.admin
+
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Paint
+import android.util.Base64
+import com.getcapacitor.JSObject
+import com.getcapacitor.Plugin
+import com.getcapacitor.PluginCall
+import com.getcapacitor.PluginMethod
+import com.getcapacitor.annotation.CapacitorPlugin
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
+
+@CapacitorPlugin(name = "OcrPlugin")
+class OcrPlugin : Plugin() {
+
+    @PluginMethod
+    fun recognizeText(call: PluginCall) {
+        val b64 = call.getString("base64") ?: run { call.reject("base64 required"); return }
+        val bytes = try { Base64.decode(b64, Base64.DEFAULT) } catch (e: Exception) { call.reject("base64 decode error: ${e.message}"); return }
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: run { call.reject("bitmap decode failed"); return }
+        val sized = ensureMinSize(bmp)
+        val enhanced = enhance(sized)
+        var best = ""
+        var pending = 2
+        val lock = Object()
+        fun done(txt: String) {
+            synchronized(lock) {
+                if (txt.length > best.length) best = txt
+                pending--
+                if (pending == 0) {
+                    if (sized !== bmp) sized.recycle()
+                    enhanced.recycle()
+                    val ret = JSObject(); ret.put("text", best)
+                    call.resolve(ret)
+                }
+            }
+        }
+        TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
+            .process(InputImage.fromBitmap(enhanced, 0))
+            .addOnSuccessListener { r -> done(r.textBlocks.flatMap { it.lines }.joinToString("\n") { it.text }) }
+            .addOnFailureListener { done("") }
+        TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
+            .process(InputImage.fromBitmap(enhanced, 0))
+            .addOnSuccessListener { r -> done(r.textBlocks.flatMap { it.lines }.joinToString("\n") { it.text }) }
+            .addOnFailureListener { done("") }
+    }
+
+    private fun ensureMinSize(bmp: Bitmap): Bitmap {
+        val min = 1080; val s = minOf(bmp.width, bmp.height)
+        if (s >= min) return bmp
+        val sc = min.toFloat() / s
+        return Bitmap.createScaledBitmap(bmp, (bmp.width*sc).toInt(), (bmp.height*sc).toInt(), true)
+    }
+
+    private fun enhance(src: Bitmap): Bitmap {
+        val out = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
+        val p = Paint(Paint.ANTI_ALIAS_FLAG)
+        val cm = ColorMatrix().apply { setSaturation(0f) }
+        cm.postConcat(ColorMatrix(floatArrayOf(1.8f,0f,0f,0f,-60f,0f,1.8f,0f,0f,-60f,0f,0f,1.8f,0f,-60f,0f,0f,0f,1f,0f)))
+        p.colorFilter = ColorMatrixColorFilter(cm)
+        Canvas(out).drawBitmap(src, 0f, 0f, p)
+        return out
+    }
+}
+KOTLIN
+
+          # ── Register plugin in MainActivity.kt ───────────────────────
+          MAIN="$DIR/MainActivity.kt"
+          if [ -f "$MAIN" ]; then
+            sed -i 's/class MainActivity : BridgeActivity()/class MainActivity : BridgeActivity()/' "$MAIN"
+            sed -i '/class MainActivity/a\    override fun onCreate(savedInstanceState: android.os.Bundle?) {\n        registerPlugin(OcrPlugin::class.java)\n        super.onCreate(savedInstanceState)\n    }' "$MAIN"
+          else
+            cat > "$MAIN" << 'MAIN_KT'
+package com.smartstudy.admin
+import android.os.Bundle
+import com.getcapacitor.BridgeActivity
+class MainActivity : BridgeActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        registerPlugin(OcrPlugin::class.java)
+        super.onCreate(savedInstanceState)
+    }
+}
+MAIN_KT
+          fi
+
+          # ── ML Kit dependencies in app/build.gradle ──────────────────
+          python3 - << 'PY'
+import re
+path = "android/app/build.gradle"
+txt = open(path).read()
+mlkit = """
+    // MLKit OCR
+    implementation 'com.google.mlkit:text-recognition:16.0.0'
+    implementation 'com.google.mlkit:text-recognition-devanagari:16.0.0'
+"""
+if "mlkit" not in txt:
+    txt = re.sub(r'(dependencies\s*\{)', r'\1' + mlkit, txt, count=1)
+    open(path, "w").write(txt)
+    print("MLKit deps added")
+else:
+    print("MLKit deps already present")
+PY
 
       - name: Cache Gradle
         uses: actions/cache@v4
