@@ -1189,8 +1189,258 @@ function EntryPage({push}){
   );
 }
 
+/* ══════════ AI IMPORT PAGE (ML Kit OCR) ══════════ */
+function AIImportPage({push,onSendToBulk}){
+  const[images,setImages]=useState([]);   // [{uri,base64,status,ocrText}]
+  const[ocrAll,setOcrAll]=useState("");
+  const[running,setRunning]=useState(false);
+  const[progress,setProgress]=useState({cur:0,total:0});
+  const[copied,setCopied]=useState(false);
+  const stopRef=useRef(false);
+
+  /* ── Capacitor Camera plugin ── */
+  const pickGallery=async()=>{
+    try{
+      const {Camera}=window.Capacitor?.Plugins||{};
+      if(!Camera){push("warn","Camera plugin নেই","");return;}
+      const res=await Camera.pickImages({quality:90,limit:0});
+      const imgs=(res.photos||[]).map(p=>({
+        webPath:p.webPath,base64:"",status:"pending",ocrText:"",id:Date.now()+Math.random()
+      }));
+      setImages(p=>[...p,...imgs]);
+    }catch(e){push("error","Gallery error",e.message);}
+  };
+
+  const openCamera=async()=>{
+    try{
+      const {Camera}=window.Capacitor?.Plugins||{};
+      if(!Camera){push("warn","Camera plugin নেই","");return;}
+      const res=await Camera.getPhoto({quality:90,resultType:"base64",source:"CAMERA"});
+      setImages(p=>[...p,{webPath:"",base64:res.base64String||"",status:"pending",ocrText:"",id:Date.now()}]);
+    }catch(e){if(!e.message?.includes("cancelled"))push("error","Camera error",e.message);}
+  };
+
+  const removeImg=(id)=>setImages(p=>p.filter(x=>x.id!==id));
+  const clearAll=()=>{setImages([]);setOcrAll("");setCopied(false);};
+
+  /* ── Convert webPath → base64 ── */
+  const toBase64=async(img)=>{
+    if(img.base64)return img.base64;
+    return new Promise((res,rej)=>{
+      const canvas=document.createElement("canvas");
+      const image=new Image();
+      image.onload=()=>{
+        // 2-side detection: if width > height*1.4, split vertically
+        const W=image.naturalWidth, H=image.naturalHeight;
+        if(W>H*1.4){
+          // দুই পাশের page — দুটো আলাদা base64 দেব
+          const half=Math.floor(W/2);
+          canvas.width=half; canvas.height=H;
+          const ctx=canvas.getContext("2d");
+          ctx.drawImage(image,0,0,half,H,0,0,half,H);
+          const left=canvas.toDataURL("image/jpeg",0.9).split(",")[1];
+          ctx.clearRect(0,0,half,H);
+          ctx.drawImage(image,half,0,W-half,H,0,0,W-half,H);
+          canvas.width=W-half;
+          const right=canvas.toDataURL("image/jpeg",0.9).split(",")[1];
+          res([left,right]); // array = 2 pages
+        } else {
+          canvas.width=W; canvas.height=H;
+          canvas.getContext("2d").drawImage(image,0,0);
+          res(canvas.toDataURL("image/jpeg",0.9).split(",")[1]);
+        }
+      };
+      image.onerror=()=>rej(new Error("Image load failed"));
+      image.src=img.webPath;
+    });
+  };
+
+  /* ── ML Kit OCR via native plugin ── */
+  const runOcrOnBase64=async(b64)=>{
+    const {OcrPlugin}=window.Capacitor?.Plugins||{};
+    if(!OcrPlugin)throw new Error("OcrPlugin নেই — APK reinstall করুন");
+    const res=await OcrPlugin.recognizeText({base64:b64});
+    return res.text||"";
+  };
+
+  /* ── Run OCR on all images serially ── */
+  const startOcr=async()=>{
+    if(!images.length){push("warn","ছবি যোগ করুন","");return;}
+    setRunning(true);stopRef.current=false;
+    setOcrAll("");setCopied(false);
+    let combined="";
+    setProgress({cur:0,total:images.length});
+
+    for(let i=0;i<images.length;i++){
+      if(stopRef.current)break;
+      setProgress({cur:i+1,total:images.length});
+      setImages(p=>p.map((x,j)=>j===i?{...x,status:"running"}:x));
+      try{
+        const b64raw=await toBase64(images[i]);
+        const parts=Array.isArray(b64raw)?b64raw:[b64raw];
+        let pageText="";
+        for(const b64 of parts){
+          const txt=await runOcrOnBase64(b64);
+          if(txt)pageText+=(pageText?"\n":"")+txt;
+        }
+        setImages(p=>p.map((x,j)=>j===i?{...x,status:"done",ocrText:pageText}:x));
+        combined+=`--- ছবি ${i+1} ---\n${pageText}\n\n`;
+        setOcrAll(combined);
+      }catch(e){
+        setImages(p=>p.map((x,j)=>j===i?{...x,status:"error",ocrText:e.message}:x));
+        combined+=`--- ছবি ${i+1} ERROR: ${e.message} ---\n\n`;
+        setOcrAll(combined);
+      }
+    }
+    setRunning(false);
+    push("success",`✅ OCR সম্পন্ন!`,`${images.length}টি ছবি`);
+  };
+
+  /* ── Copy OCR + Prompt ── */
+  const copyPrompt=(qtype)=>{
+    if(!ocrAll.trim()){push("warn","আগে OCR চালান","");return;}
+    const formats={
+      MCQ:`MCQ format — প্রতি লাইন:\nপ্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;সঠিকউত্তর;ব্যাখ্যা(optional)\nউদাহরণ: বাংলাদেশের রাজধানী?;ঢাকা;চট্টগ্রাম;খুলনা;রাজশাহী;ঢাকা`,
+      Written:`Written format — প্রতি entry {} দিয়ে wrap করো:\n{প্রশ্ন;উত্তর}\nউদাহরণ: {সন্ধি বিচ্ছেদ: সঞ্চয়;সম+চয়}`,
+      Study:`Study format — প্রতি entry {} দিয়ে wrap করো:\n{প্রশ্ন;উত্তর লাইন১\nউত্তর লাইন২}\nউদাহরণ: {রাষ্ট্রবিজ্ঞানের জনক কে?;এরিস্টটল}`,
+    };
+    const prompt=`তুমি একজন প্রশ্নপত্র formatter। নিচের OCR text থেকে সব প্রশ্ন বের করে নির্দিষ্ট format-এ দাও।\n\nOUTPUT FORMAT (${qtype}):\n${formats[qtype]}\n\nRULES:\n- শুধু formatted data দাও, কোনো label বা explanation নয়\n- Serial number বাদ দাও\n- field-এর ভেতরে ; থাকলে | দিয়ে replace করো\n- কোনো প্রশ্ন বাদ দিও না\n\n=== OCR TEXT ===\n${ocrAll}`;
+    navigator.clipboard.writeText(prompt).then(()=>{
+      setCopied(true);
+      push("success","✅ Copied!","Gemini/ChatGPT-এ paste করুন → format করা text আবার Bulk-এ paste করুন");
+      setTimeout(()=>setCopied(false),3000);
+    }).catch(()=>{push("error","Copy ব্যর্থ","");});
+  };
+
+  /* ── Send to Bulk ── */
+  const sendToBulk=()=>{
+    if(!ocrAll.trim()){push("warn","আগে OCR চালান","");return;}
+    onSendToBulk(ocrAll);
+  };
+
+  const pct=progress.total?Math.round(progress.cur/progress.total*100):0;
+
+  return(
+    <div className="page">
+      {/* Header */}
+      <div style={{background:`linear-gradient(135deg,#7c3aed,#4f46e5)`,borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff"}}>
+        <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>📸 AI Import — OCR</div>
+        <div style={{fontSize:11,opacity:.8}}>ছবি → ML Kit OCR → text → Gemini format → Bulk Upload</div>
+      </div>
+
+      {/* Image Picker Buttons */}
+      <div style={{display:"flex",gap:8,marginBottom:12}}>
+        <button className="btn bp bb" style={{flex:1}} onClick={pickGallery}>🖼 Gallery (একাধিক)</button>
+        <button className="btn" style={{flex:1,background:"#1e293b",color:C.text,borderColor:C.border}} onClick={openCamera}>📷 Camera</button>
+        {images.length>0&&<button className="btn" style={{background:"#7f1d1d",color:"#fca5a5",borderColor:"#991b1b",padding:"0 12px"}} onClick={clearAll}>🗑</button>}
+      </div>
+
+      {/* Image Grid */}
+      {images.length>0&&(
+        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
+          {images.map((img,i)=>(
+            <div key={img.id} style={{position:"relative",width:72,height:72}}>
+              {img.webPath?(
+                <img src={img.webPath} style={{width:72,height:72,borderRadius:10,objectFit:"cover",
+                  border:`2px solid ${img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#6366f1":C.border}`}}/>
+              ):(
+                <div style={{width:72,height:72,borderRadius:10,background:C.panel,border:`2px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📷</div>
+              )}
+              {/* Status overlay */}
+              <div style={{position:"absolute",bottom:2,left:2,right:2,textAlign:"center",fontSize:9,fontWeight:800,
+                color:img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#818cf8":"#94a3b8"}}>
+                {img.status==="done"?"✔":img.status==="error"?"✗":img.status==="running"?"⏳":`#${i+1}`}
+              </div>
+              {/* Remove */}
+              {!running&&(
+                <div onClick={()=>removeImg(img.id)} style={{position:"absolute",top:-6,right:-6,background:"#ef4444",color:"#fff",borderRadius:999,width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,cursor:"pointer",fontWeight:900}}>×</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Info box */}
+      <div style={{background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 12px",fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.7}}>
+        <div style={{color:C.text,fontWeight:700,marginBottom:3}}>📋 ব্যবহার পদ্ধতি:</div>
+        <div>① Gallery থেকে ছবি নিন (একসাথে অনেক)</div>
+        <div>② <b style={{color:"#6366f1"}}>OCR চালান</b> → text বের হবে</div>
+        <div>③ <b style={{color:"#f59e0b"}}>Prompt Copy</b> করুন → Gemini-তে paste করুন</div>
+        <div>④ Gemini-র formatted text → <b style={{color:"#10b981"}}>Bulk-এ পাঠান</b></div>
+        <div style={{color:"#d97706",marginTop:3}}>💡 2-side page (landscape) হলে automatically দুটো আলাদা করে OCR হবে</div>
+      </div>
+
+      {/* Progress */}
+      {running&&(
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:6}}>
+            <span style={{color:C.text,fontWeight:700}}>⏳ OCR চলছে...</span>
+            <span style={{color:"#6366f1",fontWeight:900}}>{pct}% ({progress.cur}/{progress.total})</span>
+          </div>
+          <div style={{background:C.border,borderRadius:999,height:8,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${pct}%`,background:"linear-gradient(90deg,#6366f1,#10b981)",borderRadius:999,transition:"width .3s"}}/>
+          </div>
+        </div>
+      )}
+
+      {/* OCR Result */}
+      {ocrAll&&(
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <span style={{fontSize:12,fontWeight:800,color:C.text}}>📄 OCR Result</span>
+            <span style={{fontSize:10,color:C.muted}}>{ocrAll.length} chars</span>
+          </div>
+          <textarea className="ta" style={{minHeight:120,fontSize:11,fontFamily:"monospace",marginBottom:0}}
+            value={ocrAll} onChange={e=>setOcrAll(e.target.value)}/>
+        </div>
+      )}
+
+      {/* Action Buttons */}
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {/* OCR Button */}
+        <button className="btn bp bb" disabled={running||!images.length} onClick={startOcr} style={{justifyContent:"center"}}>
+          {running?(
+            <span>⏳ OCR চলছে... {progress.cur}/{progress.total}</span>
+          ):(
+            <span>🔍 STEP 1: OCR চালান (ছবি → TEXT)</span>
+          )}
+        </button>
+
+        {/* Stop */}
+        {running&&(
+          <button className="btn" style={{background:"#7f1d1d",color:"#fca5a5",borderColor:"#991b1b",justifyContent:"center"}}
+            onClick={()=>stopRef.current=true}>⛔ বন্ধ করুন</button>
+        )}
+
+        {/* Prompt Copy buttons */}
+        {ocrAll&&!running&&(
+          <>
+            <div style={{fontSize:11,color:C.muted,textAlign:"center",marginTop:4}}>STEP 2: Prompt copy করুন → Gemini-তে paste করুন → format করা text ফিরিয়ে আনুন</div>
+            <div style={{display:"flex",gap:6}}>
+              {["MCQ","Written","Study"].map(t=>(
+                <button key={t} className="btn" onClick={()=>copyPrompt(t)}
+                  style={{flex:1,justifyContent:"center",fontSize:11,
+                    background:t==="MCQ"?"#1e3a5f":t==="Written"?"#1c2a1c":"#1a1a2e",
+                    color:t==="MCQ"?"#60a5fa":t==="Written"?"#4ade80":"#818cf8",
+                    borderColor:t==="MCQ"?"#3b82f6":t==="Written"?"#22c55e":"#6366f1"}}>
+                  {copied?"✅ Copied!`":`📋 ${t} Prompt`}
+                </button>
+              ))}
+            </div>
+            <button className="btn" onClick={sendToBulk}
+              style={{background:"#052e16",color:"#10b981",borderColor:"#10b981",justifyContent:"center"}}>
+              📤 STEP 3: Bulk-এ পাঠান (OCR text সরাসরি)
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ══════════ BULK UPLOADER PAGE ══════════ */
-function BulkUploaderPage({push}){
+function BulkUploaderPage({push,prefillText,onClearPrefill}){
+
   const[mode,setMode]=useState("Quiz");
   const[qtype,setQtype]=useState("MCQ");
   const[subject,setSubject]=useState("");
@@ -1217,6 +1467,14 @@ function BulkUploaderPage({push}){
       setSubjects(subs);
     }).catch(()=>{});
   },[mode]);
+
+  /* AI Import থেকে prefill */
+  useEffect(()=>{
+    if(prefillText){
+      handleText(prefillText);
+      if(onClearPrefill)onClearPrefill();
+    }
+  },[prefillText]);
 
   /* ── Parse helpers — explicit qtype/mode params এড়াতে pure functions ── */
   const getEntries=(raw)=>{
@@ -2560,6 +2818,7 @@ const NAV=[
   {id:"techniques",icon:"🧠",label:"টেকনিক",badge:true},
   {id:"notify",   icon:"📣",label:"Notify"},
   {id:"uploader", icon:"📤",label:"Uploader"},
+  {id:"aiimport", icon:"📸",label:"AI Import"},
 ];
 
 /* ══════════ LOGIN SCREEN ══════════ */
@@ -2637,6 +2896,7 @@ export default function App(){
   const[toasts,push]=useToasts();
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
+  const[bulkPrefill,setBulkPrefill]=useState("");
   const[searchDetail,setSearchDetail]=useState(null);
   const backStack=useRef(["dashboard"]);
   const modalOpen=useRef(false);
@@ -2780,6 +3040,31 @@ export default function App(){
 
   const pageLabel=NAV.find(n=>n.id===page);
 
+  /* ── Real badge counts ── */
+  const{data:usersRawBadge}=useFB("Users",tick);
+  const{data:reportsRawBadge}=useFB("Reports",tick);
+  const{data:techRawBadge}=useFB("Techniques",tick);
+
+  const signupBadge=useMemo(()=>{
+    const arr=toArr(usersRawBadge);
+    return arr.filter(u=>{
+      const st=(u.Status||u.status||"").toLowerCase();
+      return st==="inactive"||st===""||st==="pending";
+    }).length;
+  },[usersRawBadge]);
+
+  const reportBadge=useMemo(()=>{
+    const arr=toArr(reportsRawBadge);
+    return arr.filter(r=>!r.resolved&&!r.Resolved).length;
+  },[reportsRawBadge]);
+
+  const techBadge=useMemo(()=>{
+    const arr=toArr(techRawBadge);
+    return arr.filter(t=>!t.approved&&!t.Approved).length;
+  },[techRawBadge]);
+
+  const badgeMap={students:signupBadge,reports:reportBadge,techniques:techBadge};
+
   return(
     <ErrorBoundary>
       <>
@@ -2801,16 +3086,29 @@ export default function App(){
       <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick}/></div>
       <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push}/></div>
-      <div style={{display:page==="uploader" ?"block":"none"}}><BulkUploaderPage push={push}/></div>
+      <div style={{display:page==="uploader" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill("")}/></div>
+      <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={txt=>{setBulkPrefill(txt);goPage("uploader");}}/></div>
 
       <nav className="bottom-nav">
-        {NAV.map(n=>(
-          <button key={n.id} className={`nav-btn${page===n.id?" active":""}`} onClick={()=>goPage(n.id)}>
-            <span className="nav-icon">{n.icon}</span>
-            <span>{n.label}</span>
-            {n.badge&&<span className="nav-badge">!</span>}
-          </button>
-        ))}
+        {NAV.map(n=>{
+          const cnt=badgeMap[n.id]||0;
+          return(
+            <button key={n.id} className={`nav-btn${page===n.id?" active":""}`} onClick={()=>goPage(n.id)}>
+              <span className="nav-icon" style={{position:"relative",display:"inline-block"}}>
+                {n.icon}
+                {cnt>0&&(
+                  <span style={{position:"absolute",top:-5,right:-7,background:"#ef4444",color:"#fff",
+                    fontSize:8,fontWeight:900,borderRadius:999,minWidth:14,height:14,
+                    display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px",
+                    lineHeight:1}}>
+                    {cnt>99?"99+":cnt}
+                  </span>
+                )}
+              </span>
+              <span>{n.label}</span>
+            </button>
+          );
+        })}
       </nav>
       <Toasts t={toasts}/>
     </>
