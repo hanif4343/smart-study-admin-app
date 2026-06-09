@@ -649,18 +649,29 @@ function SignupsPage({push,tick}){
   );
 }
 
-/* ══════════ STUDENTS ══════════ */
+/* ══════════ STUDENTS (signup tab সহ) ══════════ */
 function StudentsPage({push,tick}){
   const{data:usersRaw,loading}=useFB("Users",tick);
   const[search,setSrc]=useState("");
-  const[tab,setTab]=useState("all");
+  const[tab,setTab]=useState("signups"); // default: signup দেখাবে
   const[detail,setDetail]=useState(null);
   const[notify,setNotify]=useState(null);
   const[busy,setBusy]=useState(null);
+  const[activating,setActivating]=useState(null);
+  const[signupDone,setSignupDone]=useState(new Set());
 
   const users=useMemo(()=>toArr(usersRaw),[usersRaw]);
 
+  /* Signup pending rows */
+  const signupRows=useMemo(()=>users.filter(u=>{
+    const st=(u.Status||u.status||"").toLowerCase();
+    const id=u._fbKey||(u.Phone||u.phone||"");
+    return(st==="inactive"||st===""||st==="pending")&&!signupDone.has(id);
+  }),[users,signupDone]);
+
+  /* Students filtered rows */
   const filtered=useMemo(()=>{
+    if(tab==="signups")return[];
     const q=search.toLowerCase();
     return users.filter(u=>{
       const nm=(u.Name||u.name||"").toLowerCase();
@@ -671,6 +682,21 @@ function StudentsPage({push,tick}){
   },[users,search,tab]);
 
   const activate=async u=>{
+    const phone=u.Phone||u.phone||"";
+    const fkey=u._fbKey||phoneKey(phone);
+    setActivating(fkey);
+    try{
+      await fbPatch(`Users/${fkey}`,{Status:"Active"});
+      await fbSet(`Notifications/${fkey}/welcome_${Date.now()}`,{type:"welcome",title:"🎉 অ্যাকাউন্ট অ্যাক্টিভ!",body:"Smart Study-তে স্বাগতম!",time:nowTs(),read:false});
+      gasBg({action:"activateUser",phone});
+      push("success","✅ অ্যাক্টিভ!",u.Name||u.name||phone);
+      setSignupDone(p=>new Set([...p,fkey]));
+      invalidate("Users");
+    }catch(e){push("error","ব্যর্থ",e.message);}
+    setActivating(null);
+  };
+
+  const activateStudent=async u=>{
     const phone=u.Phone||u.phone||"";
     const fkey=u._fbKey||phoneKey(phone);
     setBusy(fkey);
@@ -687,35 +713,78 @@ function StudentsPage({push,tick}){
 
   return(
     <div className="page">
-      <div className="sw"><span className="si">🔍</span><input className="inp" placeholder="নাম বা ফোন..." value={search} onChange={e=>setSrc(e.target.value)}/></div>
-      <div className="ftabs">
-        {[["all","সবাই"],["active","✅ অ্যাক্টিভ"],["inactive","🔴 ইনঅ্যাক্টিভ"]].map(([v,l])=>(
-          <button key={v} className={`ftab${tab===v?" on":""}`} onClick={()=>setTab(v)}>{l}</button>
-        ))}
+      {/* Main Tabs */}
+      <div className="ftabs" style={{marginBottom:10}}>
+        <button className={`ftab${tab==="signups"?" on":""}`} onClick={()=>setTab("signups")} style={{position:"relative"}}>
+          🆕 সাইনআপ
+          {signupRows.length>0&&<span style={{position:"absolute",top:-4,right:-4,background:"#ef4444",color:"#fff",fontSize:9,fontWeight:900,borderRadius:999,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px"}}>{signupRows.length}</span>}
+        </button>
+        <button className={`ftab${tab==="all"?" on":""}`} onClick={()=>setTab("all")}>👥 সবাই</button>
+        <button className={`ftab${tab==="active"?" on":""}`} onClick={()=>setTab("active")}>✅ অ্যাক্টিভ</button>
+        <button className={`ftab${tab==="inactive"?" on":""}`} onClick={()=>setTab("inactive")}>🔴 ইনঅ্যাক্টিভ</button>
       </div>
-      <div style={{fontSize:11,color:C.muted,marginBottom:8}}>{filtered.length} জন</div>
-      {loading&&!usersRaw?[...Array(4)].map((_,i)=><div key={i} className="sk"/>):
-       filtered.length===0?<div className="empty"><div className="ei">👤</div><p>কেউ নেই</p></div>:
-       filtered.map((u,i)=>{
-        const nm=u.Name||u.name||"অজানা",ph=u.Phone||u.phone||"—";
-        const st=(u.Status||"inactive").toLowerCase();
-        const fkey=u._fbKey||phoneKey(ph);
-        const c=parseInt(u.totalCorrect)||0,w=parseInt(u.totalWrong)||0,tot=c+w;
-        const acc=tot?Math.round(c/tot*100):0;
-        const mins=parseInt(u.totalMinutes||u.studyMinutes||u.totalTime||0);
-        return(
-          <div key={fkey||i} className="card" style={{padding:11}}>
-            <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:8}} onClick={()=>setDetail(u)} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:9,marginBottom:8}}>
-              <div className="av">{initials(nm)}</div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
-                <div style={{fontSize:10,color:C.muted}}>📱 {ph}</div>
+
+      {/* ── Signups Tab ── */}
+      {tab==="signups"&&(
+        <>
+          <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:10,padding:"8px 12px",fontSize:12,color:C.red,fontWeight:600,marginBottom:11,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <span>🔔 {signupRows.length}টি পেন্ডিং</span>
+            {loading&&<span style={{fontSize:10,color:C.muted}}>⏳</span>}
+          </div>
+          {loading&&!usersRaw?[...Array(3)].map((_,i)=><div key={i} className="sk"/>):
+           signupRows.length===0?<div className="empty"><div className="ei">🎉</div><p>সব অ্যাক্টিভ!</p></div>:
+           signupRows.map((u,i)=>{
+            const nm=u.Name||u.name||"অজানা",ph=u.Phone||u.phone||"—";
+            const fkey=u._fbKey||phoneKey(ph);
+            return(
+              <div key={i} className="card" style={{padding:12}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+                  <div className="av">{initials(nm)}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
+                    <div style={{fontSize:11,color:C.muted}}>📱 {ph}</div>
+                    {(u.Email||u.email)&&<div style={{fontSize:11,color:C.muted}}>✉️ {u.Email||u.email}</div>}
+                    <div style={{fontSize:10,color:C.muted}}>🕐 {timeAgo(u.Timestamp||u.createdAt)}</div>
+                  </div>
+                  <span className="pill pp">⏳ পেন্ডিং</span>
+                </div>
+                <button className="btn bs bb" disabled={!!activating} onClick={()=>activate(u)}>
+                  {activating===fkey?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
+                </button>
               </div>
-              <div style={{textAlign:"right"}}>
-                <span className={`pill ${st==="active"?"pa":"pi"}`}>{st==="active"?"✅":"🔴"} {st==="active"?"অ্যাক্টিভ":"ইনঅ্যাক্টিভ"}</span>
-                {tot>0&&<div style={{fontSize:9,color:acc>=70?C.green:acc>=40?C.yellow:C.red,marginTop:2,fontWeight:700}}>{acc}%</div>}
-              </div>
-            </div>
+            );
+           })
+          }
+        </>
+      )}
+
+      {/* ── Students Tabs ── */}
+      {tab!=="signups"&&(
+        <>
+          <div className="sw"><span className="si">🔍</span><input className="inp" placeholder="নাম বা ফোন..." value={search} onChange={e=>setSrc(e.target.value)}/></div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:8}}>{filtered.length} জন</div>
+          {loading&&!usersRaw?[...Array(4)].map((_,i)=><div key={i} className="sk"/>):
+           filtered.length===0?<div className="empty"><div className="ei">👤</div><p>কেউ নেই</p></div>:
+           filtered.map((u,i)=>{
+            const nm=u.Name||u.name||"অজানা",ph=u.Phone||u.phone||"—";
+            const st=(u.Status||"inactive").toLowerCase();
+            const fkey=u._fbKey||phoneKey(ph);
+            const c=parseInt(u.totalCorrect)||0,w=parseInt(u.totalWrong)||0,tot=c+w;
+            const acc=tot?Math.round(c/tot*100):0;
+            const mins=parseInt(u.totalMinutes||u.studyMinutes||u.totalTime||0);
+            return(
+              <div key={fkey||i} className="card" style={{padding:11}}>
+                <div style={{cursor:"pointer",display:"flex",alignItems:"center",gap:9,marginBottom:8}} onClick={()=>setDetail(u)}>
+                  <div className="av">{initials(nm)}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
+                    <div style={{fontSize:10,color:C.muted}}>📱 {ph}</div>
+                  </div>
+                  <div style={{textAlign:"right"}}>
+                    <span className={`pill ${st==="active"?"pa":"pi"}`}>{st==="active"?"✅":"🔴"} {st==="active"?"অ্যাক্টিভ":"ইনঅ্যাক্টিভ"}</span>
+                    {tot>0&&<div style={{fontSize:9,color:acc>=70?C.green:acc>=40?C.yellow:C.red,marginTop:2,fontWeight:700}}>{acc}%</div>}
+                  </div>
+                </div>
             <div style={{display:"flex",gap:6,marginBottom:8}}>
               {[[C.green,c,"✅"],[C.red,w,"❌"],[C.accent,mins,"⏱"]].map(([cl,val,ic])=>(
                 <div key={ic} style={{textAlign:"center",flex:1,background:C.panel,borderRadius:7,padding:"5px 2px"}}>
@@ -725,7 +794,7 @@ function StudentsPage({push,tick}){
               ))}
             </div>
             <div style={{display:"flex",gap:6}}>
-              {st!=="active"&&<button className="btn bs" style={{flex:1,justifyContent:"center",fontSize:11}} disabled={!!busy} onClick={()=>activate(u)}>{busy===fkey?"⏳":"✅ অ্যাক্টিভ"}</button>}
+              {st!=="active"&&<button className="btn bs" style={{flex:1,justifyContent:"center",fontSize:11}} disabled={!!busy} onClick={()=>activateStudent(u)}>{busy===fkey?"⏳":"✅ অ্যাক্টিভ"}</button>}
               <button className="btn bg" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setNotify(u)}>📣</button>
               <button className="btn bp" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setDetail(u)}>👁</button>
             </div>
@@ -733,6 +802,8 @@ function StudentsPage({push,tick}){
         );
        })
       }
+        </>
+      )}
       {notify&&<NotifyModal user={notify} onClose={()=>setNotify(null)} push={push}/>}
     </div>
   );
@@ -1234,7 +1305,7 @@ function BulkUploaderPage({push}){
     setTagInput("");
   };
   const removeTag=(t)=>setAudienceTags(p=>p.filter(x=>x!==t));
-  const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1st"];
+  const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1"];
 
   /* Build Firebase record — same as admin EntryPage pattern */
   const buildRec=(item,ts,id)=>{
@@ -2483,8 +2554,7 @@ function TechniquesPage({push,tick}){
 
 const NAV=[
   {id:"dashboard",icon:"📊",label:"Dashboard"},
-  {id:"signups",  icon:"🆕",label:"সাইনআপ",badge:true},
-  {id:"students", icon:"👥",label:"Students"},
+  {id:"students", icon:"👥",label:"Students",badge:true},
   {id:"reports",  icon:"🚨",label:"Reports",badge:true},
   {id:"content",  icon:"📋",label:"Content"},
   {id:"techniques",icon:"🧠",label:"টেকনিক",badge:true},
@@ -2618,21 +2688,76 @@ export default function App(){
     return()=>clearInterval(id);
   },[loggedIn]);
 
+  /* ── নতুন Report detect করে clickable notification দেখাও ── */
+  const seenReportKeys=useRef(new Set());
+  const[reportAlert,setReportAlert]=useState(null); // {count, keys[]}
+  useEffect(()=>{
+    if(!loggedIn)return;
+    // প্রতি ৩০ সেকেন্ডে Reports চেক করো
+    const checkReports=async()=>{
+      try{
+        const raw=await fbGet("Reports");
+        if(!raw||typeof raw!=="object")return;
+        const entries=Object.entries(raw);
+        const newKeys=entries
+          .map(([k])=>k)
+          .filter(k=>!seenReportKeys.current.has(k));
+        if(newKeys.length>0&&seenReportKeys.current.size>0){
+          // প্রথমবার load হলে শুধু mark করো, notification দেখাবো না
+          setReportAlert({count:newKeys.length,keys:newKeys});
+        }
+        entries.forEach(([k])=>seenReportKeys.current.add(k));
+      }catch(_){}
+    };
+    checkReports(); // initial load
+    const id=setInterval(checkReports,30_000);
+    return()=>clearInterval(id);
+  },[loggedIn]);
+
   useEffect(()=>{
     if(!loggedIn) return;
     const cap=window.Capacitor;
     if(!cap?.Plugins?.PushNotifications) return;
+
+    const PN=cap.Plugins.PushNotifications;
+
+    // ── Permission চাও ──
+    PN.requestPermissions().then(result=>{
+      if(result.receive==="granted"){
+        PN.register();
+      }
+    }).catch(()=>{});
+
+    // ── Token পেলে Firebase AdminAppFCM-এ save করো ──
+    PN.addListener("registration", async(tokenData)=>{
+      try{
+        const token=tokenData?.value||tokenData?.token||"";
+        if(!token||token.length<10) return;
+        // token-এর hash key হিসেবে শেষ ১৬ char ব্যবহার করো
+        const key="admin_"+token.slice(-16).replace(/[^a-zA-Z0-9]/g,"_");
+        await fbSet(`AdminAppFCM/${key}`,{token,savedAt:nowTs(),app:"admin"});
+        console.log("✅ Admin FCM token saved:",key);
+      }catch(e){ console.warn("FCM token save error",e); }
+    });
+
+    // ── Notification tap হলে সঠিক page-এ যাও ──
     const handler=(event)=>{
       try{
         const data=event?.notification?.data||event?.data||{};
         const url=data.url||data.url_key||"";
-        const pageMap={techniques:"techniques",reports:"reports",signups:"signups",students:"students",dashboard:"dashboard",notify:"notify",content:"content"};
-        const target=pageMap[url]||pageMap[data.type?.replace("admin_","")]||null;
+        const pageMap={
+          reports:"reports",techniques:"techniques",
+          students:"students",dashboard:"dashboard",
+          notify:"notify",content:"content",uploader:"uploader",
+          new_report:"reports", // type দিয়েও navigate
+        };
+        const target=pageMap[url]||pageMap[data.type]||null;
         if(target) goPage(target);
       } catch(e){ console.warn("Push nav error",e); }
     };
-    cap.Plugins.PushNotifications.addListener("pushNotificationActionPerformed", handler);
-    return()=>{ try{ cap.Plugins.PushNotifications.removeAllListeners(); }catch(e){} };
+    PN.addListener("pushNotificationActionPerformed", handler);
+
+    return()=>{ try{ PN.removeAllListeners(); }catch(e){} };
   },[loggedIn,goPage]);
 
   // ── Render ──
@@ -2671,7 +2796,6 @@ export default function App(){
       </div>
 
       <div style={{display:page==="dashboard"?"block":"none"}}><DashboardPage push={push} tick={tick}/></div>
-      <div style={{display:page==="signups"  ?"block":"none"}}><SignupsPage   push={push} tick={tick}/></div>
       <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} tick={tick}/></div>
       <div style={{display:page==="reports"  ?"block":"none"}}><ReportsPage   push={push} tick={tick}/></div>
       <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick}/></div>
