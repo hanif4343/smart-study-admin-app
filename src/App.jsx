@@ -1,139 +1,24 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 /* ══════════ CONFIG ══════════ */
-const FB      = (import.meta.env.VITE_FB_DATABASE_URL||"").replace(/\/+$/,"");
-const FB_KEY  = import.meta.env.VITE_FB_API_KEY||"";
-const FB_PROJ  = import.meta.env.VITE_FB_PROJECT_ID||"";
-const GAS     = import.meta.env.VITE_GAS_URL;
-const IMGBB   = import.meta.env.VITE_IMGBB_API_KEY;
-const SECRET  = import.meta.env.VITE_SECRET_KEY;
+const FB  = "https://smartentrydb-default-rtdb.firebaseio.com";
+const FBK = "CsFdxaWLLU2AT92kxYFPTOhP1ewDR0jzK3hKjqWO";
+const GAS = "https://script.google.com/macros/s/AKfycbyjF7iFX0H_rFuJgMJYo70DC7KRX1lBXU7m7NoZCwf6VTJfRm6Iyw6hOcN2q_UKbxxgQg/exec";
+const IMGBB = "3f23d9fd6bdfdb694285773f40569906";
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
-/* ══════════ ERROR BOUNDARY ══════════ */
-class ErrorBoundary extends React.Component {
-  constructor(p){super(p);this.state={err:null};}
-  static getDerivedStateFromError(e){return{err:e};}
-  componentDidCatch(e,info){console.error("App error:",e,info);}
-  render(){
-    if(this.state.err)return(
-      <div style={{padding:32,color:"#ef4444",fontFamily:"monospace",background:"#06080f",minHeight:"100dvh"}}>
-        <div style={{fontSize:28,marginBottom:12}}>⚠️ Error</div>
-        <div style={{fontSize:12,marginBottom:8,color:"#e2e8f0"}}>{this.state.err?.message||"Unknown error"}</div>
-        <button onClick={()=>this.setState({err:null})} style={{marginTop:16,padding:"8px 20px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:8,cursor:"pointer"}}>রিলোড করুন</button>
-      </div>
-    );
-    return this.props.children;
-  }
-}
-
-/* ══════════ FIREBASE AUTH (email/password via REST) ══════════ */
-let _idToken = null;
-let _tokenExp = 0;
-
-async function signInWithEmail(email, password) {
-  const r = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FB_KEY}`,
-    {method:"POST",headers:{"Content-Type":"application/json"},
-     body:JSON.stringify({email,password,returnSecureToken:true})}
-  );
-  const d = await r.json();
-  if(!r.ok) throw new Error(d?.error?.message||"Login failed");
-  _idToken = d.idToken;
-  _tokenExp = Date.now() + (parseInt(d.expiresIn||3600)-60)*1000;
-  // store refresh token so we can get new idToken without password
-  localStorage.setItem("fb_refresh_token", d.refreshToken||"");
-  localStorage.setItem("fb_email", email);
-  try{ localStorage.setItem("fb_pass_enc", btoa(unescape(encodeURIComponent(password)))); }catch(_){}
-  return d;
-}
-
-async function refreshTokenWithRefreshToken(refreshToken) {
-  try {
-    const r = await fetch(
-      `https://securetoken.googleapis.com/v1/token?key=${FB_KEY}`,
-      {method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},
-       body:`grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`}
-    );
-    const d = await r.json();
-    if(!r.ok || !d.id_token) return null;
-    _idToken = d.id_token;
-    _tokenExp = Date.now() + (parseInt(d.expires_in||3600)-60)*1000;
-    localStorage.setItem("fb_refresh_token", d.refresh_token||refreshToken);
-    return _idToken;
-  } catch(e){ return null; }
-}
-
-async function refreshTokenIfNeeded() {
-  if(_idToken && Date.now() < _tokenExp) return _idToken;
-  
-  // Try refresh token first (no password needed)
-  const refreshToken = localStorage.getItem("fb_refresh_token");
-  if(refreshToken){
-    const t = await refreshTokenWithRefreshToken(refreshToken);
-    if(t) return t;
-  }
-  
-  // Fallback: re-login with saved credentials
-  const email = localStorage.getItem("fb_email");
-  const passEnc = localStorage.getItem("fb_pass_enc");
-  if(email && passEnc){
-    try{
-      const pass = decodeURIComponent(escape(atob(passEnc)));
-      await signInWithEmail(email, pass);
-      return _idToken;
-    }catch(e){ _idToken=null; return null; }
-  }
-  return null;
-}
-
-function _authQ(token){ return token ? `?auth=${token}` : ""; }
-
-/* ══════════ FIREBASE REST ══════════ */
-async function _checkResp(r){
-  const txt = await r.text();
-  if(!r.ok){
-    let msg=`HTTP ${r.status}`;
-    try{
-      const j=JSON.parse(txt);
-      if(j?.error){
-        msg = typeof j.error==="string" ? j.error : (j.error?.message||JSON.stringify(j.error));
-      }
-    }catch(_){}
-    console.error("Firebase write error:",r.status, msg, r.url);
-    throw new Error(msg);
-  }
-  try{ return JSON.parse(txt); }catch(_){ return txt; }
-}
-const _tok=()=>refreshTokenIfNeeded();
-const fbGet   = async p=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`);return r.json();};
-const fbPatch  = async(p,d)=>{
-  const t=await _tok();
-  if(!t){throw new Error("Not authenticated — please re-login");}
-  if(!p||p.includes("/undefined")||p.includes("/null")){throw new Error("Invalid path: "+p);}
-  const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
-  return _checkResp(r);
-};
-const fbSet   = async(p,d)=>{
-  const t=await _tok();
-  if(!t){throw new Error("Not authenticated — please re-login");}
-  const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
-  return _checkResp(r);
-};
-const fbPush  = async(p,d)=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
-const fbDelete= async p=>{
-  const t=await _tok();
-  if(!t){throw new Error("Not authenticated — please re-login");}
-  if(!p||p.includes("/undefined")||p.includes("/null")){throw new Error("Invalid path: "+p);}
-  const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"DELETE"});
-  return _checkResp(r);
-};
-
+/* ══════════ FIREBASE ══════════ */
+const fbGet   = async p=>{const r=await fetch(`${FB}/${p}.json?auth=${FBK}`);return r.json();};
+const fbPatch  = async(p,d)=>{const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbSet   = async(p,d)=>{const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbPush  = async(p,d)=>{const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return r.json();};
+const fbDelete= async p=>{const r=await fetch(`${FB}/${p}.json?auth=${FBK}`,{method:"DELETE"});return r.json();};
 
 /* ══════════ GAS helpers ══════════ */
-const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}),300);
-const gasPost= body  =>setTimeout(()=>fetch(GAS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,secret:SECRET})}).catch(()=>{}),300);
-const gasCall= async params=>{const r=await fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET}));return r.json();};
+const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams(params)).catch(()=>{}),300);
+const gasPost= body  =>setTimeout(()=>fetch(GAS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}).catch(()=>{}),300);
+const gasCall= async params=>{const r=await fetch(GAS+"?"+new URLSearchParams(params));return r.json();};
 
 /* ══════════ SIMPLE FETCH CACHE — no subscriptions, no loops ══════════ */
 const _store = {}; // path -> {data, ts, promise}
@@ -156,14 +41,10 @@ async function loadPath(path, force=false){
   return p;
 }
 
-function invalidate(...paths){
-  paths.forEach(p=>{if(_store[p]){_store[p].ts=0;_store[p].promise=null;}});
-  // Notify all useFB hooks to re-fetch
-  window.dispatchEvent(new CustomEvent("fb-invalidate",{detail:{paths}}));
-}
-function invalidateAll(){ Object.keys(_store).forEach(p=>{if(_store[p]){_store[p].ts=0;_store[p].promise=null;}}); }
+function invalidate(...paths){ paths.forEach(p=>{if(_store[p])_store[p].ts=0;}); }
+function invalidateAll(){ Object.keys(_store).forEach(p=>{if(_store[p])_store[p].ts=0;}); }
 
-/* Simple hook — fetches once, re-fetches on invalidate */
+/* Simple hook — fetches once, no subscription loop */
 function useFB(path, tick=0){
   const [state, setState] = useState(()=>{
     const cached = _store[path];
@@ -171,26 +52,10 @@ function useFB(path, tick=0){
   });
   const lastTick = useRef(-1);
   const lastPath = useRef(null);
-  const localTick = useRef(0);
-  const [_lt, setLt] = useState(0);
-
-  // Listen for invalidate events for this path
-  useEffect(()=>{
-    if(!path) return;
-    const handler=(e)=>{
-      const paths=e.detail?.paths;
-      if(!paths || paths.includes(path)){
-        localTick.current++;
-        setLt(t=>t+1);
-      }
-    };
-    window.addEventListener("fb-invalidate", handler);
-    return()=>window.removeEventListener("fb-invalidate", handler);
-  },[path]);
 
   useEffect(()=>{
     if(!path) return;
-    const force = tick !== lastTick.current || path !== lastPath.current || _lt !== undefined;
+    const force = tick !== lastTick.current || path !== lastPath.current;
     lastTick.current = tick;
     lastPath.current = path;
 
@@ -202,13 +67,13 @@ function useFB(path, tick=0){
 
     let cancelled = false;
     setState(s=>({...s, loading:!s.data}));
-    loadPath(path, true).then(data=>{
+    loadPath(path, force).then(data=>{
       if(!cancelled) setState({data, loading:false});
     }).catch(()=>{
       if(!cancelled) setState(s=>({...s, loading:false}));
     });
     return ()=>{ cancelled=true; };
-  }, [path, tick, _lt]);
+  }, [path, tick]);
 
   return state;
 }
@@ -231,12 +96,8 @@ const timeAgo=ts=>{
 };
 const toArr=raw=>{
   if(!raw)return[];
-  // IMPORTANT: never treat as plain array — Firebase numeric keys lose _fbKey
-  // Convert array to indexed object so _fbKey is always set
-  if(Array.isArray(raw)){
-    return raw.map((v,i)=>v&&typeof v==="object"?{...v,_fbKey:String(i)}:null).filter(Boolean);
-  }
-  return Object.entries(raw).map(([k,v])=>v&&typeof v==="object"?{...v,_fbKey:k}:null).filter(Boolean);
+  if(Array.isArray(raw))return raw.filter(Boolean);
+  return Object.entries(raw).map(([k,v])=>v?{...v,_fbKey:k}:null).filter(Boolean);
 };
 const phoneKey=ph=>(ph||"").replace(/^'+/,"").trim().replace(/[.#$\[\]\s]/g,"_");
 const matchPhone=(key,phone)=>{
@@ -649,29 +510,18 @@ function SignupsPage({push,tick}){
   );
 }
 
-/* ══════════ STUDENTS (signup tab সহ) ══════════ */
+/* ══════════ STUDENTS ══════════ */
 function StudentsPage({push,tick}){
   const{data:usersRaw,loading}=useFB("Users",tick);
   const[search,setSrc]=useState("");
-  const[tab,setTab]=useState("signups"); // default: signup দেখাবে
+  const[tab,setTab]=useState("all");
   const[detail,setDetail]=useState(null);
   const[notify,setNotify]=useState(null);
   const[busy,setBusy]=useState(null);
-  const[activating,setActivating]=useState(null);
-  const[signupDone,setSignupDone]=useState(new Set());
 
   const users=useMemo(()=>toArr(usersRaw),[usersRaw]);
 
-  /* Signup pending rows */
-  const signupRows=useMemo(()=>users.filter(u=>{
-    const st=(u.Status||u.status||"").toLowerCase();
-    const id=u._fbKey||(u.Phone||u.phone||"");
-    return(st==="inactive"||st===""||st==="pending")&&!signupDone.has(id);
-  }),[users,signupDone]);
-
-  /* Students filtered rows */
   const filtered=useMemo(()=>{
-    if(tab==="signups")return[];
     const q=search.toLowerCase();
     return users.filter(u=>{
       const nm=(u.Name||u.name||"").toLowerCase();
@@ -682,21 +532,6 @@ function StudentsPage({push,tick}){
   },[users,search,tab]);
 
   const activate=async u=>{
-    const phone=u.Phone||u.phone||"";
-    const fkey=u._fbKey||phoneKey(phone);
-    setActivating(fkey);
-    try{
-      await fbPatch(`Users/${fkey}`,{Status:"Active"});
-      await fbSet(`Notifications/${fkey}/welcome_${Date.now()}`,{type:"welcome",title:"🎉 অ্যাকাউন্ট অ্যাক্টিভ!",body:"Smart Study-তে স্বাগতম!",time:nowTs(),read:false});
-      gasBg({action:"activateUser",phone});
-      push("success","✅ অ্যাক্টিভ!",u.Name||u.name||phone);
-      setSignupDone(p=>new Set([...p,fkey]));
-      invalidate("Users");
-    }catch(e){push("error","ব্যর্থ",e.message);}
-    setActivating(null);
-  };
-
-  const activateStudent=async u=>{
     const phone=u.Phone||u.phone||"";
     const fkey=u._fbKey||phoneKey(phone);
     setBusy(fkey);
@@ -713,78 +548,35 @@ function StudentsPage({push,tick}){
 
   return(
     <div className="page">
-      {/* Main Tabs */}
-      <div className="ftabs" style={{marginBottom:10}}>
-        <button className={`ftab${tab==="signups"?" on":""}`} onClick={()=>setTab("signups")} style={{position:"relative"}}>
-          🆕 সাইনআপ
-          {signupRows.length>0&&<span style={{position:"absolute",top:-4,right:-4,background:"#ef4444",color:"#fff",fontSize:9,fontWeight:900,borderRadius:999,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px"}}>{signupRows.length}</span>}
-        </button>
-        <button className={`ftab${tab==="all"?" on":""}`} onClick={()=>setTab("all")}>👥 সবাই</button>
-        <button className={`ftab${tab==="active"?" on":""}`} onClick={()=>setTab("active")}>✅ অ্যাক্টিভ</button>
-        <button className={`ftab${tab==="inactive"?" on":""}`} onClick={()=>setTab("inactive")}>🔴 ইনঅ্যাক্টিভ</button>
+      <div className="sw"><span className="si">🔍</span><input className="inp" placeholder="নাম বা ফোন..." value={search} onChange={e=>setSrc(e.target.value)}/></div>
+      <div className="ftabs">
+        {[["all","সবাই"],["active","✅ অ্যাক্টিভ"],["inactive","🔴 ইনঅ্যাক্টিভ"]].map(([v,l])=>(
+          <button key={v} className={`ftab${tab===v?" on":""}`} onClick={()=>setTab(v)}>{l}</button>
+        ))}
       </div>
-
-      {/* ── Signups Tab ── */}
-      {tab==="signups"&&(
-        <>
-          <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:10,padding:"8px 12px",fontSize:12,color:C.red,fontWeight:600,marginBottom:11,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <span>🔔 {signupRows.length}টি পেন্ডিং</span>
-            {loading&&<span style={{fontSize:10,color:C.muted}}>⏳</span>}
-          </div>
-          {loading&&!usersRaw?[...Array(3)].map((_,i)=><div key={i} className="sk"/>):
-           signupRows.length===0?<div className="empty"><div className="ei">🎉</div><p>সব অ্যাক্টিভ!</p></div>:
-           signupRows.map((u,i)=>{
-            const nm=u.Name||u.name||"অজানা",ph=u.Phone||u.phone||"—";
-            const fkey=u._fbKey||phoneKey(ph);
-            return(
-              <div key={i} className="card" style={{padding:12}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
-                  <div className="av">{initials(nm)}</div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
-                    <div style={{fontSize:11,color:C.muted}}>📱 {ph}</div>
-                    {(u.Email||u.email)&&<div style={{fontSize:11,color:C.muted}}>✉️ {u.Email||u.email}</div>}
-                    <div style={{fontSize:10,color:C.muted}}>🕐 {timeAgo(u.Timestamp||u.createdAt)}</div>
-                  </div>
-                  <span className="pill pp">⏳ পেন্ডিং</span>
-                </div>
-                <button className="btn bs bb" disabled={!!activating} onClick={()=>activate(u)}>
-                  {activating===fkey?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
-                </button>
+      <div style={{fontSize:11,color:C.muted,marginBottom:8}}>{filtered.length} জন</div>
+      {loading&&!usersRaw?[...Array(4)].map((_,i)=><div key={i} className="sk"/>):
+       filtered.length===0?<div className="empty"><div className="ei">👤</div><p>কেউ নেই</p></div>:
+       filtered.map((u,i)=>{
+        const nm=u.Name||u.name||"অজানা",ph=u.Phone||u.phone||"—";
+        const st=(u.Status||"inactive").toLowerCase();
+        const fkey=u._fbKey||phoneKey(ph);
+        const c=parseInt(u.totalCorrect)||0,w=parseInt(u.totalWrong)||0,tot=c+w;
+        const acc=tot?Math.round(c/tot*100):0;
+        const mins=parseInt(u.totalMinutes||u.studyMinutes||u.totalTime||0);
+        return(
+          <div key={fkey||i} className="card" style={{padding:11}}>
+            <div style={{display:"flex",alignItems:"center",gap:9,marginBottom:8}} onClick={()=>setDetail(u)} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:9,marginBottom:8}}>
+              <div className="av">{initials(nm)}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
+                <div style={{fontSize:10,color:C.muted}}>📱 {ph}</div>
               </div>
-            );
-           })
-          }
-        </>
-      )}
-
-      {/* ── Students Tabs ── */}
-      {tab!=="signups"&&(
-        <>
-          <div className="sw"><span className="si">🔍</span><input className="inp" placeholder="নাম বা ফোন..." value={search} onChange={e=>setSrc(e.target.value)}/></div>
-          <div style={{fontSize:11,color:C.muted,marginBottom:8}}>{filtered.length} জন</div>
-          {loading&&!usersRaw?[...Array(4)].map((_,i)=><div key={i} className="sk"/>):
-           filtered.length===0?<div className="empty"><div className="ei">👤</div><p>কেউ নেই</p></div>:
-           filtered.map((u,i)=>{
-            const nm=u.Name||u.name||"অজানা",ph=u.Phone||u.phone||"—";
-            const st=(u.Status||"inactive").toLowerCase();
-            const fkey=u._fbKey||phoneKey(ph);
-            const c=parseInt(u.totalCorrect)||0,w=parseInt(u.totalWrong)||0,tot=c+w;
-            const acc=tot?Math.round(c/tot*100):0;
-            const mins=parseInt(u.totalMinutes||u.studyMinutes||u.totalTime||0);
-            return(
-              <div key={fkey||i} className="card" style={{padding:11}}>
-                <div style={{cursor:"pointer",display:"flex",alignItems:"center",gap:9,marginBottom:8}} onClick={()=>setDetail(u)}>
-                  <div className="av">{initials(nm)}</div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
-                    <div style={{fontSize:10,color:C.muted}}>📱 {ph}</div>
-                  </div>
-                  <div style={{textAlign:"right"}}>
-                    <span className={`pill ${st==="active"?"pa":"pi"}`}>{st==="active"?"✅":"🔴"} {st==="active"?"অ্যাক্টিভ":"ইনঅ্যাক্টিভ"}</span>
-                    {tot>0&&<div style={{fontSize:9,color:acc>=70?C.green:acc>=40?C.yellow:C.red,marginTop:2,fontWeight:700}}>{acc}%</div>}
-                  </div>
-                </div>
+              <div style={{textAlign:"right"}}>
+                <span className={`pill ${st==="active"?"pa":"pi"}`}>{st==="active"?"✅":"🔴"} {st==="active"?"অ্যাক্টিভ":"ইনঅ্যাক্টিভ"}</span>
+                {tot>0&&<div style={{fontSize:9,color:acc>=70?C.green:acc>=40?C.yellow:C.red,marginTop:2,fontWeight:700}}>{acc}%</div>}
+              </div>
+            </div>
             <div style={{display:"flex",gap:6,marginBottom:8}}>
               {[[C.green,c,"✅"],[C.red,w,"❌"],[C.accent,mins,"⏱"]].map(([cl,val,ic])=>(
                 <div key={ic} style={{textAlign:"center",flex:1,background:C.panel,borderRadius:7,padding:"5px 2px"}}>
@@ -794,7 +586,7 @@ function StudentsPage({push,tick}){
               ))}
             </div>
             <div style={{display:"flex",gap:6}}>
-              {st!=="active"&&<button className="btn bs" style={{flex:1,justifyContent:"center",fontSize:11}} disabled={!!busy} onClick={()=>activateStudent(u)}>{busy===fkey?"⏳":"✅ অ্যাক্টিভ"}</button>}
+              {st!=="active"&&<button className="btn bs" style={{flex:1,justifyContent:"center",fontSize:11}} disabled={!!busy} onClick={()=>activate(u)}>{busy===fkey?"⏳":"✅ অ্যাক্টিভ"}</button>}
               <button className="btn bg" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setNotify(u)}>📣</button>
               <button className="btn bp" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setDetail(u)}>👁</button>
             </div>
@@ -802,8 +594,6 @@ function StudentsPage({push,tick}){
         );
        })
       }
-        </>
-      )}
       {notify&&<NotifyModal user={notify} onClose={()=>setNotify(null)} push={push}/>}
     </div>
   );
@@ -1189,667 +979,6 @@ function EntryPage({push}){
   );
 }
 
-/* ══════════ AI IMPORT PAGE (ML Kit OCR) ══════════ */
-function AIImportPage({push,onSendToBulk}){
-  const[images,setImages]=useState([]);   // [{uri,base64,status,ocrText}]
-  const[ocrAll,setOcrAll]=useState("");
-  const[running,setRunning]=useState(false);
-  const[progress,setProgress]=useState({cur:0,total:0});
-  const[copied,setCopied]=useState(false);
-  const stopRef=useRef(false);
-
-  /* ── Capacitor Camera plugin ── */
-  const pickGallery=async()=>{
-    try{
-      const {Camera}=window.Capacitor?.Plugins||{};
-      if(!Camera){push("warn","Camera plugin নেই","");return;}
-      const res=await Camera.pickImages({quality:90,limit:0});
-      const imgs=(res.photos||[]).map(p=>({
-        webPath:p.webPath,base64:"",status:"pending",ocrText:"",id:Date.now()+Math.random()
-      }));
-      setImages(p=>[...p,...imgs]);
-    }catch(e){push("error","Gallery error",e.message);}
-  };
-
-  const openCamera=async()=>{
-    try{
-      const {Camera}=window.Capacitor?.Plugins||{};
-      if(!Camera){push("warn","Camera plugin নেই","");return;}
-      const res=await Camera.getPhoto({quality:90,resultType:"base64",source:"CAMERA"});
-      setImages(p=>[...p,{webPath:"",base64:res.base64String||"",status:"pending",ocrText:"",id:Date.now()}]);
-    }catch(e){if(!e.message?.includes("cancelled"))push("error","Camera error",e.message);}
-  };
-
-  const removeImg=(id)=>setImages(p=>p.filter(x=>x.id!==id));
-  const clearAll=()=>{setImages([]);setOcrAll("");setCopied(false);};
-
-  /* ── Convert webPath → base64 ── */
-  const toBase64=async(img)=>{
-    if(img.base64)return img.base64;
-    return new Promise((res,rej)=>{
-      const canvas=document.createElement("canvas");
-      const image=new Image();
-      image.onload=()=>{
-        // 2-side detection: if width > height*1.4, split vertically
-        const W=image.naturalWidth, H=image.naturalHeight;
-        if(W>H*1.4){
-          // দুই পাশের page — দুটো আলাদা base64 দেব
-          const half=Math.floor(W/2);
-          canvas.width=half; canvas.height=H;
-          const ctx=canvas.getContext("2d");
-          ctx.drawImage(image,0,0,half,H,0,0,half,H);
-          const left=canvas.toDataURL("image/jpeg",0.9).split(",")[1];
-          ctx.clearRect(0,0,half,H);
-          ctx.drawImage(image,half,0,W-half,H,0,0,W-half,H);
-          canvas.width=W-half;
-          const right=canvas.toDataURL("image/jpeg",0.9).split(",")[1];
-          res([left,right]); // array = 2 pages
-        } else {
-          canvas.width=W; canvas.height=H;
-          canvas.getContext("2d").drawImage(image,0,0);
-          res(canvas.toDataURL("image/jpeg",0.9).split(",")[1]);
-        }
-      };
-      image.onerror=()=>rej(new Error("Image load failed"));
-      image.src=img.webPath;
-    });
-  };
-
-  /* ── ML Kit OCR via native plugin ── */
-  const runOcrOnBase64=async(b64)=>{
-    const {OcrPlugin}=window.Capacitor?.Plugins||{};
-    if(!OcrPlugin)throw new Error("OcrPlugin নেই — APK reinstall করুন");
-    const res=await OcrPlugin.recognizeText({base64:b64});
-    return res.text||"";
-  };
-
-  /* ── Run OCR on all images serially ── */
-  const startOcr=async()=>{
-    if(!images.length){push("warn","ছবি যোগ করুন","");return;}
-    setRunning(true);stopRef.current=false;
-    setOcrAll("");setCopied(false);
-    let combined="";
-    setProgress({cur:0,total:images.length});
-
-    for(let i=0;i<images.length;i++){
-      if(stopRef.current)break;
-      setProgress({cur:i+1,total:images.length});
-      setImages(p=>p.map((x,j)=>j===i?{...x,status:"running"}:x));
-      try{
-        const b64raw=await toBase64(images[i]);
-        const parts=Array.isArray(b64raw)?b64raw:[b64raw];
-        let pageText="";
-        for(const b64 of parts){
-          const txt=await runOcrOnBase64(b64);
-          if(txt)pageText+=(pageText?"\n":"")+txt;
-        }
-        setImages(p=>p.map((x,j)=>j===i?{...x,status:"done",ocrText:pageText}:x));
-        combined+=`--- ছবি ${i+1} ---\n${pageText}\n\n`;
-        setOcrAll(combined);
-      }catch(e){
-        setImages(p=>p.map((x,j)=>j===i?{...x,status:"error",ocrText:e.message}:x));
-        combined+=`--- ছবি ${i+1} ERROR: ${e.message} ---\n\n`;
-        setOcrAll(combined);
-      }
-    }
-    setRunning(false);
-    push("success",`✅ OCR সম্পন্ন!`,`${images.length}টি ছবি`);
-  };
-
-  /* ── Copy OCR + Prompt ── */
-  const copyPrompt=(qtype)=>{
-    if(!ocrAll.trim()){push("warn","আগে OCR চালান","");return;}
-    const formats={
-      MCQ:`MCQ format — প্রতি লাইন:\nপ্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;সঠিকউত্তর;ব্যাখ্যা(optional)\nউদাহরণ: বাংলাদেশের রাজধানী?;ঢাকা;চট্টগ্রাম;খুলনা;রাজশাহী;ঢাকা`,
-      Written:`Written format — প্রতি entry {} দিয়ে wrap করো:\n{প্রশ্ন;উত্তর}\nউদাহরণ: {সন্ধি বিচ্ছেদ: সঞ্চয়;সম+চয়}`,
-      Study:`Study format — প্রতি entry {} দিয়ে wrap করো:\n{প্রশ্ন;উত্তর লাইন১\nউত্তর লাইন২}\nউদাহরণ: {রাষ্ট্রবিজ্ঞানের জনক কে?;এরিস্টটল}`,
-    };
-    const prompt=`তুমি একজন প্রশ্নপত্র formatter। নিচের OCR text থেকে সব প্রশ্ন বের করে নির্দিষ্ট format-এ দাও।\n\nOUTPUT FORMAT (${qtype}):\n${formats[qtype]}\n\nRULES:\n- শুধু formatted data দাও, কোনো label বা explanation নয়\n- Serial number বাদ দাও\n- field-এর ভেতরে ; থাকলে | দিয়ে replace করো\n- কোনো প্রশ্ন বাদ দিও না\n\n=== OCR TEXT ===\n${ocrAll}`;
-    navigator.clipboard.writeText(prompt).then(()=>{
-      setCopied(true);
-      push("success","✅ Copied!","Gemini/ChatGPT-এ paste করুন → format করা text আবার Bulk-এ paste করুন");
-      setTimeout(()=>setCopied(false),3000);
-    }).catch(()=>{push("error","Copy ব্যর্থ","");});
-  };
-
-  /* ── Send to Bulk ── */
-  const sendToBulk=()=>{
-    if(!ocrAll.trim()){push("warn","আগে OCR চালান","");return;}
-    onSendToBulk(ocrAll);
-  };
-
-  const pct=progress.total?Math.round(progress.cur/progress.total*100):0;
-
-  return(
-    <div className="page">
-      {/* Header */}
-      <div style={{background:`linear-gradient(135deg,#7c3aed,#4f46e5)`,borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff"}}>
-        <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>📸 AI Import — OCR</div>
-        <div style={{fontSize:11,opacity:.8}}>ছবি → ML Kit OCR → text → Gemini format → Bulk Upload</div>
-      </div>
-
-      {/* Image Picker Buttons */}
-      <div style={{display:"flex",gap:8,marginBottom:12}}>
-        <button className="btn bp bb" style={{flex:1}} onClick={pickGallery}>🖼 Gallery (একাধিক)</button>
-        <button className="btn" style={{flex:1,background:"#1e293b",color:C.text,borderColor:C.border}} onClick={openCamera}>📷 Camera</button>
-        {images.length>0&&<button className="btn" style={{background:"#7f1d1d",color:"#fca5a5",borderColor:"#991b1b",padding:"0 12px"}} onClick={clearAll}>🗑</button>}
-      </div>
-
-      {/* Image Grid */}
-      {images.length>0&&(
-        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
-          {images.map((img,i)=>(
-            <div key={img.id} style={{position:"relative",width:72,height:72}}>
-              {img.webPath?(
-                <img src={img.webPath} style={{width:72,height:72,borderRadius:10,objectFit:"cover",
-                  border:`2px solid ${img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#6366f1":C.border}`}}/>
-              ):(
-                <div style={{width:72,height:72,borderRadius:10,background:C.panel,border:`2px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📷</div>
-              )}
-              {/* Status overlay */}
-              <div style={{position:"absolute",bottom:2,left:2,right:2,textAlign:"center",fontSize:9,fontWeight:800,
-                color:img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#818cf8":"#94a3b8"}}>
-                {img.status==="done"?"✔":img.status==="error"?"✗":img.status==="running"?"⏳":`#${i+1}`}
-              </div>
-              {/* Remove */}
-              {!running&&(
-                <div onClick={()=>removeImg(img.id)} style={{position:"absolute",top:-6,right:-6,background:"#ef4444",color:"#fff",borderRadius:999,width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,cursor:"pointer",fontWeight:900}}>×</div>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Info box */}
-      <div style={{background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 12px",fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.7}}>
-        <div style={{color:C.text,fontWeight:700,marginBottom:3}}>📋 ব্যবহার পদ্ধতি:</div>
-        <div>① Gallery থেকে ছবি নিন (একসাথে অনেক)</div>
-        <div>② <b style={{color:"#6366f1"}}>OCR চালান</b> → text বের হবে</div>
-        <div>③ <b style={{color:"#f59e0b"}}>Prompt Copy</b> করুন → Gemini-তে paste করুন</div>
-        <div>④ Gemini-র formatted text → <b style={{color:"#10b981"}}>Bulk-এ পাঠান</b></div>
-        <div style={{color:"#d97706",marginTop:3}}>💡 2-side page (landscape) হলে automatically দুটো আলাদা করে OCR হবে</div>
-      </div>
-
-      {/* Progress */}
-      {running&&(
-        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:6}}>
-            <span style={{color:C.text,fontWeight:700}}>⏳ OCR চলছে...</span>
-            <span style={{color:"#6366f1",fontWeight:900}}>{pct}% ({progress.cur}/{progress.total})</span>
-          </div>
-          <div style={{background:C.border,borderRadius:999,height:8,overflow:"hidden"}}>
-            <div style={{height:"100%",width:`${pct}%`,background:"linear-gradient(90deg,#6366f1,#10b981)",borderRadius:999,transition:"width .3s"}}/>
-          </div>
-        </div>
-      )}
-
-      {/* OCR Result */}
-      {ocrAll&&(
-        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-            <span style={{fontSize:12,fontWeight:800,color:C.text}}>📄 OCR Result</span>
-            <span style={{fontSize:10,color:C.muted}}>{ocrAll.length} chars</span>
-          </div>
-          <textarea className="ta" style={{minHeight:120,fontSize:11,fontFamily:"monospace",marginBottom:0}}
-            value={ocrAll} onChange={e=>setOcrAll(e.target.value)}/>
-        </div>
-      )}
-
-      {/* Action Buttons */}
-      <div style={{display:"flex",flexDirection:"column",gap:8}}>
-        {/* OCR Button */}
-        <button className="btn bp bb" disabled={running||!images.length} onClick={startOcr} style={{justifyContent:"center"}}>
-          {running?(
-            <span>⏳ OCR চলছে... {progress.cur}/{progress.total}</span>
-          ):(
-            <span>🔍 STEP 1: OCR চালান (ছবি → TEXT)</span>
-          )}
-        </button>
-
-        {/* Stop */}
-        {running&&(
-          <button className="btn" style={{background:"#7f1d1d",color:"#fca5a5",borderColor:"#991b1b",justifyContent:"center"}}
-            onClick={()=>stopRef.current=true}>⛔ বন্ধ করুন</button>
-        )}
-
-        {/* Prompt Copy buttons */}
-        {ocrAll&&!running&&(
-          <>
-            <div style={{fontSize:11,color:C.muted,textAlign:"center",marginTop:4}}>STEP 2: Prompt copy করুন → Gemini-তে paste করুন → format করা text ফিরিয়ে আনুন</div>
-            <div style={{display:"flex",gap:6}}>
-              {["MCQ","Written","Study"].map(t=>(
-                <button key={t} className="btn" onClick={()=>copyPrompt(t)}
-                  style={{flex:1,justifyContent:"center",fontSize:11,
-                    background:t==="MCQ"?"#1e3a5f":t==="Written"?"#1c2a1c":"#1a1a2e",
-                    color:t==="MCQ"?"#60a5fa":t==="Written"?"#4ade80":"#818cf8",
-                    borderColor:t==="MCQ"?"#3b82f6":t==="Written"?"#22c55e":"#6366f1"}}>
-                  {copied?"✅ Copied!`":`📋 ${t} Prompt`}
-                </button>
-              ))}
-            </div>
-            <button className="btn" onClick={sendToBulk}
-              style={{background:"#052e16",color:"#10b981",borderColor:"#10b981",justifyContent:"center"}}>
-              📤 STEP 3: Bulk-এ পাঠান (OCR text সরাসরি)
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ══════════ BULK UPLOADER PAGE ══════════ */
-function BulkUploaderPage({push,prefillText,onClearPrefill}){
-
-  const[mode,setMode]=useState("Quiz");
-  const[qtype,setQtype]=useState("MCQ");
-  const[subject,setSubject]=useState("");
-  const[subtopic,setSubtopic]=useState("");
-  const[bulkText,setBulkText]=useState("");
-  const[audienceTags,setAudienceTags]=useState([]);
-  const[tagInput,setTagInput]=useState("");
-  const[subjects,setSubjects]=useState([]);
-  const[validStats,setValidStats]=useState(null);
-  const[validDetail,setValidDetail]=useState(null); // detail modal data
-  const[showDetail,setShowDetail]=useState(false);
-  const[running,setRunning]=useState(false);
-  const[stopped,setStopped]=useState(false);
-  const[progress,setProgress]=useState({done:0,total:0,sent:0,failed:0});
-  const[log,setLog]=useState([]);
-  const[done,setDone]=useState(false);
-  const stopRef=useRef(false);
-
-  /* Load subjects for autocomplete */
-  useEffect(()=>{
-    loadPath(mode).then(raw=>{
-      const arr=toArr(raw);
-      const subs=[...new Set(arr.map(q=>q.subject||q.Subject||"").filter(Boolean))];
-      setSubjects(subs);
-    }).catch(()=>{});
-  },[mode]);
-
-  /* AI Import থেকে prefill */
-  useEffect(()=>{
-    if(prefillText){
-      handleText(prefillText);
-      if(onClearPrefill)onClearPrefill();
-    }
-  },[prefillText]);
-
-  /* ── Parse helpers — explicit qtype/mode params এড়াতে pure functions ── */
-  const getEntries=(raw)=>{
-    const entries=[];
-    const re=/\{([\s\S]+?)\}/g;
-    let m;
-    while((m=re.exec(raw))!==null){const e=m[1].trim();if(e)entries.push(e);}
-    if(entries.length>0)return entries;
-    return raw.split("\n").map(s=>s.trim()).filter(Boolean);
-  };
-
-  // effectiveType: "Study" | "Written" | "MCQ"  — caller বলে দেয়
-  const parseEntry=(entry, effectiveType)=>{
-    const tr=entry.trim();
-    if(!tr||tr.startsWith("#"))return{skip:true};
-
-    if(effectiveType==="Study"){
-      const si=tr.indexOf(";");
-      if(si===-1)return{err:true,reason:"Study: প্রথম ';' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
-      const q=tr.substring(0,si).trim();
-      const ans=tr.substring(si+1).trim();
-      if(!q)return{err:true,reason:"Study: প্রশ্ন খালি"};
-      if(!ans)return{err:true,reason:"Study: উত্তর খালি"};
-      return{ok:true,q,correct:ans,explanation:""};
-
-    } else if(effectiveType==="Written"){
-      // প্রশ্ন ; উত্তর(multiline ok) ; ব্যাখ্যা(optional)
-      const si=tr.indexOf(";");
-      if(si===-1)return{err:true,reason:"Written: ';' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
-      const q=tr.substring(0,si).trim();
-      const rest=tr.substring(si+1);
-      // ব্যাখ্যা optional — শেষ ';' এর পরে থাকলে নেব
-      const lastSemi=rest.lastIndexOf(";");
-      let ans,exp;
-      // যদি rest-এ আরো ';' থাকে সেটাকে explanation ধরি
-      if(lastSemi>0){
-        ans=rest.substring(0,lastSemi).trim();
-        exp=rest.substring(lastSemi+1).trim();
-      } else {
-        ans=rest.trim();exp="";
-      }
-      if(!q)return{err:true,reason:"Written: প্রশ্ন খালি"};
-      if(!ans)return{err:true,reason:"Written: উত্তর খালি"};
-      return{ok:true,q,correct:ans,explanation:exp};
-
-    } else {
-      // MCQ — {} ভেতরে newline থাকলেও flatten করে parse
-      const flat=tr.replace(/\r?\n/g," ").replace(/\s+/g," ");
-      const parts=flat.split(";").map(p=>p.trim());
-      if(parts.length<6)return{err:true,reason:`MCQ: ${parts.length}টি কলাম পেয়েছি, দরকার কমপক্ষে ৬টি (প্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;উত্তর)`};
-      if(!parts[0])return{err:true,reason:"MCQ: প্রশ্ন খালি"};
-      if(!parts[5])return{err:true,reason:"MCQ: সঠিক উত্তর খালি"};
-      return{ok:true,q:parts[0],opt1:parts[1],opt2:parts[2],opt3:parts[3],opt4:parts[4],correct:parts[5],explanation:parts[6]||""};
-    }
-  };
-
-  // current state থেকে effectiveType বের করে
-  const getEffectiveType=(m,qt)=> m==="Study"?"Study":qt;
-
-  const parseLine=(entry)=>parseEntry(entry, getEffectiveType(mode,qtype));
-
-  /* Validate — detail list সহ */
-  const runValidate=(text,m,qt)=>{
-    if(!text.trim()){setValidStats(null);setValidDetail(null);return;}
-    const eff=getEffectiveType(m,qt);
-    const entries=getEntries(text);
-    const rows=entries.map((e,i)=>{
-      const r=parseEntry(e,eff);
-      return{idx:i+1, entry:e, ...r};
-    });
-    const ok=rows.filter(r=>r.ok).length;
-    const skip=rows.filter(r=>r.skip).length;
-    const err=rows.filter(r=>r.err).length;
-    setValidStats({total:rows.length,ok,skip,err});
-    setValidDetail(rows);
-  };
-
-  const handleText=(v)=>{setBulkText(v);runValidate(v,mode,qtype);};
-  const handleQtype=(v)=>{setQtype(v);runValidate(bulkText,mode,v);};
-  const handleMode=(v)=>{setMode(v);runValidate(bulkText,v,qtype);};
-
-  /* Audience tag helpers */
-  const addTag=()=>{
-    const t=tagInput.trim();
-    if(t&&!audienceTags.includes(t)){setAudienceTags(p=>[...p,t]);}
-    setTagInput("");
-  };
-  const removeTag=(t)=>setAudienceTags(p=>p.filter(x=>x!==t));
-  const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1"];
-
-  /* Build Firebase record — same as admin EntryPage pattern */
-  const buildRec=(item,ts,id)=>{
-    const tagStr=audienceTags.join(",");
-    const isStudy=mode==="Study";
-    const isWritten=qtype==="Written";
-    if(mode==="Quiz"){
-      return{
-        id,question:item.q,
-        option1:isStudy||isWritten?"":item.opt1||"",
-        option2:isStudy||isWritten?"":item.opt2||"",
-        option3:isStudy||isWritten?"":item.opt3||"",
-        option4:isStudy||isWritten?"":item.opt4||"",
-        correct:item.correct||"",
-        subject,sub_topic:subtopic||subject,
-        explanation:item.explanation||"",
-        "Question Type":isWritten?"Written":"MCQ",
-        AudienceTags:tagStr,
-        Timestamp:ts,
-        technique:"",Previous_Exam:"",
-      };
-    }
-    if(mode==="QBank"){
-      return{
-        id,question:item.q,
-        option1:isWritten?"":item.opt1||"",
-        option2:isWritten?"":item.opt2||"",
-        option3:isWritten?"":item.opt3||"",
-        option4:isWritten?"":item.opt4||"",
-        correct:item.correct||"",
-        subject,sub_topic:subtopic||subject,topic:"",
-        explanation:item.explanation||"",
-        "Question Type":isWritten?"Written":"MCQ",
-        AudienceTags:tagStr,
-        Timestamp:ts,technique:"",
-      };
-    }
-    /* Study */
-    return{
-      id,question:item.q,correct:item.correct||"",
-      subject,sub_topic:subtopic||subject,
-      explanation:item.explanation||"",
-      "Question Type":"Study",
-      AudienceTags:tagStr,
-      Timestamp:ts,technique:"",
-    };
-  };
-
-  /* Main upload */
-  const startUpload=async()=>{
-    if(!subject.trim()){push("warn","⚠️ Subject লিখুন","");return;}
-    if(!bulkText.trim()){push("warn","⚠️ প্রশ্ন লিখুন","");return;}
-    const eff=getEffectiveType(mode,qtype);
-    const entries=getEntries(bulkText).map(l=>parseEntry(l,eff)).filter(r=>r.ok);
-    if(!entries.length){push("warn","⚠️ কোনো valid প্রশ্ন নেই — Validation chips-এ ক্লিক করে দেখুন","");return;}
-
-    setRunning(true);setDone(false);setStopped(false);
-    stopRef.current=false;
-    setLog([]);
-    setProgress({done:0,total:entries.length,sent:0,failed:0});
-    const addLog=(msg,type)=>setLog(p=>[...p.slice(-99),{msg,type,id:Date.now()+Math.random()}]);
-
-    let sent=0,failed=0;
-    const BATCH=8;
-    for(let i=0;i<entries.length;i+=BATCH){
-      if(stopRef.current){addLog("⛔ বন্ধ করা হয়েছে","err");break;}
-      const batch=entries.slice(i,i+BATCH);
-      await Promise.all(batch.map(async(item)=>{
-        const ts=nowTs();
-        const id=Date.now()+Math.floor(Math.random()*9999);
-        const rec=buildRec(item,ts,id);
-        try{
-          const res=await fbPush(mode,rec);
-          /* Set id field to the firebase push key — same as entry app */
-          if(res?.name){
-            await fbSet(`${mode}/${res.name}/id`,res.name);
-          }
-          gasPost({targetTab:mode,question:item.q,opt1:item.opt1||"",opt2:item.opt2||"",opt3:item.opt3||"",opt4:item.opt4||"",correct:item.correct||"",subject,sub_topic:subtopic||subject,explanation:item.explanation||"",technique:"",qType:qtype,timestamp:ts});
-          invalidate(mode);
-          sent++;
-          addLog(`✔ ${(item.q||"").substring(0,55)}...`,"ok");
-        }catch(e){
-          failed++;
-          addLog(`✗ ব্যর্থ: ${(item.q||"").substring(0,45)}... [${e.message}]`,"err");
-        }
-        setProgress(p=>({...p,done:p.done+1,sent,failed}));
-      }));
-    }
-    setRunning(false);setDone(true);
-    if(sent>0)push("success",`✅ ${sent}টি সফলভাবে যোগ হয়েছে!`,`${mode} — ${subject}`);
-    if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"আবার চেষ্টা করুন");
-  };
-
-  const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setSubtopic("");};
-
-  const pct=progress.total?Math.round(progress.done/progress.total*100):0;
-
-  return(
-    <div className="page">
-      {/* Header */}
-      <div style={{background:`linear-gradient(135deg,${C.accent},#7c3aed)`,borderRadius:14,padding:"14px 16px",marginBottom:16,color:"#fff"}}>
-        <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>⚡ বাল্ক প্রশ্ন আপলোড</div>
-        <div style={{fontSize:11,opacity:.8}}>একসাথে একাধিক প্রশ্ন Firebase-এ যোগ করুন</div>
-      </div>
-
-      {/* Target Sheet */}
-      <div style={{display:"flex",gap:6,marginBottom:12}}>
-        {["Quiz","QBank","Study"].map(m=>(
-          <button key={m} className={`ftab${mode===m?" on":""}`} onClick={()=>handleMode(m)} style={{flex:1}}>{m}</button>
-        ))}
-      </div>
-
-      {/* Question Type */}
-      {mode!=="Study"&&(
-        <div style={{display:"flex",gap:6,marginBottom:12}}>
-          {["MCQ","Written"].map(t=>(
-            <button key={t} className={`tp2${qtype===t?" on":""}`} onClick={()=>handleQtype(t)}>{t}</button>
-          ))}
-        </div>
-      )}
-
-      {/* Audience Tags */}
-      <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12}}>
-        <div style={{fontSize:10,fontWeight:800,color:C.muted,letterSpacing:".7px",marginBottom:7,textTransform:"uppercase"}}>🏷 Audience Tags</div>
-        <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:7}}>
-          {QUICK_TAGS.map(t=>(
-            <button key={t} onClick={()=>{if(!audienceTags.includes(t))setAudienceTags(p=>[...p,t]);}}
-              style={{fontSize:10,padding:"3px 9px",borderRadius:20,border:`1px solid ${audienceTags.includes(t)?C.accent:C.border}`,background:audienceTags.includes(t)?C.accent+"22":"transparent",color:audienceTags.includes(t)?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>{t}</button>
-          ))}
-        </div>
-        {audienceTags.length>0&&(
-          <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:7}}>
-            {audienceTags.map(t=>(
-              <span key={t} style={{fontSize:11,padding:"2px 9px",borderRadius:20,background:C.accent,color:"#fff",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
-                {t}<span onClick={()=>removeTag(t)} style={{cursor:"pointer",opacity:.8,marginLeft:2}}>×</span>
-              </span>
-            ))}
-          </div>
-        )}
-        <div style={{display:"flex",gap:6}}>
-          <input className="inp" style={{flex:1,marginBottom:0}} value={tagInput} onChange={e=>setTagInput(e.target.value)} onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();addTag();}}} placeholder="Tag লিখুন..."/>
-          <button className="btn bp" style={{padding:"0 14px",fontSize:13}} onClick={addTag}>+</button>
-        </div>
-      </div>
-
-      {/* Subject & Subtopic */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-        <div className="fld" style={{marginBottom:0}}>
-          <label>📚 Subject</label>
-          <input className="inp" list="bulk-sl" value={subject} onChange={e=>setSubject(e.target.value)} placeholder="Subject..."/>
-          <datalist id="bulk-sl">{subjects.map((s,i)=><option key={i} value={s}/>)}</datalist>
-        </div>
-        <div className="fld" style={{marginBottom:0}}>
-          <label>📌 Sub-Topic</label>
-          <input className="inp" value={subtopic} onChange={e=>setSubtopic(e.target.value)} placeholder="Sub topic..."/>
-        </div>
-      </div>
-
-      {/* Format Guide */}
-      <div style={{background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:10,fontSize:11,color:C.muted,lineHeight:1.7}}>
-        <div style={{fontWeight:800,color:C.text,marginBottom:4}}>📋 ফরম্যাট (প্রতি লাইন = একটি প্রশ্ন):</div>
-        <div><span style={{color:"#10b981",fontWeight:700}}>MCQ →</span> প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; ব্যাখ্যা(optional)</div>
-        <div><span style={{color:"#f59e0b",fontWeight:700}}>Written →</span> প্রশ্ন ; উত্তর ; ব্যাখ্যা(optional)</div>
-        <div><span style={{color:"#818cf8",fontWeight:700}}>Study →</span> {"{"} প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২... {"}"}</div>
-      </div>
-
-      {/* Validation Stats — clickable */}
-      {validStats&&(
-        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
-          {[
-            {label:`Total: ${validStats.total}`,color:"#94a3b8",bg:"#1e293b",filter:"all"},
-            {label:`✔ Valid: ${validStats.ok}`,color:"#10b981",bg:"#052e16",filter:"ok"},
-            {label:`Skip: ${validStats.skip}`,color:"#d97706",bg:"#1c1004",filter:"skip"},
-            {label:`✗ Wrong: ${validStats.err}`,color:"#ef4444",bg:"#1f0a0a",filter:"err"},
-          ].map(x=>(
-            <span key={x.label} onClick={()=>{setShowDetail(x.filter);}} style={{fontSize:11,fontWeight:800,padding:"4px 12px",borderRadius:20,color:x.color,background:x.bg,cursor:"pointer",border:`1px solid ${x.color}44`}}>{x.label} 👁</span>
-          ))}
-        </div>
-      )}
-
-      {/* Validation Detail Modal */}
-      {showDetail&&validDetail&&(
-        <div style={{position:"fixed",inset:0,background:"#000000cc",zIndex:300,display:"flex",flexDirection:"column"}} onClick={()=>setShowDetail(false)}>
-          <div style={{background:C.bg,marginTop:"auto",borderRadius:"18px 18px 0 0",maxHeight:"80vh",display:"flex",flexDirection:"column"}} onClick={e=>e.stopPropagation()}>
-            {/* Modal Header */}
-            <div style={{padding:"14px 16px 10px",borderBottom:`1px solid ${C.border}`,display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0}}>
-              <div style={{fontWeight:900,fontSize:14,color:C.text}}>
-                {showDetail==="all"?"📋 সব এন্ট্রি":showDetail==="ok"?"✅ Valid এন্ট্রি":showDetail==="err"?"❌ Error এন্ট্রি":"⏭ Skip এন্ট্রি"}
-              </div>
-              <button onClick={()=>setShowDetail(false)} style={{background:"transparent",border:"none",color:C.muted,fontSize:18,cursor:"pointer"}}>✕</button>
-            </div>
-            {/* Modal Body */}
-            <div style={{overflowY:"auto",padding:"10px 14px",flex:1}}>
-              {validDetail
-                .filter(r=>showDetail==="all"||r[showDetail])
-                .map((r,i)=>(
-                  <div key={i} style={{
-                    background:r.ok?"#052e16":r.err?"#1f0a0a":r.skip?"#1c1004":C.panel,
-                    border:`1px solid ${r.ok?"#10b98133":r.err?"#ef444433":"#d9770633"}`,
-                    borderRadius:10,padding:"8px 12px",marginBottom:8
-                  }}>
-                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
-                      <span style={{fontSize:10,fontWeight:800,color:C.muted}}>#{r.idx}</span>
-                      <span style={{fontSize:10,fontWeight:800,
-                        color:r.ok?"#10b981":r.err?"#ef4444":"#d97706",
-                        background:r.ok?"#10b98122":r.err?"#ef444422":"#d9770622",
-                        padding:"1px 8px",borderRadius:10
-                      }}>
-                        {r.ok?"✔ VALID":r.err?"✗ ERROR":"⏭ SKIP"}
-                      </span>
-                    </div>
-                    {r.err&&<div style={{fontSize:11,color:"#ef4444",fontWeight:700,marginBottom:4}}>⚠ {r.reason}</div>}
-                    <div style={{fontSize:11,color:C.muted,lineHeight:1.5,
-                      maxHeight:80,overflowY:"auto",
-                      whiteSpace:"pre-wrap",wordBreak:"break-word"
-                    }}>
-                      {r.entry?r.entry.substring(0,200)+(r.entry.length>200?"...":""):"(খালি)"}
-                    </div>
-                    {r.ok&&<div style={{fontSize:10,color:"#10b981",marginTop:4}}>
-                      ❓ {(r.q||"").substring(0,60)}{r.q?.length>60?"...":""}
-                    </div>}
-                  </div>
-                ))
-              }
-              {validDetail.filter(r=>showDetail==="all"||r[showDetail]).length===0&&(
-                <div style={{textAlign:"center",color:C.muted,padding:24,fontSize:13}}>কোনো এন্ট্রি নেই</div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Bulk Textarea */}
-      <div className="fld">
-        <label>প্রশ্নগুলো লিখুন / পেস্ট করুন</label>
-        <textarea className="ta" style={{minHeight:160,fontFamily:"monospace",fontSize:12}} value={bulkText}
-          onChange={e=>handleText(e.target.value)}
-          placeholder={mode==="Study"
-            ?"{ প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২ }\n{ পরের প্রশ্ন ; উত্তর }"
-            :qtype==="Written"
-            ?"{ প্রশ্ন ; উত্তর ; ব্যাখ্যা }\n{ পরের প্রশ্ন ; উত্তর }"
-            :"{ প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; ব্যাখ্যা }\n{ প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর }"}
-        />
-      </div>
-
-      {/* Progress Bar */}
-      {(running||done)&&(
-        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"12px 14px",marginBottom:12}}>
-          <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:6}}>
-            <span style={{color:C.text,fontWeight:700}}>{done?"✅ সম্পন্ন!":"⏳ আপলোড হচ্ছে..."}</span>
-            <span style={{color:C.accent,fontWeight:900}}>{pct}% ({progress.done}/{progress.total})</span>
-          </div>
-          <div style={{background:C.border,borderRadius:999,height:8,overflow:"hidden",marginBottom:8}}>
-            <div style={{height:"100%",width:`${pct}%`,background:"linear-gradient(90deg,#6366f1,#3b82f6,#10b981)",borderRadius:999,transition:"width .25s ease"}}/>
-          </div>
-          <div style={{display:"flex",gap:12,fontSize:11}}>
-            <span style={{color:"#10b981",fontWeight:700}}>✔ {progress.sent} সফল</span>
-            {progress.failed>0&&<span style={{color:"#ef4444",fontWeight:700}}>✗ {progress.failed} ব্যর্থ</span>}
-          </div>
-          {/* Log */}
-          {log.length>0&&(
-            <div style={{maxHeight:110,overflowY:"auto",marginTop:8,fontSize:10,lineHeight:1.7,background:"#060c18",borderRadius:8,padding:"6px 10px"}}>
-              {log.map(l=>(
-                <div key={l.id} style={{color:l.type==="ok"?"#10b981":l.type==="err"?"#ef4444":"#d97706"}}>{l.msg}</div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Action Buttons */}
-      <div style={{display:"flex",gap:8,marginTop:4}}>
-        <button className="btn bp bb" style={{flex:2}} disabled={running} onClick={startUpload}>
-          {running?"⏳ আপলোড হচ্ছে...":"📤 Submit Bulk Question"}
-        </button>
-        {running&&(
-          <button className="btn" style={{flex:1,background:"#7f1d1d",color:"#fca5a5",borderColor:"#991b1b"}} onClick={()=>{stopRef.current=true;setStopped(true);}}>⛔ স্টপ</button>
-        )}
-        {(done||stopped)&&(
-          <button className="btn" style={{flex:1,background:C.panel,color:C.muted,borderColor:C.border}} onClick={reset}>🗑 Clear</button>
-        )}
-      </div>
-    </div>
-  );
-}
-
 /* ══════════ CONTENT MANAGER ══════════ */
 function ContentManagerPage({push,tick}){
   const[tab,setTab]=useState("browse");
@@ -1859,13 +988,11 @@ function ContentManagerPage({push,tick}){
         <div className="atabs">
           <button className={`atab${tab==="browse"?" on":""}`} onClick={()=>setTab("browse")}>📋 Browse</button>
           <button className={`atab${tab==="rename"?" on":""}`} onClick={()=>setTab("rename")}>✏️ Rename</button>
-          <button className={`atab${tab==="audience"?" on":""}`} onClick={()=>setTab("audience")}>🎯 Audience</button>
           <button className={`atab${tab==="delete"?" on":""}`} onClick={()=>setTab("delete")}>🗑️ Delete</button>
         </div>
       </div>
       {tab==="browse"&&<BrowseTab push={push} tick={tick}/>}
       {tab==="rename"&&<RenameTab push={push} tick={tick}/>}
-      {tab==="audience"&&<AudienceTagRenameTab push={push} tick={tick}/>}
       {tab==="delete"&&<DeleteTab push={push} tick={tick}/>}
     </div>
   );
@@ -1908,10 +1035,10 @@ function BrowseTab({push,tick}){
       const fkey=delTarget._fbKey;
       const qid=(delTarget.ID||delTarget.id||"").toString();
       if(fkey){await fbDelete(`${sheet}/${fkey}`);invalidate(sheet);}
-      // gasBg deleteByIds skipped — Firebase already deleted above
+      gasBg({action:"deleteByIds",sheet,ids:encodeURIComponent(qid)});
       push("success","🗑️ ডিলিট!",`#${qid}`);
       setDelTarget(null);
-    }catch(e){push("error","ডিলিট ব্যর্থ",String(e?.message||e||"unknown"));}
+    }catch(e){push("error","ডিলিট ব্যর্থ",e.message);}
     setDelLoading(false);
   };
 
@@ -2023,7 +1150,7 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
       });
       push("success","✅ আপডেট!",`#${qid}`);
       onSaved();
-    }catch(e){push("error","Edit ব্যর্থ",String(e?.message||e||"unknown"));}
+    }catch(e){push("error","ব্যর্থ",e.message);}
     setSaving(false);
   };
 
@@ -2095,14 +1222,12 @@ function RenameTab({push,tick}){
     try{
       const oldName=renameTarget.name;
       const nName=newName.trim();
-
       const affected=allQ.filter(q=>{
         if(type==="subject")return(q.Subject||q.subject||"").trim()===oldName;
         if(type==="topic")return(q.Topic||q.topic||"").trim()===oldName||(q.Sub_topic||q.sub_topic||"").split(" > ")[0].trim()===oldName;
         return(q.Sub_topic||q.sub_topic||"").trim()===oldName;
       });
 
-      // Per-item PATCH — Firebase REST does not support slash-key multi-path
       for(const q of affected){
         const fkey=q._fbKey;if(!fkey)continue;
         if(type==="subject"){
@@ -2118,10 +1243,12 @@ function RenameTab({push,tick}){
       }
       invalidate(sheet);
 
-      // GAS renameField skipped — Firebase already updated above; GAS syncToFirebase would overwrite structure
+      // GAS renameField: field=subject/topic/sub_topic, oldVal, newVal
+      const gasField = type==="subject"?"subject":type==="topic"?"topic":"sub_topic";
+      gasBg({action:"renameField",sheet,field:gasField,oldVal:encodeURIComponent(oldName),newVal:encodeURIComponent(nName)});
       push("success","✅ Rename সম্পন্ন!",`"${oldName}" → "${nName}" · ${affected.length}টি`);
       setRenameTarget(null);setNewName("");
-    }catch(e){push("error","Rename ব্যর্থ",String(e?.message||e||"unknown error"));}
+    }catch(e){push("error","Rename ব্যর্থ",e.message);}
     setRenaming(false);
   };
 
@@ -2185,195 +1312,6 @@ function RenameModal({type,target,newName,setNewName,onCancel,onRename,renaming}
   );
 }
 
-/* ══════════ AUDIENCE TAG RENAME TAB ══════════ */
-function AudienceTagRenameTab({push,tick}){
-  const SHEETS=["QBank","Quiz","Study"];
-
-  // Load all 3 sheets
-  const{data:qbRaw,loading:qbL}=useFB("QBank",tick);
-  const{data:qzRaw,loading:qzL}=useFB("Quiz",tick);
-  const{data:stRaw,loading:stL}=useFB("Study",tick);
-
-  const loading=qbL||qzL||stL;
-
-  const[renameTarget,setRenameTarget]=useState(null);
-  const[newName,setNewName]=useState("");
-  const[renaming,setRenaming]=useState(false);
-
-  // Collect all unique AudienceTags across all sheets with count & which sheets they appear in
-  const tagList=useMemo(()=>{
-    const map={}; // tag -> {count, sheets: {QBank:n, Quiz:n, Study:n}}
-    [[qbRaw,"QBank"],[qzRaw,"Quiz"],[stRaw,"Study"]].forEach(([raw,sheet])=>{
-      toArr(raw).forEach(q=>{
-        const tag=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
-        if(!tag)return;
-        if(!map[tag])map[tag]={count:0,sheets:{}};
-        map[tag].count++;
-        map[tag].sheets[sheet]=(map[tag].sheets[sheet]||0)+1;
-      });
-    });
-    return Object.entries(map).sort((a,b)=>b[1].count-a[1].count);
-  },[qbRaw,qzRaw,stRaw]);
-
-  const doRename=async()=>{
-    if(!newName.trim()||!renameTarget){push("warn","নতুন নাম দিন","");return;}
-    if(newName.trim()===renameTarget.tag){push("info","একই নাম","");return;}
-    setRenaming(true);
-    try{
-      const oldTag=renameTarget.tag;
-      const nTag=newName.trim();
-      let totalUpdated=0;
-
-      for(const sheet of SHEETS){
-        const raw=sheet==="QBank"?qbRaw:sheet==="Quiz"?qzRaw:stRaw;
-        const allQ=toArr(raw);
-        const affected=allQ.filter(q=>{
-          const t=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
-          return t===oldTag;
-        });
-        if(affected.length===0)continue;
-
-        // Per-item PATCH — Firebase REST does not support slash-key multi-path
-        for(const q of affected){
-          const fkey=q._fbKey;if(!fkey)continue;
-          const fieldKey=q.AudienceTags!=null?"AudienceTags":q.audienceTags!=null?"audienceTags":"audience_tags";
-          await fbPatch(`${sheet}/${fkey}`,{[fieldKey]:nTag});
-          totalUpdated++;
-        }
-
-        // Also invalidate the sheet cache
-        invalidate(sheet);
-      }
-
-      push("success","✅ Audience Tag Rename সম্পন্ন!",`"${oldTag}" → "${nTag}" · ${totalUpdated}টি কন্টেন্ট`);
-      setRenameTarget(null);
-      setNewName("");
-    }catch(e){push("error","Rename ব্যর্থ",e.message);}
-    setRenaming(false);
-  };
-
-  return(
-    <>
-      {/* Info banner */}
-      <div style={{background:`${C.accent}12`,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11}}>
-        <div style={{fontWeight:700,color:C.accent,marginBottom:3}}>🎯 Audience Tag Rename</div>
-        <div style={{color:C.muted,lineHeight:1.6}}>
-          QBank, Quiz ও Study — তিনটি শিটে একসাথে AudienceTags আপডেট হবে।
-          <br/>ব্যবহারকারীর <b style={{color:C.text}}>classLevel</b>-এর সাথে মিলতে হবে।
-        </div>
-      </div>
-
-      <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
-        {loading?"⏳ লোড হচ্ছে...":`${tagList.length}টি Audience Tag পাওয়া গেছে`}
-      </div>
-
-      {/* Tag list */}
-      {loading?[...Array(4)].map((_,i)=><div key={i} className="sk" style={{height:56,marginBottom:7}}/>):
-       tagList.length===0?
-        <div className="empty"><div className="ei">🎯</div><p>কোনো AudienceTags নেই</p></div>:
-        tagList.map(([tag,info])=>(
-          <div key={tag} style={{
-            background:C.panel,border:`1px solid ${C.border}`,borderRadius:11,
-            padding:"11px 12px",marginBottom:7,
-            display:"flex",alignItems:"center",gap:10
-          }}>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontWeight:700,fontSize:13,marginBottom:3}}>{tag}</div>
-              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                {Object.entries(info.sheets).map(([sh,n])=>(
-                  <span key={sh} style={{
-                    fontSize:9,fontWeight:700,padding:"1px 6px",borderRadius:6,
-                    background:sh==="QBank"?`${C.green}20`:sh==="Quiz"?`${C.accent}20`:`${C.yellow}20`,
-                    color:sh==="QBank"?C.green:sh==="Quiz"?C.accent:C.yellow,
-                    border:`1px solid ${sh==="QBank"?C.green:sh==="Quiz"?C.accent:C.yellow}40`
-                  }}>{sh}: {n}টি</span>
-                ))}
-              </div>
-            </div>
-            <div style={{fontWeight:700,fontSize:15,color:C.muted,minWidth:28,textAlign:"right"}}>{info.count}</div>
-            <button
-              className="btn"
-              style={{padding:"5px 11px",fontSize:11,background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}33`,flexShrink:0}}
-              onClick={()=>{setRenameTarget({tag,count:info.count});setNewName(tag);}}
-            >✏️ Rename</button>
-          </div>
-        ))
-      }
-
-      {/* Rename Modal */}
-      {renameTarget&&(
-        <AudienceRenameModal
-          target={renameTarget}
-          newName={newName}
-          setNewName={setNewName}
-          onCancel={()=>{setRenameTarget(null);setNewName("");}}
-          onRename={doRename}
-          renaming={renaming}
-        />
-      )}
-    </>
-  );
-}
-
-function AudienceRenameModal({target,newName,setNewName,onCancel,onRename,renaming}){
-  useModalBack(onCancel);
-  return(
-    <div className="ovl">
-      <div className="modal">
-        <div className="mh"/>
-        <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>🎯 Audience Tag Rename</div>
-
-        {/* Warning */}
-        <div style={{background:`${C.yellow}12`,border:`1px solid ${C.yellow}30`,borderRadius:9,padding:"8px 11px",marginBottom:12,fontSize:11}}>
-          <span style={{color:C.yellow,fontWeight:700}}>⚠️ </span>
-          <span style={{color:C.muted}}>
-            <b style={{color:C.text}}>{target.count}টি</b> কন্টেন্টে Firebase-এ আপডেট হবে।
-            <br/>ব্যবহারকারীর <b style={{color:C.text}}>classLevel</b>-এর সাথে মিল রাখুন।
-          </span>
-        </div>
-
-        {/* Old name (readonly) */}
-        <div className="fld">
-          <label>পুরোনো Tag</label>
-          <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,padding:"9px 12px",fontSize:13,color:C.muted,fontFamily:"monospace"}}>
-            {target.tag}
-          </div>
-        </div>
-
-        {/* New name input */}
-        <div className="fld">
-          <label>নতুন Tag</label>
-          <input
-            className="inp"
-            value={newName}
-            onChange={e=>setNewName(e.target.value)}
-            placeholder="যেমন: Masters 1"
-            style={{fontFamily:"monospace"}}
-            autoFocus
-          />
-          {newName&&newName!==target.tag&&(
-            <div style={{fontSize:10,color:C.green,marginTop:4,fontWeight:600}}>
-              ✅ "{target.tag}" → "{newName}"
-            </div>
-          )}
-        </div>
-
-        {/* Hint */}
-        <div style={{background:`${C.accent}10`,border:`1px solid ${C.accent}25`,borderRadius:8,padding:"7px 10px",marginBottom:12,fontSize:10,color:C.muted}}>
-          💡 <b style={{color:C.text}}>classLevel মানগুলো:</b> Masters 1, Masters 2, Honours 1, Honours 2, Honours 3, Honours 4, Class 12, Job
-        </div>
-
-        <div style={{display:"flex",gap:7}}>
-          <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onCancel} disabled={renaming}>বাতিল</button>
-          <button className="btn bp" style={{flex:2,justifyContent:"center"}} onClick={onRename} disabled={renaming||!newName.trim()||newName.trim()===target.tag}>
-            {renaming?"⏳ আপডেট হচ্ছে...":"✅ Rename করুন"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function DeleteTab({push,tick}){
   const[sheet,setSheet]=useState("QBank");
   const[type,setType]=useState("subject");
@@ -2400,12 +1338,13 @@ function DeleteTab({push,tick}){
     setDelLoading(true);
     try{
       const[groupName,qs]=delTarget;
-      // Delete per item — Firebase REST root PATCH with slash-key does not work
       for(const q of qs){
         if(q._fbKey) await fbDelete(`${sheet}/${q._fbKey}`);
       }
       invalidate(sheet);
-      // gasBg deleteByIds skipped — Firebase already deleted above
+      // GAS deleteByIds — all question IDs comma-separated
+      const allIds=qs.map(q=>(q.ID||q.id||"").toString()).filter(Boolean).join(",");
+      if(allIds) gasBg({action:"deleteByIds",sheet,ids:encodeURIComponent(allIds)});
       push("success","🗑️ Bulk Delete!",`"${groupName}" · ${qs.length}টি মুছে গেছে`);
       setDelTarget(null);
     }catch(e){push("error","Delete ব্যর্থ",e.message);}
@@ -2530,16 +1469,12 @@ function NotifyPage({push}){
         if(!phK)return Promise.resolve();
         return fbSet(`Notifications/${phK}/${notifKey}`,{type:"broadcast",title,body,time:ts,read:false});
       }));
-      // FCM: GAS এ পাঠাও (GAS নিজে FCMTokens থেকে পড়ে পাঠাবে)
-      let fcmSent=0;
       try{
-        const r=await Promise.race([
-          gasCall({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)}),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),10000))
-        ]);
-        fcmSent=r?.fcm?.sent||0;
-      }catch(_){}
-      push("success","📣 পাঠানো হয়েছে!",`Notification: ${active.length}জন · FCM: ${fcmSent}জন`);
+        const r=await gasCall({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)});
+        push("success","📣 পাঠানো হয়েছে!",`${active.length}জন · FCM: ${r?.fcm?.sent||0}জন`);
+      }catch{
+        push("success","✅ পাঠানো হয়েছে",`${active.length} জন`);
+      }
       setHist(p=>[{title,body,time:ts,count:active.length},...p.slice(0,9)]);
       setTitle("");setBody("");
     }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
@@ -2579,15 +1514,13 @@ function NotifyModal({user,onClose,push,inline}){
       const phone=(user.Phone||user.phone||"").toString();
       const phK=phoneKey(phone);
       await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"personal",title,body,time:nowTs(),read:false});
-      let fcmOk=false;
       try{
-        const fr=await Promise.race([
-          gasCall({action:"personalNotify",phone,title:encodeURIComponent(title),body:encodeURIComponent(body)}),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000))
+        await Promise.race([
+          fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(title),body:encodeURIComponent(body)})),
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("t")),6000))
         ]);
-        fcmOk=!fr?.fcm?.error;
       }catch(_){}
-      push("success","✅ পাঠানো হয়েছে",(fcmOk?"📲 FCM ✓ ":"📲 FCM ✗ ")+nm);
+      push("success","✅ পাঠানো হয়েছে",nm);
       if(!inline)onClose();
     }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
     setSending(false);
@@ -2620,498 +1553,145 @@ function NotifyModal({user,onClose,push,inline}){
 
 /* ══════════ ROOT APP ══════════ */
 
-/* ══════════ TECHNIQUES PAGE ══════════ */
-function TechniquesPage({push,tick}){
-  const{data:raw,loading}=useFB("UserTechniques",tick);
-  const[tab,setTab]=useState("pending");
-  const[busy,setBusy]=useState(null);
-  const[detail,setDetail]=useState(null);
-  const[done,setDone]=useState(new Set());
-
-  // Flatten nested structure: { questionId: { pushKey: {...} } }
-  const allTechniques=useMemo(()=>{
-    if(!raw||typeof raw!=="object")return[];
-    const list=[];
-    Object.entries(raw).forEach(([qId,entries])=>{
-      if(!entries||typeof entries!=="object")return;
-      Object.entries(entries).forEach(([pushKey,data])=>{
-        if(!data||typeof data!=="object")return;
-        list.push({...data,_qId:qId,_pushKey:pushKey,_path:`UserTechniques/${qId}/${pushKey}`});
-      });
-    });
-    return list.sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
-  },[raw]);
-
-  const filtered=useMemo(()=>
-    allTechniques.filter(t=>{
-      if(done.has(t._pushKey))return false;
-      if(tab==="pending")return t.isPublic&&(t.status==="pending"||!t.status);
-      if(tab==="approved")return t.isPublic&&t.status==="approved";
-      if(tab==="rejected")return t.isPublic&&t.status==="rejected";
-      return true; // "all"
-    })
-  ,[allTechniques,tab,done]);
-
-  const pendingCount=useMemo(()=>
-    allTechniques.filter(t=>!done.has(t._pushKey)&&t.isPublic&&(t.status==="pending"||!t.status)).length
-  ,[allTechniques,done]);
-
-  const updateStatus=async(t,status)=>{
-    const key=t._pushKey;
-    setBusy(key);
-    try{
-      await fbPatch(`UserTechniques/${t._qId}/${key}`,{status});
-      invalidate("UserTechniques");
-      setDone(p=>new Set([...p,key]));
-      push("success",status==="approved"?"✅ Approved!":"❌ Rejected!",t.userName||"ব্যবহারকারী");
-    }catch(e){push("error","ব্যর্থ",e.message);}
-    setBusy(null);
-  };
-
-  const deleteT=async(t)=>{
-    setBusy(t._pushKey);
-    try{
-      await fbDelete(`UserTechniques/${t._qId}/${t._pushKey}`);
-      invalidate("UserTechniques");
-      setDone(p=>new Set([...p,t._pushKey]));
-      push("success","🗑️ ডিলিট!","");
-    }catch(e){push("error","ব্যর্থ",e.message);}
-    setBusy(null);
-  };
-
-  const tsFormat=ts=>{
-    if(!ts)return"—";
-    const d=new Date(parseInt(ts));
-    return d.toLocaleString("bn-BD",{timeZone:"Asia/Dhaka",dateStyle:"short",timeStyle:"short"});
-  };
-
-  return(
-    <div className="page">
-      {/* Summary row */}
-      <div className="sg" style={{marginBottom:10}}>
-        <div className="sc tb" data-icon="⏳">
-          <div className="sl">পেন্ডিং</div>
-          <div className="sv sv-b">{pendingCount}</div>
-        </div>
-        <div className="sc tg" data-icon="✅">
-          <div className="sl">মোট</div>
-          <div className="sv sv-g">{allTechniques.filter(t=>t.isPublic).length}</div>
-        </div>
-      </div>
-
-      {/* Tabs */}
-      <div className="atabs" style={{marginBottom:10}}>
-        {[["pending","⏳ পেন্ডিং"],["approved","✅ Approved"],["rejected","❌ Rejected"],["all","📋 সব"]].map(([v,l])=>(
-          <button key={v} className={`atab${tab===v?" on":""}`} onClick={()=>setTab(v)}>{l}
-            {v==="pending"&&pendingCount>0&&<span style={{background:C.red,color:"#fff",borderRadius:"50%",fontSize:8,padding:"1px 4px",marginLeft:3}}>{pendingCount}</span>}
-          </button>
-        ))}
-      </div>
-
-      <div style={{fontSize:11,color:C.muted,marginBottom:8,display:"flex",justifyContent:"space-between"}}>
-        <span>{loading?"⏳":`${filtered.length}টি`}</span>
-        {loading&&<span>⏳</span>}
-      </div>
-
-      {/* List */}
-      {loading&&!raw?[...Array(3)].map((_,i)=><div key={i} className="sk"/>):
-       filtered.length===0?<div className="empty"><div className="ei">🧠</div><p>{tab==="pending"?"কোনো পেন্ডিং নেই 🎉":"কিছু নেই"}</p></div>:
-       filtered.map((t,i)=>(
-        <div key={t._pushKey||i} style={{
-          background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
-          padding:12,marginBottom:8,
-          borderLeft:`3px solid ${t.status==="approved"?C.green:t.status==="rejected"?C.red:C.yellow}`
-        }}>
-          {/* Header */}
-          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:7,flexWrap:"wrap"}}>
-            <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg,${C.accent},${C.purple})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700,color:"#fff",flexShrink:0}}>
-              {(t.userName||"?").slice(0,1).toUpperCase()}
-            </div>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontWeight:700,fontSize:12}}>{t.userName||"ব্যবহারকারী"}</div>
-              <div style={{fontSize:10,color:C.muted}}>📱 {t.userId||"—"}</div>
-            </div>
-            <div style={{textAlign:"right"}}>
-              <span style={{
-                fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:6,
-                background:t.status==="approved"?`${C.green}20`:t.status==="rejected"?`${C.red}20`:`${C.yellow}20`,
-                color:t.status==="approved"?C.green:t.status==="rejected"?C.red:C.yellow,
-                border:`1px solid ${t.status==="approved"?C.green:t.status==="rejected"?C.red:C.yellow}40`
-              }}>
-                {t.status==="approved"?"✅ Approved":t.status==="rejected"?"❌ Rejected":"⏳ Pending"}
-              </span>
-            </div>
-          </div>
-
-          {/* Question ID */}
-          <div style={{fontSize:10,color:C.accent,marginBottom:5,fontWeight:600}}>
-            ❓ প্রশ্ন ID: {t._qId||"—"}
-          </div>
-
-          {/* Technique text */}
-          <div style={{
-            background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,
-            padding:"8px 10px",fontSize:12,lineHeight:1.6,color:C.text,marginBottom:7
-          }}>
-            💡 {t.text||"(খালি)"}
-          </div>
-
-          <div style={{fontSize:10,color:C.muted,marginBottom:8}}>
-            🕐 {tsFormat(t.timestamp)}
-          </div>
-
-          {/* Action buttons */}
-          <div style={{display:"flex",gap:6}}>
-            {(t.status==="pending"||!t.status)&&<>
-              <button
-                className="btn"
-                style={{flex:2,justifyContent:"center",background:C.green,color:"#fff",fontSize:11}}
-                disabled={!!busy}
-                onClick={()=>updateStatus(t,"approved")}
-              >
-                {busy===t._pushKey?"⏳...":"✅ Approve"}
-              </button>
-              <button
-                className="btn"
-                style={{flex:2,justifyContent:"center",background:C.red,color:"#fff",fontSize:11}}
-                disabled={!!busy}
-                onClick={()=>updateStatus(t,"rejected")}
-              >
-                {busy===t._pushKey?"⏳...":"❌ Reject"}
-              </button>
-            </>}
-            {t.status==="approved"&&(
-              <button
-                className="btn bg"
-                style={{flex:2,justifyContent:"center",fontSize:11}}
-                disabled={!!busy}
-                onClick={()=>updateStatus(t,"rejected")}
-              >❌ Reject করুন</button>
-            )}
-            {t.status==="rejected"&&(
-              <button
-                className="btn"
-                style={{flex:2,justifyContent:"center",background:C.green,color:"#fff",fontSize:11}}
-                disabled={!!busy}
-                onClick={()=>updateStatus(t,"approved")}
-              >✅ Re-Approve</button>
-            )}
-            <button
-              className="btn"
-              style={{flex:1,justifyContent:"center",background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`,fontSize:11}}
-              disabled={!!busy}
-              onClick={()=>deleteT(t)}
-            >🗑️</button>
-          </div>
-        </div>
-       ))
-      }
-    </div>
-  );
-}
-
 const NAV=[
   {id:"dashboard",icon:"📊",label:"Dashboard"},
-  {id:"students", icon:"👥",label:"Students",badge:true},
+  {id:"signups",  icon:"🆕",label:"সাইনআপ",badge:true},
+  {id:"students", icon:"👥",label:"Students"},
   {id:"reports",  icon:"🚨",label:"Reports",badge:true},
   {id:"content",  icon:"📋",label:"Content"},
-  {id:"techniques",icon:"🧠",label:"টেকনিক",badge:true},
   {id:"notify",   icon:"📣",label:"Notify"},
-  {id:"uploader", icon:"📤",label:"Uploader"},
-  {id:"aiimport", icon:"📸",label:"AI Import"},
 ];
 
-/* ══════════ LOGIN SCREEN ══════════ */
-function LoginScreen({onLogin}){
-  const[email,setEmail]=useState(localStorage.getItem("fb_email")||"");
-  const[pass,setPass]=useState("");
-  const[loading,setLoading]=useState(false);
-  const[err,setErr]=useState("");
-
-  // Auto-login if saved credentials exist
-  useEffect(()=>{
-    const savedEmail=localStorage.getItem("fb_email");
-    const savedPass=localStorage.getItem("fb_pass_enc");
-    if(savedEmail&&savedPass){
-      setLoading(true);
-      signInWithEmail(savedEmail,atob(savedPass))
-        .then(()=>onLogin())
-        .catch(()=>{ localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");setLoading(false); });
-    }
-  },[]);
-
-  const doLogin=async()=>{
-    if(!email||!pass){setErr("Email ও Password দিন");return;}
-    setLoading(true);setErr("");
-    try{
-      await signInWithEmail(email,pass);
-      onLogin();
-    }catch(e){setErr(e.message||"Login ব্যর্থ");setLoading(false);}
-  };
-
-  return(
-    <div style={{minHeight:"100dvh",display:"flex",alignItems:"center",justifyContent:"center",background:"#06080f",padding:24}}>
-      <div style={{width:"100%",maxWidth:360}}>
-        <div style={{textAlign:"center",marginBottom:32}}>
-          <div style={{fontSize:42,marginBottom:8}}>📊</div>
-          <div style={{fontSize:20,fontWeight:700,color:"#e2e8f0"}}>Smart Study Admin</div>
-          <div style={{fontSize:12,color:"#4b5e7a",marginTop:4}}>Firebase অ্যাডমিন প্যানেল</div>
-        </div>
-        <div style={{background:"#0c1220",border:"1px solid #16253d",borderRadius:16,padding:20}}>
-          <div style={{marginBottom:12}}>
-            <label style={{display:"block",fontSize:10,fontWeight:700,color:"#4b5e7a",letterSpacing:".8px",marginBottom:4,textTransform:"uppercase"}}>Email</label>
-            <input
-              style={{background:"#0e1a2e",border:"1px solid #16253d",borderRadius:9,padding:"10px 12px",color:"#e2e8f0",fontFamily:"inherit",fontSize:13,width:"100%",outline:"none",boxSizing:"border-box"}}
-              type="email" placeholder="admin@example.com"
-              value={email} onChange={e=>setEmail(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&doLogin()}
-            />
-          </div>
-          <div style={{marginBottom:16}}>
-            <label style={{display:"block",fontSize:10,fontWeight:700,color:"#4b5e7a",letterSpacing:".8px",marginBottom:4,textTransform:"uppercase"}}>Password</label>
-            <input
-              style={{background:"#0e1a2e",border:"1px solid #16253d",borderRadius:9,padding:"10px 12px",color:"#e2e8f0",fontFamily:"inherit",fontSize:13,width:"100%",outline:"none",boxSizing:"border-box"}}
-              type="password" placeholder="••••••••"
-              value={pass} onChange={e=>setPass(e.target.value)}
-              onKeyDown={e=>e.key==="Enter"&&doLogin()}
-            />
-          </div>
-          {err&&<div style={{background:"#ef444418",border:"1px solid #ef444430",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#ef4444",marginBottom:12,fontWeight:600}}>{err}</div>}
-          <button
-            onClick={doLogin} disabled={loading}
-            style={{width:"100%",padding:"11px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer",opacity:loading?0.6:1}}
-          >{loading?"⏳ লগইন হচ্ছে...":"🔐 লগইন করুন"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function App(){
-  const[loggedIn,setLoggedIn]=useState(()=>{
-    // Check if we have saved credentials — will auto-login in LoginScreen
-    return false;
-  });
   const[page,setPage]=useState("dashboard");
   const[toasts,push]=useToasts();
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
-  const[bulkPrefill,setBulkPrefill]=useState("");
   const[searchDetail,setSearchDetail]=useState(null);
+  // Back stack: tracks navigation history for Android back button
   const backStack=useRef(["dashboard"]);
-  const modalOpen=useRef(false);
+  const modalOpen=useRef(false); // any modal open?
 
-  // ALL hooks must be called unconditionally (Rules of Hooks)
+  // Called when navigating to a page
   const goPage=useCallback((p)=>{
     setPage(prev=>{
-      if(prev!==p){ backStack.current=[...backStack.current.filter(x=>x!==p),p]; }
+      if(prev!==p){
+        backStack.current=[...backStack.current.filter(x=>x!==p),p];
+      }
       return p;
     });
   },[]);
 
+  // Register modal open state so back button closes modal first
+  // Used by child components via window event
   useEffect(()=>{
-    if(!loggedIn) return;
     const onModalOpen =()=>{ modalOpen.current=true; };
     const onModalClose=()=>{ modalOpen.current=false; };
     window.addEventListener("modal-open", onModalOpen);
     window.addEventListener("modal-close",onModalClose);
-    return()=>{ window.removeEventListener("modal-open",onModalOpen); window.removeEventListener("modal-close",onModalClose); };
-  },[loggedIn]);
+    return()=>{
+      window.removeEventListener("modal-open", onModalOpen);
+      window.removeEventListener("modal-close",onModalClose);
+    };
+  },[]);
 
+  // Android hardware back button
   useEffect(()=>{
-    if(!loggedIn) return;
     const handleBack=(e)=>{
       if(e&&e.preventDefault) e.preventDefault();
-      if(searchDetail){ setSearchDetail(null); return; }
-      if(modalOpen.current){ window.dispatchEvent(new Event("back-press")); return; }
-      if(page!=="dashboard"){
-        const stack=backStack.current;
-        if(stack.length>1){ const ns=stack.slice(0,-1);backStack.current=ns;setPage(ns[ns.length-1]); }
-        else { setPage("dashboard");backStack.current=["dashboard"]; }
+
+      // If search detail open → close it
+      if(searchDetail){
+        setSearchDetail(null);
         return;
       }
-      if(window.Capacitor?.Plugins?.App) window.Capacitor.Plugins.App.minimizeApp();
-      else if(window.history.length>1) window.history.back();
+
+      // If any modal open → close it via event
+      if(modalOpen.current){
+        window.dispatchEvent(new Event("back-press"));
+        return;
+      }
+
+      // If not on dashboard → go back in stack
+      if(page!=="dashboard"){
+        const stack=backStack.current;
+        if(stack.length>1){
+          const newStack=stack.slice(0,-1);
+          backStack.current=newStack;
+          setPage(newStack[newStack.length-1]);
+        } else {
+          setPage("dashboard");
+          backStack.current=["dashboard"];
+        }
+        return;
+      }
+
+      // On dashboard → minimize app (Android behavior)
+      if(window.Capacitor?.Plugins?.App){
+        window.Capacitor.Plugins.App.minimizeApp();
+      } else {
+        // Fallback: history back or do nothing (don't close)
+        if(window.history.length>1) window.history.back();
+      }
     };
-    document.addEventListener("backbutton",handleBack,false);
-    return()=>document.removeEventListener("backbutton",handleBack,false);
-  },[loggedIn,page,searchDetail]);
+
+    // Capacitor fires 'backbutton' on document
+    document.addEventListener("backbutton", handleBack, false);
+    return()=>document.removeEventListener("backbutton", handleBack, false);
+  },[page,searchDetail]);
 
   const refresh=useCallback(()=>{
-    setSpin(true);invalidateAll();setTick(t=>t+1);
+    setSpin(true);
+    invalidateAll();
+    setTick(t=>t+1);
     setTimeout(()=>setSpin(false),1400);
   },[]);
 
+  // Auto-refresh every 2 minutes
   useEffect(()=>{
-    if(!loggedIn) return;
     const id=setInterval(()=>setTick(t=>t+1),120_000);
     return()=>clearInterval(id);
-  },[loggedIn]);
-
-  /* ── নতুন Report detect করে clickable notification দেখাও ── */
-  const seenReportKeys=useRef(new Set());
-  const[reportAlert,setReportAlert]=useState(null); // {count, keys[]}
-  useEffect(()=>{
-    if(!loggedIn)return;
-    // প্রতি ৩০ সেকেন্ডে Reports চেক করো
-    const checkReports=async()=>{
-      try{
-        const raw=await fbGet("Reports");
-        if(!raw||typeof raw!=="object")return;
-        const entries=Object.entries(raw);
-        const newKeys=entries
-          .map(([k])=>k)
-          .filter(k=>!seenReportKeys.current.has(k));
-        if(newKeys.length>0&&seenReportKeys.current.size>0){
-          // প্রথমবার load হলে শুধু mark করো, notification দেখাবো না
-          setReportAlert({count:newKeys.length,keys:newKeys});
-        }
-        entries.forEach(([k])=>seenReportKeys.current.add(k));
-      }catch(_){}
-    };
-    checkReports(); // initial load
-    const id=setInterval(checkReports,30_000);
-    return()=>clearInterval(id);
-  },[loggedIn]);
-
-  useEffect(()=>{
-    if(!loggedIn) return;
-    const cap=window.Capacitor;
-    if(!cap?.Plugins?.PushNotifications) return;
-
-    const PN=cap.Plugins.PushNotifications;
-
-    // ── Permission চাও ──
-    PN.requestPermissions().then(result=>{
-      if(result.receive==="granted"){
-        PN.register();
-      }
-    }).catch(()=>{});
-
-    // ── Token পেলে Firebase AdminAppFCM-এ save করো ──
-    PN.addListener("registration", async(tokenData)=>{
-      try{
-        const token=tokenData?.value||tokenData?.token||"";
-        if(!token||token.length<10) return;
-        // token-এর hash key হিসেবে শেষ ১৬ char ব্যবহার করো
-        const key="admin_"+token.slice(-16).replace(/[^a-zA-Z0-9]/g,"_");
-        await fbSet(`AdminAppFCM/${key}`,{token,savedAt:nowTs(),app:"admin"});
-        console.log("✅ Admin FCM token saved:",key);
-      }catch(e){ console.warn("FCM token save error",e); }
-    });
-
-    // ── Notification tap হলে সঠিক page-এ যাও ──
-    const handler=(event)=>{
-      try{
-        const data=event?.notification?.data||event?.data||{};
-        const url=data.url||data.url_key||"";
-        const pageMap={
-          reports:"reports",techniques:"techniques",
-          students:"students",dashboard:"dashboard",
-          notify:"notify",content:"content",uploader:"uploader",
-          new_report:"reports", // type দিয়েও navigate
-        };
-        const target=pageMap[url]||pageMap[data.type]||null;
-        if(target) goPage(target);
-      } catch(e){ console.warn("Push nav error",e); }
-    };
-    PN.addListener("pushNotificationActionPerformed", handler);
-
-    return()=>{ try{ PN.removeAllListeners(); }catch(e){} };
-  },[loggedIn,goPage]);
-
-  // ── Render ──
-  if(!loggedIn) return(
-    <ErrorBoundary>
-      <style>{css}</style>
-      <LoginScreen onLogin={()=>setLoggedIn(true)}/>
-    </ErrorBoundary>
-  );
+  },[]);
 
   if(searchDetail)return(
-    <ErrorBoundary>
-      <>
+    <>
       <style>{css}</style>
       <StudentDetail user={searchDetail} onBack={()=>setSearchDetail(null)} push={push}/>
       <Toasts t={toasts}/>
-      </>
-    </ErrorBoundary>
+    </>
   );
 
   const pageLabel=NAV.find(n=>n.id===page);
 
-  /* ── Real badge counts ── */
-  const{data:usersRawBadge}=useFB("Users",tick);
-  const{data:reportsRawBadge}=useFB("Reports",tick);
-  const{data:techRawBadge}=useFB("Techniques",tick);
-
-  const signupBadge=useMemo(()=>{
-    const arr=toArr(usersRawBadge);
-    return arr.filter(u=>{
-      const st=(u.Status||u.status||"").toLowerCase();
-      return st==="inactive"||st===""||st==="pending";
-    }).length;
-  },[usersRawBadge]);
-
-  const reportBadge=useMemo(()=>{
-    const arr=toArr(reportsRawBadge);
-    return arr.filter(r=>!r.resolved&&!r.Resolved).length;
-  },[reportsRawBadge]);
-
-  const techBadge=useMemo(()=>{
-    const arr=toArr(techRawBadge);
-    return arr.filter(t=>!t.approved&&!t.Approved).length;
-  },[techRawBadge]);
-
-  const badgeMap={students:signupBadge,reports:reportBadge,techniques:techBadge};
-
   return(
-    <ErrorBoundary>
-      <>
+    <>
       <style>{css}</style>
       <div className="topbar">
         <div>
           <div className="topbar-title">{pageLabel?.icon} {pageLabel?.label}</div>
           <div className="topbar-sub">Smart Study Admin</div>
         </div>
-        <div style={{display:"flex",gap:6}}>
-          <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
-          <button className="icon-btn" title="Logout" onClick={()=>{localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");_idToken=null;setLoggedIn(false);}}>🚪</button>
-        </div>
+        <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
       </div>
 
+      {/* Pages — always mounted but hidden to avoid re-mount flicker */}
       <div style={{display:page==="dashboard"?"block":"none"}}><DashboardPage push={push} tick={tick}/></div>
+      <div style={{display:page==="signups"  ?"block":"none"}}><SignupsPage   push={push} tick={tick}/></div>
       <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} tick={tick}/></div>
       <div style={{display:page==="reports"  ?"block":"none"}}><ReportsPage   push={push} tick={tick}/></div>
       <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick}/></div>
-      <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push}/></div>
-      <div style={{display:page==="uploader" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill("")}/></div>
-      <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={txt=>{setBulkPrefill(txt);goPage("uploader");}}/></div>
 
       <nav className="bottom-nav">
-        {NAV.map(n=>{
-          const cnt=badgeMap[n.id]||0;
-          return(
-            <button key={n.id} className={`nav-btn${page===n.id?" active":""}`} onClick={()=>goPage(n.id)}>
-              <span className="nav-icon" style={{position:"relative",display:"inline-block"}}>
-                {n.icon}
-                {cnt>0&&(
-                  <span style={{position:"absolute",top:-5,right:-7,background:"#ef4444",color:"#fff",
-                    fontSize:8,fontWeight:900,borderRadius:999,minWidth:14,height:14,
-                    display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px",
-                    lineHeight:1}}>
-                    {cnt>99?"99+":cnt}
-                  </span>
-                )}
-              </span>
-              <span>{n.label}</span>
-            </button>
-          );
-        })}
+        {NAV.map(n=>(
+          <button key={n.id} className={`nav-btn${page===n.id?" active":""}`} onClick={()=>goPage(n.id)}>
+            <span className="nav-icon">{n.icon}</span>
+            <span>{n.label}</span>
+            {n.badge&&<span className="nav-badge">!</span>}
+          </button>
+        ))}
       </nav>
       <Toasts t={toasts}/>
     </>
-    </ErrorBoundary>
   );
 }
