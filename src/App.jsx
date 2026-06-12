@@ -157,10 +157,11 @@ class ErrorBoundary extends React.Component {
   componentDidCatch(e,info){console.error("App error:",e,info);_LC.crash("ErrorBoundary",`${e?.name||"Error"}: ${e?.message||"unknown"}`,{stack:(e?.stack||"").slice(0,400),componentStack:(info?.componentStack||"").slice(0,300)});}
   render(){
     if(this.state.err)return(
-      <div style={{padding:32,color:"#ef4444",fontFamily:"monospace",background:"#06080f",minHeight:"100dvh"}}>
-        <div style={{fontSize:28,marginBottom:12}}>⚠️ Error</div>
-        <div style={{fontSize:12,marginBottom:8,color:"#e2e8f0"}}>{this.state.err?.message||"Unknown error"}</div>
-        <button onClick={()=>this.setState({err:null})} style={{marginTop:16,padding:"8px 20px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:8,cursor:"pointer"}}>রিলোড করুন</button>
+      <div style={{padding:20,color:"#ef4444",fontFamily:"monospace",background:"#06080f",minHeight:"100dvh",overflowY:"auto"}}>
+        <div style={{fontSize:22,marginBottom:8}}>⚠️ App Error</div>
+        <div style={{fontSize:13,marginBottom:6,color:"#f87171",wordBreak:"break-all"}}>{this.state.err?.message||"Unknown error"}</div>
+        <div style={{fontSize:10,color:"#94a3b8",marginBottom:12,whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{(this.state.err?.stack||"").slice(0,600)}</div>
+        <button onClick={()=>this.setState({err:null})} style={{padding:"8px 20px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:14}}>রিলোড করুন</button>
       </div>
     );
     return this.props.children;
@@ -1188,18 +1189,16 @@ function ReportEditModal({report,onClose,onDone,push}){
     try{
       const phone=(report.Phone||report.phone||"").toString().replace(/^'+/,"").trim();
       const subject=(report.Subject||report.subject||"প্রশ্নটি").toString();
-      const reporterName=(report.Name||report.name||report.UserName||report.userName||"").toString().trim();
       const phK=phoneKey(phone);
+      const notifTitle="✅ রিপোর্ট সমাধান হয়েছে!";
+      const reporterName=(report.Name||report.name||report.UserName||report.userName||"").toString().trim();
       const tab=(report.QSheet||report.qsheet||"").toLowerCase().includes("study")?"study"
                :(report.QSheet||report.qsheet||"").toLowerCase().includes("quiz")?"quiz":"qbank";
-      const notifTitle="✅ রিপোর্ট সমাধান হয়েছে!";
       const notifBody=reporterName
         ? `"${subject}" সংশোধন হয়েছে। (${reporterName}-এর রিপোর্ট)`
         : `"${subject}" সংশোধন হয়েছে।`;
 
-      // Firebase RTDB notification (poll-worker fallback)
       await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:notifBody,questionId:qid,qsheet:qsheet,tab,time:nowTs(),read:false});
-      // FCM via GAS resolveReport action (proper path with questionId+qsheet+tab+reporterName)
       try{
         await Promise.race([
           fetch(GAS+"?"+new URLSearchParams({
@@ -2768,12 +2767,10 @@ function SearchPage({push,onDetail}){
 
 /* ══════════ NOTIFY PAGE ══════════ */
 function NotifyPage({push}){
-  // Broadcast state
   const[title,setTitle]=useState("");
   const[body,setBody]=useState("");
   const[sending,setSending]=useState(false);
   const[hist,setHist]=useState([]);
-  // Personal notify state — ALL hooks must be at top level before any functions
   const[pPhone,setPPhone]=useState("");
   const[pTitle,setPTitle]=useState("");
   const[pBody,setPBody]=useState("");
@@ -2843,7 +2840,7 @@ function NotifyPage({push}){
         fcmOk=!r?.fcm?.error;
       }catch(_){}
       const nm=pUser?.Name||pUser?.name||pPhone;
-      push("success","✅ পাঠানো হয়েছে",(fcmOk?"📲 FCM ✓ ":"📲 FCM ✗ ")+nm);
+      push("success","✅ পাঠানো হয়েছে!",(fcmOk?"📲 FCM ✓ ":"📲 FCM ✗ ")+nm);
       setPTitle("");setPBody("");
     }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
     setPSending(false);
@@ -2851,7 +2848,6 @@ function NotifyPage({push}){
 
   return(
     <div className="page">
-      {/* ── Personal Notify ── */}
       <div className="card" style={{marginBottom:12}}>
         <div className="ct">📨 ব্যক্তিগত Notification</div>
         <div style={{display:"flex",gap:6,marginBottom:8}}>
@@ -2985,26 +2981,22 @@ function TechniquesPage({push,tick}){
       setDone(p=>new Set([...p,key]));
       push("success",status==="approved"?"✅ Approved!":"❌ Rejected!",t.userName||"ব্যবহারকারী");
       // FCM notification to the user
-      const phone=(t.userPhone||t.phone||"").toString().replace(/^'+/,"").trim();
-      if(phone){
+      const uPhone=(t.userPhone||t.phone||"").toString().replace(/^'+/,"").trim();
+      if(uPhone){
         const isApproved=status==="approved";
         const notifTitle=isApproved?"✅ Technique অনুমোদিত!":"❌ Technique প্রত্যাখ্যাত";
         const techName=(t.technique||"আপনার Technique").toString().slice(0,60);
         const notifBody=isApproved
           ? `"${techName}" সবার জন্য প্রকাশিত হয়েছে! 🎉`
           : `"${techName}" অনুমোদন হয়নি।`;
-        const phK=phoneKey(phone);
-        // Firebase RTDB fallback
-        fbSet(`Notifications/${phK}/notif_${Date.now()}`,{
+        const uPhK=phoneKey(uPhone);
+        fbSet(`Notifications/${uPhK}/notif_${Date.now()}`,{
           type:"technique_status",title:notifTitle,body:notifBody,
           questionId:t._qId||"",status,time:nowTs(),read:false
         }).catch(()=>{});
-        // FCM push
-        gasCall({
-          action:"personalNotify",phone,
+        gasCall({action:"personalNotify",phone:uPhone,
           title:encodeURIComponent(notifTitle),
-          body:encodeURIComponent(notifBody),
-          questionId:t._qId||""
+          body:encodeURIComponent(notifBody)
         }).catch(()=>{});
       }
     }catch(e){push("error","ব্যর্থ",e.message);}
