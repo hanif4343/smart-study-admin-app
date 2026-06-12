@@ -37,7 +37,7 @@ jobs:
       - name: Initialize Capacitor
         run: |
           npx cap init "SmartAdmin" "com.smartstudy.admin" --web-dir dist
-          # cap init overwrites capacitor.config.json â€” restore server block
+          # cap init overwrites capacitor.config.json — restore server block
           printf '{\n  "appId": "com.smartstudy.admin",\n  "appName": "Smart Admin",\n  "webDir": "dist",\n  "server": {\n    "hostname": "localhost",\n    "androidScheme": "https"\n  }\n}\n' > capacitor.config.json
 
       - name: Add Android Platform
@@ -45,13 +45,16 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Inject MLKit OCR Plugin
+      - name: Inject MLKit OCR Plugin + Permissions
         run: |
           PKG_DIR="android/app/src/main/java/com/smartstudy/admin"
           mkdir -p "$PKG_DIR"
           cp android-src/OcrPlugin.kt "$PKG_DIR/OcrPlugin.kt"
           cp android-src/MainActivity.kt "$PKG_DIR/MainActivity.kt"
           python3 android-src/add_mlkit.py
+
+      - name: Final Capacitor Sync (after plugin inject)
+        run: npx cap sync android
 
       - name: Cache Gradle
         uses: actions/cache@v4
