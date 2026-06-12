@@ -37,9 +37,10 @@ jobs:
       - name: Initialize Capacitor
         run: |
           npx cap init "SmartAdmin" "com.smartstudy.admin" --web-dir dist
-          printf '{"appId":"com.smartstudy.admin","appName":"Smart Admin","webDir":"dist","server":{"hostname":"localhost","androidScheme":"https"}}\n' > capacitor.config.json
+          # cap init overwrites capacitor.config.json — restore server block
+          printf '{\n  "appId": "com.smartstudy.admin",\n  "appName": "Smart Admin",\n  "webDir": "dist",\n  "server": {\n    "hostname": "localhost",\n    "androidScheme": "https"\n  }\n}\n' > capacitor.config.json
 
-      - name: Add Android Platform & Sync
+      - name: Add Android Platform
         run: |
           npx cap add android
           npx cap sync android
@@ -48,38 +49,12 @@ jobs:
         run: |
           PKG_DIR="android/app/src/main/java/com/smartstudy/admin"
           mkdir -p "$PKG_DIR"
-
-          # ⚠️ CRITICAL: Delete Capacitor-generated MainActivity.java
-          # It conflicts with our MainActivity.kt — Java wins over Kotlin if both exist
-          rm -f "$PKG_DIR/MainActivity.java"
-          echo "🗑️  Deleted MainActivity.java (was blocking our MainActivity.kt)"
-
-          cp android-src/OcrPlugin.kt    "$PKG_DIR/OcrPlugin.kt"
+          cp android-src/OcrPlugin.kt "$PKG_DIR/OcrPlugin.kt"
           cp android-src/MainActivity.kt "$PKG_DIR/MainActivity.kt"
           python3 android-src/add_mlkit.py
 
-      - name: Verify Plugin Injection
-        run: |
-          PKG_DIR="android/app/src/main/java/com/smartstudy/admin"
-          echo "=== Package directory ==="
-          ls -la "$PKG_DIR/"
-          echo ""
-          echo "=== MainActivity.kt ==="
-          cat "$PKG_DIR/MainActivity.kt"
-          echo ""
-          echo "=== No MainActivity.java? ==="
-          if [ -f "$PKG_DIR/MainActivity.java" ]; then
-            echo "❌ MainActivity.java still exists — conflict!"
-            exit 1
-          else
-            echo "✅ MainActivity.java gone — Kotlin file will be used"
-          fi
-          echo ""
-          echo "=== MLKit in build.gradle ==="
-          grep -i "text-recognition" android/app/build.gradle || echo "WARNING: MLKit not found!"
-          echo ""
-          echo "=== Permissions in Manifest ==="
-          grep "READ_MEDIA\|CAMERA" android/app/src/main/AndroidManifest.xml
+      - name: Final Capacitor Sync (after plugin inject)
+        run: npx cap sync android
 
       - name: Cache Gradle
         uses: actions/cache@v4
