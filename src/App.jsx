@@ -1388,25 +1388,66 @@ function AIImportPage({push,onSendToBulk}){
   const stopRef=useRef(false);
 
   /* ── Capacitor Camera plugin ── */
+
+  // Permission helper — Android 13+ needs READ_MEDIA_IMAGES
+  const _ensureMediaPermission=async()=>{
+    try{
+      const {Permissions}=window.Capacitor?.Plugins||{};
+      if(!Permissions) return true; // web — skip
+      // Check camera permission (covers READ_MEDIA_IMAGES via Capacitor Camera plugin)
+      const {Camera}=window.Capacitor?.Plugins||{};
+      if(!Camera) return true;
+      const perm=await Camera.checkPermissions();
+      if(perm?.photos==="granted"||perm?.photos==="limited") return true;
+      const req=await Camera.requestPermissions({permissions:["photos","camera"]});
+      if(req?.photos==="denied"||req?.photos==="permanently_denied"){
+        push("error","Permission denied","Settings থেকে Photos permission দিন");
+        _LC.error("permission","READ_MEDIA_IMAGES denied by user");
+        return false;
+      }
+      return true;
+    }catch(e){
+      _LC.warn("permission",`Permission check error: ${e.message}`);
+      return true; // proceed anyway
+    }
+  };
+
   const pickGallery=async()=>{
     try{
       const {Camera}=window.Capacitor?.Plugins||{};
-      if(!Camera){push("warn","Camera plugin নেই","");return;}
+      if(!Camera){
+        _LC.error("gallery","Camera plugin missing — OcrPlugin not injected or APK not rebuilt");
+        push("warn","Camera plugin নেই","APK rebuild করুন");
+        return;
+      }
+      const allowed=await _ensureMediaPermission();
+      if(!allowed) return;
+      _LC.log("gallery","pickImages called");
       const res=await Camera.pickImages({quality:90,limit:0});
       const imgs=(res.photos||[]).map(p=>({
         webPath:p.webPath,base64:"",status:"pending",ocrText:"",id:Date.now()+Math.random()
       }));
+      _LC.log("gallery",`${imgs.length} image(s) selected`);
       setImages(p=>[...p,...imgs]);
-    }catch(e){push("error","Gallery error",e.message);}
+    }catch(e){
+      _LC.error("gallery",`Gallery error: ${e.message}`);
+      push("error","Gallery error",e.message);
+    }
   };
 
   const openCamera=async()=>{
     try{
       const {Camera}=window.Capacitor?.Plugins||{};
-      if(!Camera){push("warn","Camera plugin নেই","");return;}
+      if(!Camera){push("warn","Camera plugin নেই","APK rebuild করুন");return;}
+      const allowed=await _ensureMediaPermission();
+      if(!allowed) return;
       const res=await Camera.getPhoto({quality:90,resultType:"base64",source:"CAMERA"});
+      _LC.log("camera","Photo taken via camera");
       setImages(p=>[...p,{webPath:"",base64:res.base64String||"",status:"pending",ocrText:"",id:Date.now()}]);
-    }catch(e){if(!e.message?.includes("cancelled"))push("error","Camera error",e.message);}
+    }catch(e){
+      if(!e.message?.includes("cancelled")) push("error","Camera error",e.message);
+      if(!e.message?.includes("cancelled")) _LC.error("camera",`Camera error: ${e.message}`);
+    }
   };
 
   const removeImg=(id)=>setImages(p=>p.filter(x=>x.id!==id));
@@ -1447,9 +1488,22 @@ function AIImportPage({push,onSendToBulk}){
   /* ── ML Kit OCR via native plugin ── */
   const runOcrOnBase64=async(b64)=>{
     const {OcrPlugin}=window.Capacitor?.Plugins||{};
-    if(!OcrPlugin)throw new Error("OcrPlugin নেই — APK reinstall করুন");
-    const res=await OcrPlugin.recognizeText({base64:b64});
-    return res.text||"";
+    if(!OcrPlugin){
+      _LC.crash("OcrPlugin","OcrPlugin missing from Capacitor.Plugins — MLKit inject failed or APK not rebuilt",{
+        availablePlugins: Object.keys(window.Capacitor?.Plugins||{}).join(",")
+      });
+      throw new Error("OcrPlugin নেই — APK rebuild করুন");
+    }
+    try{
+      _LC.api("OcrPlugin","recognizeText called");
+      const res=await OcrPlugin.recognizeText({base64:b64});
+      const text=res.text||"";
+      _LC.log("OcrPlugin",`OCR result: ${text.length} chars`);
+      return text;
+    }catch(e){
+      _LC.error("OcrPlugin",`recognizeText failed: ${e.message}`);
+      throw e;
+    }
   };
 
   /* ── Run OCR on all images serially ── */
