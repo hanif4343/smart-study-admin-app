@@ -45,11 +45,16 @@ jobs:
           npx cap sync android
 
       - name: Inject MLKit OCR Plugin + Permissions
-        # IMPORTANT: No cap sync after this step — it would overwrite MainActivity.kt
         run: |
           PKG_DIR="android/app/src/main/java/com/smartstudy/admin"
           mkdir -p "$PKG_DIR"
-          cp android-src/OcrPlugin.kt   "$PKG_DIR/OcrPlugin.kt"
+
+          # ⚠️ CRITICAL: Delete Capacitor-generated MainActivity.java
+          # It conflicts with our MainActivity.kt — Java wins over Kotlin if both exist
+          rm -f "$PKG_DIR/MainActivity.java"
+          echo "🗑️  Deleted MainActivity.java (was blocking our MainActivity.kt)"
+
+          cp android-src/OcrPlugin.kt    "$PKG_DIR/OcrPlugin.kt"
           cp android-src/MainActivity.kt "$PKG_DIR/MainActivity.kt"
           python3 android-src/add_mlkit.py
 
@@ -62,11 +67,19 @@ jobs:
           echo "=== MainActivity.kt ==="
           cat "$PKG_DIR/MainActivity.kt"
           echo ""
-          echo "=== build.gradle MLKit check ==="
-          grep -i "mlkit\|text-recognition" android/app/build.gradle || echo "WARNING: MLKit not found in build.gradle!"
+          echo "=== No MainActivity.java? ==="
+          if [ -f "$PKG_DIR/MainActivity.java" ]; then
+            echo "❌ MainActivity.java still exists — conflict!"
+            exit 1
+          else
+            echo "✅ MainActivity.java gone — Kotlin file will be used"
+          fi
           echo ""
-          echo "=== AndroidManifest permissions ==="
-          grep "READ_MEDIA\|CAMERA\|READ_EXTERNAL" android/app/src/main/AndroidManifest.xml || echo "WARNING: permissions not found!"
+          echo "=== MLKit in build.gradle ==="
+          grep -i "text-recognition" android/app/build.gradle || echo "WARNING: MLKit not found!"
+          echo ""
+          echo "=== Permissions in Manifest ==="
+          grep "READ_MEDIA\|CAMERA" android/app/src/main/AndroidManifest.xml
 
       - name: Cache Gradle
         uses: actions/cache@v4
