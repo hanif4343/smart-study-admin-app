@@ -10,11 +10,151 @@ const SECRET  = import.meta.env.VITE_SECRET_KEY;
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
+/* ══════════════════════════════════════════════════════════════
+   🔥 ADMIN APP LOGCAT — Firebase Realtime DB Logger
+   সব log, error, warn, API call, crash Firebase-এ জমা হবে
+   Path: AdminAppLogcat/{sessionId}/{pushId}
+   ══════════════════════════════════════════════════════════════ */
+const _LC = (() => {
+  const _sessionId = (() => {
+    const now = new Date();
+    const pad = n => String(n).padStart(2,"0");
+    return `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}_${Math.random().toString(36).slice(2,7)}`;
+  })();
+
+  const _device = (() => {
+    try {
+      const ua = navigator.userAgent;
+      const isAndroid = /Android/.test(ua);
+      const isIOS = /iPhone|iPad/.test(ua);
+      const androidVer = isAndroid ? (ua.match(/Android ([\d.]+)/)||[])[1] : null;
+      const model = isAndroid ? (ua.match(/;\s*([^;)]+)\sBuild/)||[])[1]?.trim() : null;
+      return {
+        platform: isAndroid ? "Android" : isIOS ? "iOS" : "Web",
+        androidVersion: androidVer || null,
+        model: model || null,
+        userAgent: ua.slice(0, 120),
+        language: navigator.language || null,
+        online: navigator.onLine,
+        screen: `${window.screen?.width||0}x${window.screen?.height||0}`,
+      };
+    } catch(e) { return { platform: "Unknown" }; }
+  })();
+
+  const _queue = [];
+  let _flushing = false;
+  let _logCount = 0;
+  const MAX_QUEUE = 200;
+  const MAX_LOGS_PER_SESSION = 2000;
+
+  async function _pushToFirebase(entry) {
+    if (!FB) return;
+    try {
+      let authQ = "";
+      try { if (window.__adminIdToken) authQ = `?auth=${window.__adminIdToken}`; } catch(e){}
+      const url = `${FB}/AdminAppLogcat/${_sessionId}.json${authQ}`;
+      await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(entry),
+      });
+    } catch(e) { /* Firebase write fail — silent */ }
+  }
+
+  async function _flush() {
+    if (_flushing || _queue.length === 0) return;
+    _flushing = true;
+    while (_queue.length > 0) {
+      const entry = _queue.shift();
+      await _pushToFirebase(entry);
+    }
+    _flushing = false;
+  }
+
+  function _send(level, tag, message, extra) {
+    if (_logCount >= MAX_LOGS_PER_SESSION) return;
+    _logCount++;
+    const now = new Date();
+    const entry = {
+      ts: now.toISOString(),
+      tsMs: now.getTime(),
+      session: _sessionId,
+      level,
+      tag,
+      message: String(message).slice(0, 800),
+      ...(extra && Object.keys(extra).length > 0 ? { extra } : {}),
+    };
+    if (_queue.length < MAX_QUEUE) _queue.push(entry);
+    setTimeout(_flush, 0);
+  }
+
+  const _origLog   = console.log.bind(console);
+  const _origWarn  = console.warn.bind(console);
+  const _origError = console.error.bind(console);
+
+  function _serialize(args) {
+    return args.map(a => {
+      if (a === null) return "null";
+      if (a === undefined) return "undefined";
+      if (typeof a === "string") return a;
+      if (a instanceof Error) return `${a.name}: ${a.message}`;
+      try { return JSON.stringify(a); } catch(e) { return String(a); }
+    }).join(" ").slice(0, 800);
+  }
+
+  console.log = (...args) => { _origLog(...args); _send("LOG", "console", _serialize(args)); };
+  console.warn = (...args) => { _origWarn(...args); _send("WARN", "console", _serialize(args)); };
+  console.error = (...args) => { _origError(...args); _send("ERROR", "console", _serialize(args)); };
+  console.info = (...args) => { _origLog(...args); _send("INFO", "console", _serialize(args)); };
+
+  window.addEventListener("error", (e) => {
+    _send("CRASH", "uncaughtError", `${e.message} @ ${e.filename}:${e.lineno}:${e.colno}`, {
+      stack: (e.error?.stack||"").slice(0,500),
+    });
+  });
+  window.addEventListener("unhandledrejection", (e) => {
+    const msg = e.reason instanceof Error
+      ? `${e.reason.name}: ${e.reason.message}`
+      : String(e.reason||"UnhandledRejection");
+    _send("CRASH", "unhandledRejection", msg, { stack: (e.reason?.stack||"").slice(0,400) });
+  });
+
+  window.addEventListener("online",  () => _send("INFO", "network", "Device came ONLINE"));
+  window.addEventListener("offline", () => _send("WARN", "network", "Device went OFFLINE"));
+
+  document.addEventListener("visibilitychange", () => {
+    _send("LIFECYCLE", "visibility", document.hidden ? "App went to BACKGROUND" : "App came to FOREGROUND");
+  });
+
+  _send("LIFECYCLE", "appStart", "Admin App started", {
+    device: _device,
+    fbUrl: FB ? FB.replace(/https?:\/\//, "").slice(0,40) : "NOT_SET",
+    fbProject: FB_PROJ || "NOT_SET",
+    appVersion: "1.0",
+  });
+
+  return {
+    log:       (tag, msg, extra) => _send("LOG",       tag, msg, extra),
+    warn:      (tag, msg, extra) => _send("WARN",      tag, msg, extra),
+    error:     (tag, msg, extra) => _send("ERROR",     tag, msg, extra),
+    info:      (tag, msg, extra) => _send("INFO",      tag, msg, extra),
+    auth:      (tag, msg, extra) => _send("AUTH",      tag, msg, extra),
+    api:       (tag, msg, extra) => _send("API",       tag, msg, extra),
+    lifecycle: (tag, msg, extra) => _send("LIFECYCLE", tag, msg, extra),
+    crash:     (tag, msg, extra) => _send("CRASH",     tag, msg, extra),
+    sessionId: _sessionId,
+    device:    _device,
+  };
+})();
+/* ══════════ END ADMIN APP LOGCAT ══════════ */
+
+
+
 /* ══════════ ERROR BOUNDARY ══════════ */
 class ErrorBoundary extends React.Component {
   constructor(p){super(p);this.state={err:null};}
   static getDerivedStateFromError(e){return{err:e};}
-  componentDidCatch(e,info){console.error("App error:",e,info);}
+  componentDidCatch(e,info){console.error("App error:",e,info);_LC.crash("ErrorBoundary",`${e?.name||"Error"}: ${e?.message||"unknown"}`,{stack:(e?.stack||"").slice(0,400),componentStack:(info?.componentStack||"").slice(0,300)});}
   render(){
     if(this.state.err)return(
       <div style={{padding:32,color:"#ef4444",fontFamily:"monospace",background:"#06080f",minHeight:"100dvh"}}>
@@ -32,15 +172,28 @@ let _idToken = null;
 let _tokenExp = 0;
 
 async function signInWithEmail(email, password) {
-  const r = await fetch(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FB_KEY}`,
-    {method:"POST",headers:{"Content-Type":"application/json"},
-     body:JSON.stringify({email,password,returnSecureToken:true})}
-  );
-  const d = await r.json();
-  if(!r.ok) throw new Error(d?.error?.message||"Login failed");
+  _LC.auth("signIn", `Login attempt: ${email}`);
+  let r, d;
+  try {
+    r = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FB_KEY}`,
+      {method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({email,password,returnSecureToken:true})}
+    );
+    d = await r.json();
+  } catch(netErr) {
+    _LC.error("signIn", `Network error during login: ${netErr.message}`, { email });
+    throw netErr;
+  }
+  if(!r.ok) {
+    const errMsg = d?.error?.message||"Login failed";
+    _LC.error("signIn", `Login FAILED for ${email}: ${errMsg}`, { httpStatus: r.status, firebaseError: d?.error });
+    throw new Error(errMsg);
+  }
   _idToken = d.idToken;
   _tokenExp = Date.now() + (parseInt(d.expiresIn||3600)-60)*1000;
+  window.__adminIdToken = _idToken; // expose for _LC flush
+  _LC.auth("signIn", `Login SUCCESS: ${email}`, { uid: d.localId, expiresIn: d.expiresIn });
   // store refresh token so we can get new idToken without password
   localStorage.setItem("fb_refresh_token", d.refreshToken||"");
   localStorage.setItem("fb_email", email);
@@ -56,12 +209,20 @@ async function refreshTokenWithRefreshToken(refreshToken) {
        body:`grant_type=refresh_token&refresh_token=${encodeURIComponent(refreshToken)}`}
     );
     const d = await r.json();
-    if(!r.ok || !d.id_token) return null;
+    if(!r.ok || !d.id_token){
+      _LC.warn("tokenRefresh", `Refresh token failed: HTTP ${r.status}`, { error: d?.error });
+      return null;
+    }
     _idToken = d.id_token;
+    window.__adminIdToken = _idToken;
     _tokenExp = Date.now() + (parseInt(d.expires_in||3600)-60)*1000;
     localStorage.setItem("fb_refresh_token", d.refresh_token||refreshToken);
+    _LC.auth("tokenRefresh", "Token refreshed successfully via refresh_token");
     return _idToken;
-  } catch(e){ return null; }
+  } catch(e){
+    _LC.error("tokenRefresh", `Token refresh network error: ${e.message}`);
+    return null;
+  }
 }
 
 async function refreshTokenIfNeeded() {
@@ -79,11 +240,16 @@ async function refreshTokenIfNeeded() {
   const passEnc = localStorage.getItem("fb_pass_enc");
   if(email && passEnc){
     try{
+      _LC.auth("tokenRefresh", `Falling back to re-login for: ${email}`);
       const pass = decodeURIComponent(escape(atob(passEnc)));
       await signInWithEmail(email, pass);
       return _idToken;
-    }catch(e){ _idToken=null; return null; }
+    }catch(e){
+      _LC.error("tokenRefresh", `Fallback re-login FAILED: ${e.message}`);
+      _idToken=null; return null;
+    }
   }
+  _LC.warn("tokenRefresh", "No credentials available — user must login manually");
   return null;
 }
 
@@ -101,30 +267,42 @@ async function _checkResp(r){
       }
     }catch(_){}
     console.error("Firebase write error:",r.status, msg, r.url);
+    _LC.error("firebaseWrite", `Firebase write error: ${msg}`, { status: r.status, url: (r.url||"").split("?")[0].slice(-60) });
     throw new Error(msg);
   }
   try{ return JSON.parse(txt); }catch(_){ return txt; }
 }
 const _tok=()=>refreshTokenIfNeeded();
-const fbGet   = async p=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`);return r.json();};
+const fbGet   = async p=>{
+  const t=await _tok();
+  try {
+    const r=await fetch(`${FB}/${p}.json${_authQ(t)}`);
+    const data = await r.json();
+    if(data?.error) _LC.error("fbGet", `fbGet error at ${p}: ${data.error}`, { path: p });
+    return data;
+  } catch(e) {
+    _LC.error("fbGet", `fbGet network fail: ${e.message}`, { path: p });
+    throw e;
+  }
+};
 const fbPatch  = async(p,d)=>{
   const t=await _tok();
-  if(!t){throw new Error("Not authenticated — please re-login");}
-  if(!p||p.includes("/undefined")||p.includes("/null")){throw new Error("Invalid path: "+p);}
+  if(!t){ _LC.error("fbPatch","Not authenticated — token missing",{path:p}); throw new Error("Not authenticated — please re-login"); }
+  if(!p||p.includes("/undefined")||p.includes("/null")){ _LC.error("fbPatch","Invalid path",{path:p}); throw new Error("Invalid path: "+p); }
   const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
   return _checkResp(r);
 };
 const fbSet   = async(p,d)=>{
   const t=await _tok();
-  if(!t){throw new Error("Not authenticated — please re-login");}
+  if(!t){ _LC.error("fbSet","Not authenticated — token missing",{path:p}); throw new Error("Not authenticated — please re-login"); }
   const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
   return _checkResp(r);
 };
 const fbPush  = async(p,d)=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
 const fbDelete= async p=>{
   const t=await _tok();
-  if(!t){throw new Error("Not authenticated — please re-login");}
-  if(!p||p.includes("/undefined")||p.includes("/null")){throw new Error("Invalid path: "+p);}
+  if(!t){ _LC.error("fbDelete","Not authenticated — token missing",{path:p}); throw new Error("Not authenticated — please re-login"); }
+  if(!p||p.includes("/undefined")||p.includes("/null")){ _LC.error("fbDelete","Invalid path",{path:p}); throw new Error("Invalid path: "+p); }
   const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"DELETE"});
   return _checkResp(r);
 };
@@ -133,7 +311,18 @@ const fbDelete= async p=>{
 /* ══════════ GAS helpers ══════════ */
 const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}),300);
 const gasPost= body  =>setTimeout(()=>fetch(GAS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,secret:SECRET})}).catch(()=>{}),300);
-const gasCall= async params=>{const r=await fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET}));return r.json();};
+const gasCall= async params=>{
+  _LC.api("gasCall", `GAS call: action=${params.action||params.type||"?"}`, { params: JSON.stringify(params).slice(0,200) });
+  try {
+    const r=await fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET}));
+    const data = await r.json();
+    if(data?.error || data?.status==="error") _LC.error("gasCall", `GAS error: ${data?.error||data?.message||JSON.stringify(data).slice(0,200)}`);
+    return data;
+  } catch(e) {
+    _LC.error("gasCall", `GAS network fail: ${e.message}`);
+    throw e;
+  }
+};
 
 /* ══════════ SIMPLE FETCH CACHE — no subscriptions, no loops ══════════ */
 const _store = {}; // path -> {data, ts, promise}
@@ -2834,19 +3023,26 @@ function LoginScreen({onLogin}){
     const savedPass=localStorage.getItem("fb_pass_enc");
     if(savedEmail&&savedPass){
       setLoading(true);
+      _LC.auth("autoLogin", `Auto-login attempt: ${savedEmail}`);
       signInWithEmail(savedEmail,atob(savedPass))
-        .then(()=>onLogin())
-        .catch(()=>{ localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");setLoading(false); });
+        .then(()=>{ _LC.auth("autoLogin", `Auto-login SUCCESS: ${savedEmail}`); onLogin(); })
+        .catch((e)=>{ _LC.error("autoLogin", `Auto-login FAILED: ${e?.message}`, { email: savedEmail }); localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");setLoading(false); });
+    } else {
+      _LC.lifecycle("LoginScreen", "Login screen shown — no saved credentials");
     }
   },[]);
 
   const doLogin=async()=>{
-    if(!email||!pass){setErr("Email ও Password দিন");return;}
+    if(!email||!pass){setErr("Email ও Password দিন");_LC.warn("doLogin","Login attempted with empty fields");return;}
     setLoading(true);setErr("");
     try{
       await signInWithEmail(email,pass);
+      _LC.auth("doLogin", `Manual login SUCCESS: ${email}`);
       onLogin();
-    }catch(e){setErr(e.message||"Login ব্যর্থ");setLoading(false);}
+    }catch(e){
+      _LC.error("doLogin", `Manual login FAILED: ${e?.message}`, { email });
+      setErr(e.message||"Login ব্যর্থ");setLoading(false);
+    }
   };
 
   return(
@@ -2908,6 +3104,7 @@ export default function App(){
 
   // ALL hooks must be called unconditionally (Rules of Hooks)
   const goPage=useCallback((p)=>{
+    _LC.lifecycle("navigate", `Page → ${p}`);
     setPage(prev=>{
       if(prev!==p){ backStack.current=[...backStack.current.filter(x=>x!==p),p]; }
       return p;
@@ -3002,7 +3199,8 @@ export default function App(){
         const key="admin_"+token.slice(-16).replace(/[^a-zA-Z0-9]/g,"_");
         await fbSet(`AdminAppFCM/${key}`,{token,savedAt:nowTs(),app:"admin"});
         console.log("✅ Admin FCM token saved:",key);
-      }catch(e){ console.warn("FCM token save error",e); }
+        _LC.info("FCM", `FCM token saved: ${key}`);
+      }catch(e){ console.warn("FCM token save error",e); _LC.error("FCM",`FCM token save error: ${e?.message}`,{key}); }
     });
 
     // ── Notification tap হলে সঠিক page-এ যাও ──
@@ -3018,7 +3216,7 @@ export default function App(){
         };
         const target=pageMap[url]||pageMap[data.type]||null;
         if(target) goPage(target);
-      } catch(e){ console.warn("Push nav error",e); }
+      } catch(e){ console.warn("Push nav error",e); _LC.error("pushNav",`Push notification nav error: ${e?.message}`); }
     };
     PN.addListener("pushNotificationActionPerformed", handler);
 
@@ -3029,7 +3227,7 @@ export default function App(){
   if(!loggedIn) return(
     <ErrorBoundary>
       <style>{css}</style>
-      <LoginScreen onLogin={()=>setLoggedIn(true)}/>
+      <LoginScreen onLogin={()=>{ _LC.lifecycle("App","User logged in — entering admin panel"); setLoggedIn(true); }}/>
     </ErrorBoundary>
   );
 
@@ -3077,7 +3275,7 @@ export default function App(){
         </div>
         <div style={{display:"flex",gap:6}}>
           <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
-          <button className="icon-btn" title="Logout" onClick={()=>{localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");_idToken=null;setLoggedIn(false);}}>🚪</button>
+          <button className="icon-btn" title="Logout" onClick={()=>{ _LC.auth("logout","Admin logged out manually"); localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");localStorage.removeItem("fb_refresh_token");window.__adminIdToken=null;_idToken=null;setLoggedIn(false); }}>🚪</button>
         </div>
       </div>
 
