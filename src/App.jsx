@@ -157,11 +157,10 @@ class ErrorBoundary extends React.Component {
   componentDidCatch(e,info){console.error("App error:",e,info);_LC.crash("ErrorBoundary",`${e?.name||"Error"}: ${e?.message||"unknown"}`,{stack:(e?.stack||"").slice(0,400),componentStack:(info?.componentStack||"").slice(0,300)});}
   render(){
     if(this.state.err)return(
-      <div style={{padding:20,color:"#ef4444",fontFamily:"monospace",background:"#06080f",minHeight:"100dvh",overflowY:"auto"}}>
-        <div style={{fontSize:22,marginBottom:8}}>⚠️ App Error</div>
-        <div style={{fontSize:13,marginBottom:6,color:"#f87171",wordBreak:"break-all"}}>{this.state.err?.message||"Unknown error"}</div>
-        <div style={{fontSize:10,color:"#94a3b8",marginBottom:12,whiteSpace:"pre-wrap",wordBreak:"break-all"}}>{(this.state.err?.stack||"").slice(0,600)}</div>
-        <button onClick={()=>this.setState({err:null})} style={{padding:"8px 20px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:8,cursor:"pointer",fontSize:14}}>রিলোড করুন</button>
+      <div style={{padding:32,color:"#ef4444",fontFamily:"monospace",background:"#06080f",minHeight:"100dvh"}}>
+        <div style={{fontSize:28,marginBottom:12}}>⚠️ Error</div>
+        <div style={{fontSize:12,marginBottom:8,color:"#e2e8f0"}}>{this.state.err?.message||"Unknown error"}</div>
+        <button onClick={()=>this.setState({err:null})} style={{marginTop:16,padding:"8px 20px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:8,cursor:"pointer"}}>রিলোড করুন</button>
       </div>
     );
     return this.props.children;
@@ -1191,22 +1190,23 @@ function ReportEditModal({report,onClose,onDone,push}){
       const subject=(report.Subject||report.subject||"প্রশ্নটি").toString();
       const phK=phoneKey(phone);
       const notifTitle="✅ রিপোর্ট সমাধান হয়েছে!";
-      const reporterName=(report.Name||report.name||report.UserName||report.userName||"").toString().trim();
-      const tab=(report.QSheet||report.qsheet||"").toLowerCase().includes("study")?"study"
-               :(report.QSheet||report.qsheet||"").toLowerCase().includes("quiz")?"quiz":"qbank";
-      const notifBody=reporterName
-        ? `"${subject}" সংশোধন হয়েছে। (${reporterName}-এর রিপোর্ট)`
-        : `"${subject}" সংশোধন হয়েছে।`;
+      const notifBody=`"${subject}" সংশোধন হয়েছে।`;
 
-      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:notifBody,questionId:qid,qsheet:qsheet,tab,time:nowTs(),read:false});
+      // reporter এর নাম খুঁজে নাও (Users থেকে), notification body তে দেখানোর জন্য
+      let reporterName="";
+      try{
+        const usersRaw=await loadPath("Users");
+        const u=toArr(usersRaw).find(x=>(x.Phone||x.phone||"").toString().replace(/^'+/,"").trim()===phone);
+        reporterName=(u?.Name||u?.name||"").toString();
+      }catch(_){}
+      const finalBody=reporterName?`"${subject}" সংশোধন হয়েছে। (${reporterName}-এর রিপোর্ট)`:notifBody;
+
+      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:finalBody,questionId:qid,qsheet,time:nowTs(),read:false});
       try{
         await Promise.race([
           fetch(GAS+"?"+new URLSearchParams({
-            action:"resolveReport",phone,
-            subject:encodeURIComponent(subject),
-            questionId:qid,
-            qsheet:encodeURIComponent(qsheet),
-            tab,
+            action:"resolveReport",phone,subject,
+            questionId:qid,qsheet,tab:(qdata?._tab||""),
             reporterName:encodeURIComponent(reporterName)
           })),
           new Promise((_,rej)=>setTimeout(()=>rej(new Error("t")),7000))
@@ -2766,17 +2766,24 @@ function SearchPage({push,onDetail}){
 }
 
 /* ══════════ NOTIFY PAGE ══════════ */
-function NotifyPage({push}){
+function NotifyPage({push,tick}){
   const[title,setTitle]=useState("");
   const[body,setBody]=useState("");
   const[sending,setSending]=useState(false);
   const[hist,setHist]=useState([]);
-  const[pPhone,setPPhone]=useState("");
-  const[pTitle,setPTitle]=useState("");
-  const[pBody,setPBody]=useState("");
-  const[pSending,setPSending]=useState(false);
-  const[pUser,setPUser]=useState(null);
-  const[pSearch,setPSearch]=useState("");
+  const[q,setQ]=useState("");
+  const[selUser,setSelUser]=useState(null);
+  const{data:usersRaw}=useFB("Users",tick);
+  const userList=useMemo(()=>toArr(usersRaw),[usersRaw]);
+  const results=useMemo(()=>{
+    const s=q.trim().toLowerCase();
+    if(!s)return[];
+    return userList.filter(u=>{
+      const nm=(u.Name||u.name||"").toLowerCase();
+      const ph=(u.Phone||u.phone||"").toString().replace(/^'+/,"");
+      return nm.includes(s)||ph.includes(s);
+    }).slice(0,8);
+  },[q,userList]);
 
   const send=async()=>{
     if(!title||!body){push("warn","তথ্য দিন","");return;}
@@ -2808,62 +2815,31 @@ function NotifyPage({push}){
     setSending(false);
   };
 
-  const searchUser=async()=>{
-    const q=pSearch.trim().replace(/^'+/,"");
-    if(!q){push("warn","ফোন বা নাম দিন","");return;}
-    try{
-      const raw=await loadPath("Users");
-      const users=toArr(raw);
-      const found=users.find(u=>{
-        const ph=(u.Phone||u.phone||"").toString().replace(/^'+/,"").replace(/\s/g,"");
-        const nm=(u.Name||u.name||"").toString().toLowerCase();
-        const sq=q.toLowerCase();
-        return ph.includes(q)||ph.includes(q.replace(/^0/,"88"))||nm.includes(sq);
-      });
-      if(found){setPUser(found);setPPhone((found.Phone||found.phone||"").toString().replace(/^'+/,""));}
-      else push("warn","ইউজার পাওয়া যায়নি",q);
-    }catch(e){push("error","ব্যর্থ",e.message);}
-  };
-
-  const sendPersonal=async()=>{
-    if(!pPhone||!pTitle||!pBody){push("warn","তথ্য পূরণ করুন","");return;}
-    setPSending(true);
-    try{
-      const phK=phoneKey(pPhone);
-      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"personal",title:pTitle,body:pBody,time:nowTs(),read:false});
-      let fcmOk=false;
-      try{
-        const r=await Promise.race([
-          gasCall({action:"personalNotify",phone:pPhone,title:encodeURIComponent(pTitle),body:encodeURIComponent(pBody)}),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000))
-        ]);
-        fcmOk=!r?.fcm?.error;
-      }catch(_){}
-      const nm=pUser?.Name||pUser?.name||pPhone;
-      push("success","✅ পাঠানো হয়েছে!",(fcmOk?"📲 FCM ✓ ":"📲 FCM ✗ ")+nm);
-      setPTitle("");setPBody("");
-    }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
-    setPSending(false);
-  };
-
   return(
     <div className="page">
-      <div className="card" style={{marginBottom:12}}>
-        <div className="ct">📨 ব্যক্তিগত Notification</div>
-        <div style={{display:"flex",gap:6,marginBottom:8}}>
-          <input className="inp" style={{flex:1}} placeholder="ফোন নম্বর বা নাম দিয়ে খুঁজুন..." value={pSearch} onChange={e=>setPSearch(e.target.value)} onKeyDown={e=>e.key==="Enter"&&searchUser()}/>
-          <button className="btn bp" style={{padding:"0 12px"}} onClick={searchUser}>🔍</button>
+      <div className="card">
+        <div className="ct">👤 একজনকে নোটিফাই করুন</div>
+        <div className="fld">
+          <label>স্টুডেন্ট খুঁজুন (নাম/ফোন)</label>
+          <input className="inp" placeholder="নাম বা ফোন নাম্বার লিখুন..." value={q} onChange={e=>{setQ(e.target.value);setSelUser(null);}}/>
         </div>
-        {pUser&&<div style={{fontSize:11,background:"#0002",borderRadius:6,padding:"5px 8px",marginBottom:8,display:"flex",alignItems:"center",gap:6}}>
-          <span>👤 {pUser.Name||pUser.name||"—"}</span>
-          <span style={{color:"#888"}}>📱 {(pUser.Phone||pUser.phone||"").toString().replace(/^'+/,"")}</span>
-          <button style={{marginLeft:"auto",fontSize:10,background:"none",border:"none",cursor:"pointer",color:"#888"}} onClick={()=>{setPUser(null);setPSearch("");setPPhone("");}}>✕</button>
-        </div>}
-        <div className="fld"><label>প্রাপকের ফোন</label><input className="inp" placeholder="01XXXXXXXXX" value={pPhone} onChange={e=>setPPhone(e.target.value)}/></div>
-        <div className="fld"><label>শিরোনাম</label><input className="inp" placeholder="Title..." value={pTitle} onChange={e=>setPTitle(e.target.value)}/></div>
-        <div className="fld"><label>বার্তা</label><textarea className="ta" placeholder="Message..." value={pBody} onChange={e=>setPBody(e.target.value)}/></div>
-        <button className="btn bp bb" onClick={sendPersonal} disabled={pSending}>{pSending?"⏳ পাঠানো হচ্ছে...":"📨 একজনকে পাঠান"}</button>
+        {q&&!selUser&&(
+          results.length===0?<div style={{fontSize:11,color:C.muted,padding:"4px 2px"}}>কেউ পাওয়া যায়নি</div>:
+          results.map((u,i)=>(
+            <div key={i} className="nr" style={{cursor:"pointer"}} onClick={()=>{setSelUser(u);setQ(u.Name||u.name||u.Phone||u.phone||"");}}>
+              <div className="nd o"/>
+              <div className="nc"><div className="nt">{u.Name||u.name||"—"}</div><div className="ns">📱 {(u.Phone||u.phone||"").toString().replace(/^'+/,"")}</div></div>
+            </div>
+          ))
+        )}
+        {selUser&&(
+          <div style={{marginTop:8}}>
+            <NotifyModal user={selUser} push={push} inline onClose={()=>{}}/>
+            <button className="btn bg" style={{marginTop:6,justifyContent:"center",width:"100%"}} onClick={()=>{setSelUser(null);setQ("");}}>✖️ বাতিল</button>
+          </div>
+        )}
       </div>
+
       <div className="card">
         <div className="ct">📣 সবাইকে Broadcast</div>
         <div className="fld"><label>শিরোনাম</label><input className="inp" placeholder="Title..." value={title} onChange={e=>setTitle(e.target.value)}/></div>
@@ -2980,24 +2956,23 @@ function TechniquesPage({push,tick}){
       invalidate("UserTechniques");
       setDone(p=>new Set([...p,key]));
       push("success",status==="approved"?"✅ Approved!":"❌ Rejected!",t.userName||"ব্যবহারকারী");
-      // FCM notification to the user
-      const uPhone=(t.userPhone||t.phone||"").toString().replace(/^'+/,"").trim();
-      if(uPhone){
-        const isApproved=status==="approved";
-        const notifTitle=isApproved?"✅ Technique অনুমোদিত!":"❌ Technique প্রত্যাখ্যাত";
-        const techName=(t.technique||"আপনার Technique").toString().slice(0,60);
-        const notifBody=isApproved
-          ? `"${techName}" সবার জন্য প্রকাশিত হয়েছে! 🎉`
-          : `"${techName}" অনুমোদন হয়নি।`;
-        const uPhK=phoneKey(uPhone);
-        fbSet(`Notifications/${uPhK}/notif_${Date.now()}`,{
-          type:"technique_status",title:notifTitle,body:notifBody,
-          questionId:t._qId||"",status,time:nowTs(),read:false
-        }).catch(()=>{});
-        gasCall({action:"personalNotify",phone:uPhone,
-          title:encodeURIComponent(notifTitle),
-          body:encodeURIComponent(notifBody)
-        }).catch(()=>{});
+
+      // ── ব্যবহারকারীকে instant notification পাঠাও ──
+      const phone=(t.userId||t.phone||t.Phone||"").toString().replace(/^'+/,"").trim();
+      if(phone){
+        const notifTitle=status==="approved"?"✅ টেকনিক Approved!":"❌ টেকনিক Rejected";
+        const notifBody=status==="approved"
+          ? "আপনার শেয়ার করা টেকনিকটি অনুমোদিত হয়েছে এবং সবাই দেখতে পারবে। ধন্যবাদ! 🎉"
+          : "আপনার শেয়ার করা টেকনিকটি এই মুহূর্তে গ্রহণ করা হয়নি।";
+        const phK=phoneKey(phone);
+        fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"technique_"+status,title:notifTitle,body:notifBody,questionId:t._qId||"",time:nowTs(),read:false}).catch(()=>{});
+        Promise.race([
+          fetch(GAS+"?"+new URLSearchParams({
+            action:"personalNotify",phone,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody),
+            type:"technique_"+status,questionId:t._qId||""
+          })),
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("t")),7000))
+        ]).catch(()=>{});
       }
     }catch(e){push("error","ব্যর্থ",e.message);}
     setBusy(null);
@@ -3429,7 +3404,7 @@ export default function App(){
       <div style={{display:page==="reports"  ?"block":"none"}}><ReportsPage   push={push} tick={tick}/></div>
       <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick}/></div>
       <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
-      <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push}/></div>
+      <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push} tick={tick}/></div>
       <div style={{display:page==="uploader" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill("")}/></div>
       <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={txt=>{setBulkPrefill(txt);goPage("uploader");}}/></div>
 
