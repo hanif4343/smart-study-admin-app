@@ -1188,14 +1188,28 @@ function ReportEditModal({report,onClose,onDone,push}){
     try{
       const phone=(report.Phone||report.phone||"").toString().replace(/^'+/,"").trim();
       const subject=(report.Subject||report.subject||"প্রশ্নটি").toString();
+      const reporterName=(report.Name||report.name||report.UserName||report.userName||"").toString().trim();
       const phK=phoneKey(phone);
+      const tab=(report.QSheet||report.qsheet||"").toLowerCase().includes("study")?"study"
+               :(report.QSheet||report.qsheet||"").toLowerCase().includes("quiz")?"quiz":"qbank";
       const notifTitle="✅ রিপোর্ট সমাধান হয়েছে!";
-      const notifBody=`"${subject}" সংশোধন হয়েছে।`;
+      const notifBody=reporterName
+        ? `"${subject}" সংশোধন হয়েছে। (${reporterName}-এর রিপোর্ট)`
+        : `"${subject}" সংশোধন হয়েছে।`;
 
-      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:notifBody,time:nowTs(),read:false});
+      // Firebase RTDB notification (poll-worker fallback)
+      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:notifBody,questionId:qid,qsheet:qsheet,tab,time:nowTs(),read:false});
+      // FCM via GAS resolveReport action (proper path with questionId+qsheet+tab+reporterName)
       try{
         await Promise.race([
-          fetch(GAS+"?"+new URLSearchParams({action:"personalNotify",phone,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody)})),
+          fetch(GAS+"?"+new URLSearchParams({
+            action:"resolveReport",phone,
+            subject:encodeURIComponent(subject),
+            questionId:qid,
+            qsheet:encodeURIComponent(qsheet),
+            tab,
+            reporterName:encodeURIComponent(reporterName)
+          })),
           new Promise((_,rej)=>setTimeout(()=>rej(new Error("t")),7000))
         ]);
       }catch(_){}
@@ -2789,8 +2803,71 @@ function NotifyPage({push}){
     setSending(false);
   };
 
+  // Personal notify state
+  const[pPhone,setPPhone]=useState("");
+  const[pTitle,setPTitle]=useState("");
+  const[pBody,setPBody]=useState("");
+  const[pSending,setPSending]=useState(false);
+  const[pUser,setPUser]=useState(null);
+  const[pSearch,setPSearch]=useState("");
+
+  const searchUser=async()=>{
+    const q=pSearch.trim().replace(/^'+/,"");
+    if(!q){push("warn","ফোন বা নাম দিন","");return;}
+    try{
+      const raw=await loadPath("Users");
+      const users=toArr(raw);
+      const found=users.find(u=>{
+        const ph=(u.Phone||u.phone||"").toString().replace(/^'+/,"").replace(/\s/g,"");
+        const nm=(u.Name||u.name||"").toString().toLowerCase();
+        const sq=q.toLowerCase();
+        return ph.includes(q)||ph.includes(q.replace(/^0/,"88"))||nm.includes(sq);
+      });
+      if(found){setPUser(found);setPPhone((found.Phone||found.phone||"").toString().replace(/^'+/,""));}
+      else push("warn","ইউজার পাওয়া যায়নি",q);
+    }catch(e){push("error","ব্যর্থ",e.message);}
+  };
+
+  const sendPersonal=async()=>{
+    if(!pPhone||!pTitle||!pBody){push("warn","তথ্য পূরণ করুন","");return;}
+    setPSending(true);
+    try{
+      const phK=phoneKey(pPhone);
+      await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"personal",title:pTitle,body:pBody,time:nowTs(),read:false});
+      let fcmOk=false;
+      try{
+        const r=await Promise.race([
+          gasCall({action:"personalNotify",phone:pPhone,title:encodeURIComponent(pTitle),body:encodeURIComponent(pBody)}),
+          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000))
+        ]);
+        fcmOk=!r?.fcm?.error;
+      }catch(_){}
+      const nm=pUser?.Name||pUser?.name||pPhone;
+      push("success","✅ পাঠানো হয়েছে",(fcmOk?"📲 FCM ✓ ":"📲 FCM ✗ ")+nm);
+      setPTitle("");setPBody("");
+    }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
+    setPSending(false);
+  };
+
   return(
     <div className="page">
+      {/* ── Personal Notify ── */}
+      <div className="card" style={{marginBottom:12}}>
+        <div className="ct">📨 ব্যক্তিগত Notification</div>
+        <div style={{display:"flex",gap:6,marginBottom:8}}>
+          <input className="inp" style={{flex:1}} placeholder="ফোন নম্বর বা নাম দিয়ে খুঁজুন..." value={pSearch} onChange={e=>setPSearch(e.target.value)} onKeyDown={e=>e.key==="Enter"&&searchUser()}/>
+          <button className="btn bp" style={{padding:"0 12px"}} onClick={searchUser}>🔍</button>
+        </div>
+        {pUser&&<div style={{fontSize:11,background:"#0002",borderRadius:6,padding:"5px 8px",marginBottom:8,display:"flex",alignItems:"center",gap:6}}>
+          <span>👤 {pUser.Name||pUser.name||"—"}</span>
+          <span style={{color:"#888"}}>📱 {(pUser.Phone||pUser.phone||"").toString().replace(/^'+/,"")}</span>
+          <button style={{marginLeft:"auto",fontSize:10,background:"none",border:"none",cursor:"pointer",color:"#888"}} onClick={()=>{setPUser(null);setPSearch("");setPPhone("");}}>✕</button>
+        </div>}
+        <div className="fld"><label>প্রাপকের ফোন</label><input className="inp" placeholder="01XXXXXXXXX" value={pPhone} onChange={e=>setPPhone(e.target.value)}/></div>
+        <div className="fld"><label>শিরোনাম</label><input className="inp" placeholder="Title..." value={pTitle} onChange={e=>setPTitle(e.target.value)}/></div>
+        <div className="fld"><label>বার্তা</label><textarea className="ta" placeholder="Message..." value={pBody} onChange={e=>setPBody(e.target.value)}/></div>
+        <button className="btn bp bb" onClick={sendPersonal} disabled={pSending}>{pSending?"⏳ পাঠানো হচ্ছে...":"📨 একজনকে পাঠান"}</button>
+      </div>
       <div className="card">
         <div className="ct">📣 সবাইকে Broadcast</div>
         <div className="fld"><label>শিরোনাম</label><input className="inp" placeholder="Title..." value={title} onChange={e=>setTitle(e.target.value)}/></div>
@@ -2907,6 +2984,29 @@ function TechniquesPage({push,tick}){
       invalidate("UserTechniques");
       setDone(p=>new Set([...p,key]));
       push("success",status==="approved"?"✅ Approved!":"❌ Rejected!",t.userName||"ব্যবহারকারী");
+      // FCM notification to the user
+      const phone=(t.userPhone||t.phone||"").toString().replace(/^'+/,"").trim();
+      if(phone){
+        const isApproved=status==="approved";
+        const notifTitle=isApproved?"✅ Technique অনুমোদিত!":"❌ Technique প্রত্যাখ্যাত";
+        const techName=(t.technique||"আপনার Technique").toString().slice(0,60);
+        const notifBody=isApproved
+          ? `"${techName}" সবার জন্য প্রকাশিত হয়েছে! 🎉`
+          : `"${techName}" অনুমোদন হয়নি।`;
+        const phK=phoneKey(phone);
+        // Firebase RTDB fallback
+        fbSet(`Notifications/${phK}/notif_${Date.now()}`,{
+          type:"technique_status",title:notifTitle,body:notifBody,
+          questionId:t._qId||"",status,time:nowTs(),read:false
+        }).catch(()=>{});
+        // FCM push
+        gasCall({
+          action:"personalNotify",phone,
+          title:encodeURIComponent(notifTitle),
+          body:encodeURIComponent(notifBody),
+          questionId:t._qId||""
+        }).catch(()=>{});
+      }
     }catch(e){push("error","ব্যর্থ",e.message);}
     setBusy(null);
   };
