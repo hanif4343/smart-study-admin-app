@@ -2768,10 +2768,18 @@ function SearchPage({push,onDetail}){
 
 /* ══════════ NOTIFY PAGE ══════════ */
 function NotifyPage({push}){
+  // Broadcast state
   const[title,setTitle]=useState("");
   const[body,setBody]=useState("");
   const[sending,setSending]=useState(false);
   const[hist,setHist]=useState([]);
+  // Personal notify state — ALL hooks must be at top level before any functions
+  const[pPhone,setPPhone]=useState("");
+  const[pTitle,setPTitle]=useState("");
+  const[pBody,setPBody]=useState("");
+  const[pSending,setPSending]=useState(false);
+  const[pUser,setPUser]=useState(null);
+  const[pSearch,setPSearch]=useState("");
 
   const send=async()=>{
     if(!title||!body){push("warn","তথ্য দিন","");return;}
@@ -2802,14 +2810,6 @@ function NotifyPage({push}){
     }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
     setSending(false);
   };
-
-  // Personal notify state
-  const[pPhone,setPPhone]=useState("");
-  const[pTitle,setPTitle]=useState("");
-  const[pBody,setPBody]=useState("");
-  const[pSending,setPSending]=useState(false);
-  const[pUser,setPUser]=useState(null);
-  const[pSearch,setPSearch]=useState("");
 
   const searchUser=async()=>{
     const q=pSearch.trim().replace(/^'+/,"");
