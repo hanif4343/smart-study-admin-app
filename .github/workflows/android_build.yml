@@ -40,21 +40,32 @@ jobs:
           # cap init overwrites capacitor.config.json — restore server block
           printf '{\n  "appId": "com.smartstudy.admin",\n  "appName": "Smart Admin",\n  "webDir": "dist",\n  "server": {\n    "hostname": "localhost",\n    "androidScheme": "https"\n  }\n}\n' > capacitor.config.json
 
-      - name: Add Android Platform
+      - name: Add Android Platform & First Sync
         run: |
           npx cap add android
+          # cap sync: copies web assets + updates plugins — but BEFORE we inject our .kt files
           npx cap sync android
 
       - name: Inject MLKit OCR Plugin + Permissions
+        # ⚠️ This step runs AFTER sync so cap sync cannot overwrite our files
+        # We do NOT run cap sync again after this — use cap copy instead (web assets only)
         run: |
           PKG_DIR="android/app/src/main/java/com/smartstudy/admin"
           mkdir -p "$PKG_DIR"
+
+          # Copy Kotlin source files
           cp android-src/OcrPlugin.kt "$PKG_DIR/OcrPlugin.kt"
           cp android-src/MainActivity.kt "$PKG_DIR/MainActivity.kt"
+
+          echo "✅ Kotlin files injected:"
+          ls -la "$PKG_DIR/"
+
+          # Add MLKit deps + Android permissions to manifest
           python3 android-src/add_mlkit.py
 
-      - name: Final Capacitor Sync (after plugin inject)
-        run: npx cap sync android
+          # Verify MainActivity still has our registerPlugin call
+          echo "--- MainActivity.kt content ---"
+          cat "$PKG_DIR/MainActivity.kt"
 
       - name: Cache Gradle
         uses: actions/cache@v4
