@@ -3223,27 +3223,7 @@ export default function App(){
     return()=>{ try{ PN.removeAllListeners(); }catch(e){} };
   },[loggedIn,goPage]);
 
-  // ── Render ──
-  if(!loggedIn) return(
-    <ErrorBoundary>
-      <style>{css}</style>
-      <LoginScreen onLogin={()=>{ _LC.lifecycle("App","User logged in — entering admin panel"); setLoggedIn(true); }}/>
-    </ErrorBoundary>
-  );
-
-  if(searchDetail)return(
-    <ErrorBoundary>
-      <>
-      <style>{css}</style>
-      <StudentDetail user={searchDetail} onBack={()=>setSearchDetail(null)} push={push}/>
-      <Toasts t={toasts}/>
-      </>
-    </ErrorBoundary>
-  );
-
-  const pageLabel=NAV.find(n=>n.id===page);
-
-  /* ── Real badge counts ── */
+  // ── Badge counts & derived values (must be before early returns — Rules of Hooks) ──
   const signupBadge=useMemo(()=>{
     const arr=toArr(usersRawBadge);
     return arr.filter(u=>{
@@ -3263,6 +3243,25 @@ export default function App(){
   },[techRawBadge]);
 
   const badgeMap={students:signupBadge,reports:reportBadge,techniques:techBadge};
+  const pageLabel=NAV.find(n=>n.id===page);
+
+  // ── Render ──
+  if(!loggedIn) return(
+    <ErrorBoundary>
+      <style>{css}</style>
+      <LoginScreen onLogin={()=>{ _LC.lifecycle("App","User logged in — entering admin panel"); setLoggedIn(true); }}/>
+    </ErrorBoundary>
+  );
+
+  if(searchDetail)return(
+    <ErrorBoundary>
+      <>
+      <style>{css}</style>
+      <StudentDetail user={searchDetail} onBack={()=>setSearchDetail(null)} push={push}/>
+      <Toasts t={toasts}/>
+      </>
+    </ErrorBoundary>
+  );
 
   return(
     <ErrorBoundary>
