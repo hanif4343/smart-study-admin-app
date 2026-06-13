@@ -1012,11 +1012,11 @@ function UserEditModal({user,onClose,onSaved,push}){
   const[status,setStatus]=useState(user.Status||user.status||"Active");
   const[role,setRole]=useState(user.Role||user.role||user.type||"Student");
   const[classLevel,setClassLevel]=useState(user.classLevel||user.ClassLevel||user.class||"");
-  const[userType,setUserType]=useState(user.userType||user.UserType||user.SubjectGroup||"");
+  const[userType,setUserType]=useState(user.userType||user.UserType||"Student");
   const[saving,setSaving]=useState(false);
 
   const CLASS_LEVELS=["Honours 1","Honours 2","Honours 3","Honours 4","Masters 1","Masters 2","Class 12","Job"];
-  const USER_TYPES=["Science","Commerce","Arts","General"];
+  const TYPES=["Student","Job Seeker"];
   const ROLES=["Student","Teacher","Admin","Moderator"];
   const STATUSES=["Active","Inactive","Pending","Banned"];
 
@@ -1095,20 +1095,21 @@ function UserEditModal({user,onClose,onSaved,push}){
         </div>
 
         <div style={F}>
+          <label style={L}>🏷️ টাইপ</label>
+          <select style={S} value={userType} onChange={e=>{setUserType(e.target.value);if(e.target.value==="Job Seeker")setClassLevel("");}}>
+            {TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+
+        {userType==="Student"&&(
+        <div style={F}>
           <label style={L}>📚 ক্লাস লেভেল</label>
           <select style={S} value={classLevel} onChange={e=>setClassLevel(e.target.value)}>
             <option value="">— নির্বাচন করুন —</option>
             {CLASS_LEVELS.map(c=><option key={c} value={c}>{c}</option>)}
           </select>
         </div>
-
-        <div style={F}>
-          <label style={L}>🔬 গ্রুপ / বিভাগ</label>
-          <select style={S} value={userType} onChange={e=>setUserType(e.target.value)}>
-            <option value="">— নির্বাচন করুন —</option>
-            {USER_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
-          </select>
-        </div>
+        )}
 
         <div style={{display:"flex",gap:8,marginTop:4}}>
           <button className="btn" style={{flex:1,justifyContent:"center",background:C.border,color:C.muted,padding:"10px 0",borderRadius:9,fontWeight:600}} onClick={onClose}>বাতিল</button>
