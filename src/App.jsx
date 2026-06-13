@@ -2265,6 +2265,7 @@ function BrowseTab({push,tick}){
   const{data:raw,loading}=useFB(sheet,tick);
   const[search,setSearch]=useState("");
   const[filterSub,setFilterSub]=useState("all");
+  const[filterAudience,setFilterAudience]=useState("all");
   const[editing,setEditing]=useState(null);
   const[delTarget,setDelTarget]=useState(null);
   const[delLoading,setDelLoading]=useState(false);
@@ -2275,17 +2276,36 @@ function BrowseTab({push,tick}){
   const subjects=useMemo(()=>["all",...new Set(allQ.map(q=>(q.Subject||q.subject||"").trim()).filter(Boolean))]
   ,[allQ]);
 
+  // Collect all unique AudienceTags from current sheet, sorted by count
+  const audienceTags=useMemo(()=>{
+    const map={};
+    allQ.forEach(q=>{
+      const tagRaw=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
+      if(!tagRaw)return;
+      tagRaw.split(",").map(t=>t.trim()).filter(Boolean).forEach(t=>{
+        map[t]=(map[t]||0)+1;
+      });
+    });
+    return Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([t,c])=>({tag:t,count:c}));
+  },[allQ]);
+
   const filtered=useMemo(()=>{
     let arr=allQ;
+    if(filterAudience!=="all"){
+      arr=arr.filter(q=>{
+        const tagRaw=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
+        return tagRaw.split(",").map(t=>t.trim()).includes(filterAudience);
+      });
+    }
     if(filterSub!=="all")arr=arr.filter(q=>(q.Subject||q.subject||"").trim()===filterSub);
     if(search.trim()){
       const qlo=search.toLowerCase();
       arr=arr.filter(q=>[(q.Question||q.question||""),(q.Subject||q.subject||""),(q.Sub_topic||q.sub_topic||""),(q.Correct||q.correct||"")].join(" ").toLowerCase().includes(qlo));
     }
     return arr;
-  },[allQ,filterSub,search]);
+  },[allQ,filterSub,filterAudience,search]);
 
-  useEffect(()=>setPage(0),[sheet,filterSub,search]);
+  useEffect(()=>setPage(0),[sheet,filterSub,filterAudience,search]);
 
   const pageSlice=useMemo(()=>filtered.slice(page*PAGE,(page+1)*PAGE),[filtered,page]);
   const totalPages=Math.ceil(filtered.length/PAGE);
@@ -2306,10 +2326,30 @@ function BrowseTab({push,tick}){
 
   return(
     <>
-      <div style={{display:"flex",gap:6,marginBottom:8}}>
+      {/* Sheet tabs + Audience selector row */}
+      <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center"}}>
         {["QBank","Quiz","Study"].map(s=>(
-          <button key={s} className={`ftab${sheet===s?" on":""}`} onClick={()=>{setSheet(s);setFilterSub("all");setSearch("");}}>{s}</button>
+          <button key={s} className={`ftab${sheet===s?" on":""}`} onClick={()=>{setSheet(s);setFilterSub("all");setFilterAudience("all");setSearch("");}}>{s}</button>
         ))}
+      </div>
+      {/* Audience Tag filter */}
+      <div style={{marginBottom:8}}>
+        <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>🎯 AUDIENCE</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          <button
+            onClick={()=>setFilterAudience("all")}
+            style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterAudience==="all"?C.accent:C.border}`,background:filterAudience==="all"?C.accent+"22":"transparent",color:filterAudience==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+            🌐 All {filterAudience==="all"&&allQ.length>0&&<span style={{fontSize:9,opacity:.7}}>({allQ.length})</span>}
+          </button>
+          {audienceTags.map(({tag,count})=>(
+            <button key={tag}
+              onClick={()=>setFilterAudience(filterAudience===tag?"all":tag)}
+              style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterAudience===tag?C.accent:C.border}`,background:filterAudience===tag?C.accent+"22":"transparent",color:filterAudience===tag?C.accent:C.muted,cursor:"pointer",fontWeight:filterAudience===tag?700:500}}>
+              {tag} <span style={{fontSize:9,opacity:.6}}>({count})</span>
+            </button>
+          ))}
+          {audienceTags.length===0&&!loading&&<span style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>কোনো audience tag নেই</span>}
+        </div>
       </div>
       <div className="sw" style={{marginBottom:8}}>
         <span className="si">🔍</span>
@@ -2347,6 +2387,11 @@ function BrowseTab({push,tick}){
             <div className="qcard-meta">
               <span className="qtag qtag-sub">📚 {sub}</span>
               {tp&&<span className="qtag qtag-tp">📌 {tp.slice(0,25)}</span>}
+              {(q.AudienceTags||q.audienceTags||q.audience_tags)&&(
+                <span style={{fontSize:9,padding:"2px 7px",borderRadius:10,background:C.accent+"18",color:C.accent,border:`1px solid ${C.accent}33`,fontWeight:700}}>
+                  🎯 {(q.AudienceTags||q.audienceTags||q.audience_tags).toString().slice(0,30)}
+                </span>
+              )}
             </div>
           </div>
         );
