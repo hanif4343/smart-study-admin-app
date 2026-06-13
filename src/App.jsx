@@ -845,6 +845,7 @@ function StudentsPage({push,tick}){
   const[tab,setTab]=useState("signups"); // default: signup দেখাবে
   const[detail,setDetail]=useState(null);
   const[notify,setNotify]=useState(null);
+  const[editUser,setEditUser]=useState(null);
   const[busy,setBusy]=useState(null);
   const[activating,setActivating]=useState(null);
   const[signupDone,setSignupDone]=useState(new Set());
@@ -985,6 +986,7 @@ function StudentsPage({push,tick}){
             <div style={{display:"flex",gap:6}}>
               {st!=="active"&&<button className="btn bs" style={{flex:1,justifyContent:"center",fontSize:11}} disabled={!!busy} onClick={()=>activateStudent(u)}>{busy===fkey?"⏳":"✅ অ্যাক্টিভ"}</button>}
               <button className="btn bg" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setNotify(u)}>📣</button>
+              <button className="btn" style={{flex:1,justifyContent:"center",fontSize:11,background:"#f59e0b22",color:C.yellow,border:"1px solid #f59e0b44"}} onClick={()=>setEditUser(u)}>✏️</button>
               <button className="btn bp" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setDetail(u)}>👁</button>
             </div>
           </div>
@@ -994,11 +996,136 @@ function StudentsPage({push,tick}){
         </>
       )}
       {notify&&<NotifyModal user={notify} onClose={()=>setNotify(null)} push={push}/>}
+      {editUser&&<UserEditModal user={editUser} onClose={()=>setEditUser(null)} onSaved={updated=>{setEditUser(null);invalidate("Users");}} push={push}/>}
     </div>
   );
 }
 
-function StudentDetail({user,onBack,push}){
+/* ══════════ USER EDIT MODAL ══════════ */
+function UserEditModal({user,onClose,onSaved,push}){
+  useModalBack(onClose);
+  const ph=(user.Phone||user.phone||\"\").replace(/^'+/,\"\");
+  const fkey=user._fbKey||phoneKey(ph);
+
+  const[name,setName]=useState(user.Name||user.name||\"\");
+  const[email,setEmail]=useState(user.Email||user.email||\"\");
+  const[status,setStatus]=useState(user.Status||user.status||\"Active\");
+  const[role,setRole]=useState(user.Role||user.role||user.type||\"Student\");
+  const[classLevel,setClassLevel]=useState(user.classLevel||user.ClassLevel||user.class||\"\");
+  const[userType,setUserType]=useState(user.userType||user.UserType||user.SubjectGroup||\"\");
+  const[saving,setSaving]=useState(false);
+
+  const CLASS_LEVELS=[\"Honours 1\",\"Honours 2\",\"Honours 3\",\"Honours 4\",\"Masters 1\",\"Masters 2\",\"Class 12\",\"Job\",\"\"];
+  const USER_TYPES=[\"Science\",\"Commerce\",\"Arts\",\"General\",\"\"];
+  const ROLES=[\"Student\",\"Teacher\",\"Admin\",\"Moderator\"];
+  const STATUSES=[\"Active\",\"Inactive\",\"Pending\",\"Banned\"];
+
+  const save=async()=>{
+    if(!name.trim()){push(\"error\",\"নাম দিন\",\"\");return;}
+    setSaving(true);
+    try{
+      const patch={
+        Name:name.trim(),
+        Email:email.trim(),
+        Status:status,
+        Role:role,
+        type:role,
+        classLevel:classLevel,
+        userType:userType,
+      };
+      await fbPatch(`Users/${fkey}`,patch);
+      // Sync each changed field to Google Sheets via GAS
+      const phone=ph;
+      const fields=[
+        {field:\"name\",val:name.trim()},
+        {field:\"email\",val:email.trim()},
+        {field:\"status\",val:status},
+        {field:\"type\",val:role},
+        {field:\"classLevel\",val:classLevel},
+        {field:\"userType\",val:userType},
+      ];
+      fields.forEach(({field,val})=>{
+        if(val!==undefined)gasBg({action:\"updateField\",sheet:\"Users\",id:phone,field,content:encodeURIComponent(val)});
+      });
+      invalidate(\"Users\");
+      push(\"success\",\"✅ সেভ হয়েছে!\",name.trim());
+      onSaved({...user,...patch,_fbKey:fkey});
+    }catch(e){push(\"error\",\"সেভ ব্যর্থ\",e.message||String(e));}
+    setSaving(false);
+  };
+
+  const F={display:\"flex\",flexDirection:\"column\",gap:3,marginBottom:12};
+  const L={fontSize:11,color:C.muted,fontWeight:600,marginBottom:3};
+  const I={background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:\"8px 10px\",color:C.text,fontSize:13,width:\"100%\",boxSizing:\"border-box\"};
+  const S={...I,appearance:\"none\"};
+
+  return(
+    <div style={{position:\"fixed\",inset:0,background:\"rgba(0,0,0,0.7)\",zIndex:900,display:\"flex\",flexDirection:\"column\",justifyContent:\"flex-end\"}}>
+      <div style={{background:C.card,borderRadius:\"16px 16px 0 0\",padding:\"16px 14px 30px\",maxHeight:\"90vh\",overflowY:\"auto\"}}>
+        <div style={{display:\"flex\",alignItems:\"center\",justifyContent:\"space-between\",marginBottom:14}}>
+          <div style={{fontWeight:700,fontSize:15}}>✏️ ইউজার এডিট</div>
+          <button onClick={onClose} style={{background:\"none\",border:\"none\",color:C.muted,fontSize:20,cursor:\"pointer\",lineHeight:1}}>✕</button>
+        </div>
+
+        <div style={F}>
+          <label style={L}>👤 নাম</label>
+          <input style={I} value={name} onChange={e=>setName(e.target.value)} placeholder=\"নাম লিখুন\"/>
+        </div>
+
+        <div style={F}>
+          <label style={L}>📱 ফোন (পরিবর্তন করা যাবে না)</label>
+          <input style={{...I,opacity:.5,cursor:\"not-allowed\"}} value={ph} readOnly/>
+        </div>
+
+        <div style={F}>
+          <label style={L}>✉️ ইমেইল</label>
+          <input style={I} value={email} onChange={e=>setEmail(e.target.value)} placeholder=\"ইমেইল লিখুন\"/>
+        </div>
+
+        <div style={F}>
+          <label style={L}>📊 স্ট্যাটাস</label>
+          <select style={S} value={status} onChange={e=>setStatus(e.target.value)}>
+            {STATUSES.map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
+
+        <div style={F}>
+          <label style={L}>🎭 রোল</label>
+          <select style={S} value={role} onChange={e=>setRole(e.target.value)}>
+            {ROLES.map(r=><option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>
+
+        <div style={F}>
+          <label style={L}>📚 ক্লাস লেভেল</label>
+          <select style={S} value={classLevel} onChange={e=>setClassLevel(e.target.value)}>
+            <option value=\"\">— নির্বাচন করুন —</option>
+            {CLASS_LEVELS.filter(Boolean).map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+
+        <div style={F}>
+          <label style={L}>🔬 গ্রুপ / বিভাগ</label>
+          <select style={S} value={userType} onChange={e=>setUserType(e.target.value)}>
+            <option value=\"\">— নির্বাচন করুন —</option>
+            {USER_TYPES.filter(Boolean).map(t=><option key={t} value={t}>{t}</option>)}
+          </select>
+        </div>
+
+        <div style={{display:\"flex\",gap:8,marginTop:4}}>
+          <button className=\"btn\" style={{flex:1,justifyContent:\"center\",background:C.border,color:C.muted,padding:\"10px 0\",borderRadius:9,fontWeight:600}} onClick={onClose}>বাতিল</button>
+          <button className=\"btn bg\" style={{flex:2,justifyContent:\"center\",padding:\"10px 0\",borderRadius:9,fontWeight:700,fontSize:14}} disabled={saving} onClick={save}>
+            {saving?\"⏳ সেভ হচ্ছে...\":\"💾 সেভ করুন\"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StudentDetail({user:userProp,onBack,push}){
+  const[user,setUser]=useState(userProp);
+  const[editOpen,setEditOpen]=useState(false);
   const nm=user.Name||user.name||"অজানা";
   const ph=(user.Phone||user.phone||"").replace(/^'+/,"");
   const st=(user.Status||user.status||"inactive").toLowerCase();
@@ -1023,9 +1150,15 @@ function StudentDetail({user,onBack,push}){
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nm}</div>
           <div style={{fontSize:10,color:C.muted}}>📱 {ph}</div>
+          {(user.classLevel||user.ClassLevel)&&<div style={{fontSize:10,color:C.accent}}>{user.classLevel||user.ClassLevel}{(user.userType||user.UserType)?` · ${user.userType||user.UserType}`:""}</div>}
+          {(user.Role||user.role||user.type)&&<div style={{fontSize:10,color:C.yellow}}>🎭 {user.Role||user.role||user.type}</div>}
         </div>
-        <span className={`pill ${st==="active"?"pa":"pi"}`}>{st==="active"?"✅":"🔴"}</span>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5}}>
+          <span className={`pill ${st==="active"?"pa":"pi"}`}>{st==="active"?"✅":"🔴"}</span>
+          <button className="btn bp" style={{fontSize:10,padding:"3px 8px",borderRadius:6,minWidth:0}} onClick={()=>setEditOpen(true)}>✏️ এডিট</button>
+        </div>
       </div>
+      {editOpen&&<UserEditModal user={user} onClose={()=>setEditOpen(false)} onSaved={updated=>{setUser(updated);setEditOpen(false);}} push={push}/>}
       <div style={{padding:"12px 12px 70px"}}>
         <div className="card">
           <div style={{display:"flex",alignItems:"center",gap:12}}>
