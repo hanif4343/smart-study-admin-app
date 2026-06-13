@@ -1004,24 +1004,24 @@ function StudentsPage({push,tick}){
 /* ══════════ USER EDIT MODAL ══════════ */
 function UserEditModal({user,onClose,onSaved,push}){
   useModalBack(onClose);
-  const ph=(user.Phone||user.phone||\"\").replace(/^'+/,\"\");
+  const ph=(user.Phone||user.phone||"").replace(/^'+/,"");
   const fkey=user._fbKey||phoneKey(ph);
 
-  const[name,setName]=useState(user.Name||user.name||\"\");
-  const[email,setEmail]=useState(user.Email||user.email||\"\");
-  const[status,setStatus]=useState(user.Status||user.status||\"Active\");
-  const[role,setRole]=useState(user.Role||user.role||user.type||\"Student\");
-  const[classLevel,setClassLevel]=useState(user.classLevel||user.ClassLevel||user.class||\"\");
-  const[userType,setUserType]=useState(user.userType||user.UserType||user.SubjectGroup||\"\");
+  const[name,setName]=useState(user.Name||user.name||"");
+  const[email,setEmail]=useState(user.Email||user.email||"");
+  const[status,setStatus]=useState(user.Status||user.status||"Active");
+  const[role,setRole]=useState(user.Role||user.role||user.type||"Student");
+  const[classLevel,setClassLevel]=useState(user.classLevel||user.ClassLevel||user.class||"");
+  const[userType,setUserType]=useState(user.userType||user.UserType||user.SubjectGroup||"");
   const[saving,setSaving]=useState(false);
 
-  const CLASS_LEVELS=[\"Honours 1\",\"Honours 2\",\"Honours 3\",\"Honours 4\",\"Masters 1\",\"Masters 2\",\"Class 12\",\"Job\",\"\"];
-  const USER_TYPES=[\"Science\",\"Commerce\",\"Arts\",\"General\",\"\"];
-  const ROLES=[\"Student\",\"Teacher\",\"Admin\",\"Moderator\"];
-  const STATUSES=[\"Active\",\"Inactive\",\"Pending\",\"Banned\"];
+  const CLASS_LEVELS=["Honours 1","Honours 2","Honours 3","Honours 4","Masters 1","Masters 2","Class 12","Job"];
+  const USER_TYPES=["Science","Commerce","Arts","General"];
+  const ROLES=["Student","Teacher","Admin","Moderator"];
+  const STATUSES=["Active","Inactive","Pending","Banned"];
 
   const save=async()=>{
-    if(!name.trim()){push(\"error\",\"নাম দিন\",\"\");return;}
+    if(!name.trim()){push("error","নাম দিন","");return;}
     setSaving(true);
     try{
       const patch={
@@ -1034,52 +1034,50 @@ function UserEditModal({user,onClose,onSaved,push}){
         userType:userType,
       };
       await fbPatch(`Users/${fkey}`,patch);
-      // Sync each changed field to Google Sheets via GAS
-      const phone=ph;
       const fields=[
-        {field:\"name\",val:name.trim()},
-        {field:\"email\",val:email.trim()},
-        {field:\"status\",val:status},
-        {field:\"type\",val:role},
-        {field:\"classLevel\",val:classLevel},
-        {field:\"userType\",val:userType},
+        {field:"name",val:name.trim()},
+        {field:"email",val:email.trim()},
+        {field:"status",val:status},
+        {field:"type",val:role},
+        {field:"classLevel",val:classLevel},
+        {field:"userType",val:userType},
       ];
       fields.forEach(({field,val})=>{
-        if(val!==undefined)gasBg({action:\"updateField\",sheet:\"Users\",id:phone,field,content:encodeURIComponent(val)});
+        gasBg({action:"updateField",sheet:"Users",id:ph,field,content:encodeURIComponent(val)});
       });
-      invalidate(\"Users\");
-      push(\"success\",\"✅ সেভ হয়েছে!\",name.trim());
+      invalidate("Users");
+      push("success","✅ সেভ হয়েছে!",name.trim());
       onSaved({...user,...patch,_fbKey:fkey});
-    }catch(e){push(\"error\",\"সেভ ব্যর্থ\",e.message||String(e));}
+    }catch(e){push("error","সেভ ব্যর্থ",e.message||String(e));}
     setSaving(false);
   };
 
-  const F={display:\"flex\",flexDirection:\"column\",gap:3,marginBottom:12};
+  const F={display:"flex",flexDirection:"column",gap:3,marginBottom:12};
   const L={fontSize:11,color:C.muted,fontWeight:600,marginBottom:3};
-  const I={background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:\"8px 10px\",color:C.text,fontSize:13,width:\"100%\",boxSizing:\"border-box\"};
-  const S={...I,appearance:\"none\"};
+  const I={background:C.panel,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",color:C.text,fontSize:13,width:"100%",boxSizing:"border-box"};
+  const S={...I,appearance:"none"};
 
   return(
-    <div style={{position:\"fixed\",inset:0,background:\"rgba(0,0,0,0.7)\",zIndex:900,display:\"flex\",flexDirection:\"column\",justifyContent:\"flex-end\"}}>
-      <div style={{background:C.card,borderRadius:\"16px 16px 0 0\",padding:\"16px 14px 30px\",maxHeight:\"90vh\",overflowY:\"auto\"}}>
-        <div style={{display:\"flex\",alignItems:\"center\",justifyContent:\"space-between\",marginBottom:14}}>
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:900,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
+      <div style={{background:C.card,borderRadius:"16px 16px 0 0",padding:"16px 14px 30px",maxHeight:"90vh",overflowY:"auto"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
           <div style={{fontWeight:700,fontSize:15}}>✏️ ইউজার এডিট</div>
-          <button onClick={onClose} style={{background:\"none\",border:\"none\",color:C.muted,fontSize:20,cursor:\"pointer\",lineHeight:1}}>✕</button>
+          <button onClick={onClose} style={{background:"none",border:"none",color:C.muted,fontSize:20,cursor:"pointer",lineHeight:1}}>✕</button>
         </div>
 
         <div style={F}>
           <label style={L}>👤 নাম</label>
-          <input style={I} value={name} onChange={e=>setName(e.target.value)} placeholder=\"নাম লিখুন\"/>
+          <input style={I} value={name} onChange={e=>setName(e.target.value)} placeholder="নাম লিখুন"/>
         </div>
 
         <div style={F}>
           <label style={L}>📱 ফোন (পরিবর্তন করা যাবে না)</label>
-          <input style={{...I,opacity:.5,cursor:\"not-allowed\"}} value={ph} readOnly/>
+          <input style={{...I,opacity:.5,cursor:"not-allowed"}} value={ph} readOnly/>
         </div>
 
         <div style={F}>
           <label style={L}>✉️ ইমেইল</label>
-          <input style={I} value={email} onChange={e=>setEmail(e.target.value)} placeholder=\"ইমেইল লিখুন\"/>
+          <input style={I} value={email} onChange={e=>setEmail(e.target.value)} placeholder="ইমেইল লিখুন"/>
         </div>
 
         <div style={F}>
@@ -1099,29 +1097,30 @@ function UserEditModal({user,onClose,onSaved,push}){
         <div style={F}>
           <label style={L}>📚 ক্লাস লেভেল</label>
           <select style={S} value={classLevel} onChange={e=>setClassLevel(e.target.value)}>
-            <option value=\"\">— নির্বাচন করুন —</option>
-            {CLASS_LEVELS.filter(Boolean).map(c=><option key={c} value={c}>{c}</option>)}
+            <option value="">— নির্বাচন করুন —</option>
+            {CLASS_LEVELS.map(c=><option key={c} value={c}>{c}</option>)}
           </select>
         </div>
 
         <div style={F}>
           <label style={L}>🔬 গ্রুপ / বিভাগ</label>
           <select style={S} value={userType} onChange={e=>setUserType(e.target.value)}>
-            <option value=\"\">— নির্বাচন করুন —</option>
-            {USER_TYPES.filter(Boolean).map(t=><option key={t} value={t}>{t}</option>)}
+            <option value="">— নির্বাচন করুন —</option>
+            {USER_TYPES.map(t=><option key={t} value={t}>{t}</option>)}
           </select>
         </div>
 
-        <div style={{display:\"flex\",gap:8,marginTop:4}}>
-          <button className=\"btn\" style={{flex:1,justifyContent:\"center\",background:C.border,color:C.muted,padding:\"10px 0\",borderRadius:9,fontWeight:600}} onClick={onClose}>বাতিল</button>
-          <button className=\"btn bg\" style={{flex:2,justifyContent:\"center\",padding:\"10px 0\",borderRadius:9,fontWeight:700,fontSize:14}} disabled={saving} onClick={save}>
-            {saving?\"⏳ সেভ হচ্ছে...\":\"💾 সেভ করুন\"}
+        <div style={{display:"flex",gap:8,marginTop:4}}>
+          <button className="btn" style={{flex:1,justifyContent:"center",background:C.border,color:C.muted,padding:"10px 0",borderRadius:9,fontWeight:600}} onClick={onClose}>বাতিল</button>
+          <button className="btn bg" style={{flex:2,justifyContent:"center",padding:"10px 0",borderRadius:9,fontWeight:700,fontSize:14}} disabled={saving} onClick={save}>
+            {saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করুন"}
           </button>
         </div>
       </div>
     </div>
   );
 }
+
 
 function StudentDetail({user:userProp,onBack,push}){
   const[user,setUser]=useState(userProp);
