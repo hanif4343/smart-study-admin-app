@@ -1100,14 +1100,14 @@ function UserEditModal({user,onClose,onSaved,push}){
   const[name,setName]=useState(user.Name||user.name||"");
   const[email,setEmail]=useState(user.Email||user.email||"");
   const[status,setStatus]=useState(user.Status||user.status||"Active");
-  const[role,setRole]=useState(user.Role||user.role||user.type||"Student");
+  const[role,setRole]=useState(user.Role||user.role||user.type||"User");
   const[classLevel,setClassLevel]=useState(user.classLevel||user.ClassLevel||user.class||"");
   const[userType,setUserType]=useState(user.userType||user.UserType||"Student");
   const[saving,setSaving]=useState(false);
 
   const CLASS_LEVELS=["Honours 1","Honours 2","Honours 3","Honours 4","Masters 1","Masters 2","Class 12","Job"];
   const TYPES=["Student","Job Seeker"];
-  const ROLES=["Student","Teacher","Admin","Moderator"];
+  const ROLES=["User","Admin"];
   const STATUSES=["Active","Inactive","Pending","Banned"];
 
   const save=async()=>{
@@ -2371,9 +2371,12 @@ function BrowseTab({push,tick}){
   const[search,setSearch]=useState("");
   const[filterSub,setFilterSub]=useState("all");
   const[filterAudience,setFilterAudience]=useState("all");
+  const[viewMode,setViewMode]=useState("all"); // "all" | "duplicates"
   const[editing,setEditing]=useState(null);
   const[delTarget,setDelTarget]=useState(null);
   const[delLoading,setDelLoading]=useState(false);
+  const[bulkDelTargets,setBulkDelTargets]=useState(null); // array of qs to bulk delete
+  const[bulkDelLoading,setBulkDelLoading]=useState(false);
   const[page,setPage]=useState(0);
   const PAGE=20;
 
@@ -2394,8 +2397,41 @@ function BrowseTab({push,tick}){
     return Object.entries(map).sort((a,b)=>b[1]-a[1]).map(([t,c])=>({tag:t,count:c}));
   },[allQ]);
 
+  // Duplicate detection: same Question + AudienceTags + Subject + Sub_topic
+  const duplicateGroups=useMemo(()=>{
+    const map={};
+    allQ.forEach(q=>{
+      const qtext=(q.Question||q.question||"").trim().toLowerCase();
+      const atag=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim().toLowerCase();
+      const subj=(q.Subject||q.subject||"").trim().toLowerCase();
+      const subt=(q.Sub_topic||q.sub_topic||"").trim().toLowerCase();
+      if(!qtext)return;
+      const key=`${qtext}|||${atag}|||${subj}|||${subt}`;
+      if(!map[key])map[key]=[];
+      map[key].push(q);
+    });
+    // Only groups with 2+ items are duplicates
+    return Object.values(map).filter(g=>g.length>1);
+  },[allQ]);
+
+  // Flat list of all duplicate questions (keep originals marked)
+  const duplicateQs=useMemo(()=>{
+    const seen=new Set();
+    const result=[];
+    duplicateGroups.forEach(group=>{
+      // First item = original (newest since reversed), rest = duplicates to delete
+      group.forEach((q,idx)=>{
+        if(!seen.has(q._fbKey)){
+          seen.add(q._fbKey);
+          result.push({...q,_isDupOriginal:idx===0,_dupGroup:group.length});
+        }
+      });
+    });
+    return result;
+  },[duplicateGroups]);
+
   const filtered=useMemo(()=>{
-    let arr=allQ;
+    let arr=viewMode==="duplicates"?duplicateQs:allQ;
     if(filterAudience!=="all"){
       arr=arr.filter(q=>{
         const tagRaw=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
@@ -2422,21 +2458,66 @@ function BrowseTab({push,tick}){
       const fkey=delTarget._fbKey;
       const qid=(delTarget.ID||delTarget.id||"").toString();
       if(fkey){await fbDelete(`${sheet}/${fkey}`);invalidate(sheet);}
-      // gasBg deleteByIds skipped — Firebase already deleted above
       push("success","🗑️ ডিলিট!",`#${qid}`);
       setDelTarget(null);
     }catch(e){push("error","ডিলিট ব্যর্থ",String(e?.message||e||"unknown"));}
     setDelLoading(false);
   };
 
+  const bulkDeleteDuplicates=async(qs)=>{
+    if(!qs||qs.length===0)return;
+    setBulkDelLoading(true);
+    try{
+      let deleted=0;
+      for(const q of qs){
+        if(q._fbKey){
+          await fbDelete(`${sheet}/${q._fbKey}`);
+          deleted++;
+        }
+      }
+      invalidate(sheet);
+      push("success",`🗑️ ${deleted}টি duplicate ডিলিট!`,"");
+      setBulkDelTargets(null);
+    }catch(e){push("error","Bulk ডিলিট ব্যর্থ",String(e?.message||e||"unknown"));}
+    setBulkDelLoading(false);
+  };
+
   return(
     <>
       {/* Sheet tabs + Audience selector row */}
-      <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center"}}>
+      <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center",flexWrap:"wrap"}}>
         {["QBank","Quiz","Study"].map(s=>(
-          <button key={s} className={`ftab${sheet===s?" on":""}`} onClick={()=>{setSheet(s);setFilterSub("all");setFilterAudience("all");setSearch("");}}>{s}</button>
+          <button key={s} className={`ftab${sheet===s&&viewMode==="all"?" on":""}`} onClick={()=>{setSheet(s);setFilterSub("all");setFilterAudience("all");setSearch("");setViewMode("all");}}>{s}</button>
         ))}
+        <button
+          onClick={()=>setViewMode(v=>v==="duplicates"?"all":"duplicates")}
+          style={{marginLeft:"auto",fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="duplicates"?C.red:C.border}`,background:viewMode==="duplicates"?C.red+"22":"transparent",color:viewMode==="duplicates"?C.red:C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+          🔁 Duplicate {duplicateQs.length>0&&<span style={{fontSize:9,background:C.red,color:"#fff",borderRadius:10,padding:"1px 5px"}}>{duplicateQs.length}</span>}
+        </button>
       </div>
+      {/* Duplicate mode header */}
+      {viewMode==="duplicates"&&(
+        <div style={{background:C.red+"15",border:`1px solid ${C.red}33`,borderRadius:10,padding:"8px 12px",marginBottom:8}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:6}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:C.red}}>🔁 Duplicate প্রশ্ন</div>
+              <div style={{fontSize:10,color:C.muted,marginTop:2}}>{duplicateGroups.length}টি গ্রুপে {duplicateQs.length}টি duplicate পাওয়া গেছে</div>
+              <div style={{fontSize:10,color:C.muted,marginTop:1}}>একই Question + Audience + Subject + Sub-topic হলে duplicate গণনা হয়</div>
+            </div>
+            {duplicateGroups.length>0&&(
+              <button
+                onClick={()=>{
+                  // Select all non-original (keep first of each group, delete rest)
+                  const toDelete=duplicateGroups.flatMap(g=>g.slice(1));
+                  setBulkDelTargets(toDelete);
+                }}
+                style={{fontSize:11,padding:"5px 12px",borderRadius:8,background:C.red+"22",color:C.red,border:`1px solid ${C.red}44`,fontWeight:700,cursor:"pointer"}}>
+                🗑️ সব duplicate ডিলিট ({duplicateGroups.reduce((a,g)=>a+g.length-1,0)}টি)
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       {/* Audience Tag filter */}
       <div style={{marginBottom:8}}>
         <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>🎯 AUDIENCE</div>
@@ -2479,11 +2560,18 @@ function BrowseTab({push,tick}){
         const sub=(q.Subject||q.subject||"—");
         const tp=(q.Sub_topic||q.sub_topic||"");
         const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
+        const isDup=viewMode==="duplicates";
+        const isOriginal=q._isDupOriginal;
         return(
-          <div key={q._fbKey||i} className="qcard">
+          <div key={q._fbKey||i} className="qcard" style={isDup?{border:`1.5px solid ${isOriginal?C.green:C.red}44`,background:isOriginal?C.green+"08":C.red+"08"}:{}}>
             <div style={{display:"flex",gap:6,marginBottom:5,alignItems:"flex-start"}}>
               <span className={`qtag ${qt==="written"?"qtag-wr":"qtag-mcq"}`}>{qt==="written"?"✍️":"❓"}</span>
               <span style={{fontSize:9,color:C.muted,marginTop:1}}>#{qid}</span>
+              {isDup&&(
+                <span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:isOriginal?C.green+"22":C.red+"22",color:isOriginal?C.green:C.red,fontWeight:700,border:`1px solid ${isOriginal?C.green:C.red}44`}}>
+                  {isOriginal?`✅ Original (${q._dupGroup}টি)`:"🔁 Duplicate"}
+                </span>
+              )}
               <div style={{flex:1}}/>
               <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}33`}} onClick={()=>setEditing(q)}>✏️</button>
               <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`}} onClick={()=>setDelTarget(q)}>🗑️</button>
@@ -2514,6 +2602,11 @@ function BrowseTab({push,tick}){
         title="এই প্রশ্নটি ডিলিট করবেন?"
         description={`"${(delTarget.Question||delTarget.question||"নোট").slice(0,60)}…" Firebase ও Google Sheet থেকে মুছে যাবে।`}
         onConfirm={hardDelete} onCancel={()=>setDelTarget(null)} loading={delLoading}
+      />}
+      {bulkDelTargets&&<DeleteWarningModal
+        title={`🗑️ ${bulkDelTargets.length}টি Duplicate ডিলিট করবেন?`}
+        description={`এগুলো হলো duplicate কপি। Original গুলো রেখে বাকি ${bulkDelTargets.length}টি Firebase থেকে মুছে যাবে।`}
+        onConfirm={()=>bulkDeleteDuplicates(bulkDelTargets)} onCancel={()=>setBulkDelTargets(null)} loading={bulkDelLoading}
       />}
     </>
   );
