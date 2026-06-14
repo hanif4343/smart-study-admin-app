@@ -246,6 +246,31 @@ function doGet(e) {
     return json({result:"error",error:"ID not found: "+targetId});
   }
 
+  // ── changePassword ──
+  if (action==="changePassword") {
+    var ss=SpreadsheetApp.getActiveSpreadsheet();
+    var phone=(e.parameter.phone||"").toString().trim();
+    var newPass=(e.parameter.newPassword||"").toString().trim();
+    if(!phone||!newPass)return json({result:"error",error:"phone or newPassword missing"});
+    var uSh=ss.getSheetByName("Users"); if(!uSh)return json({result:"error",error:"Users sheet not found"});
+    var uData=uSh.getDataRange().getValues();
+    var uHdr=uData[0].map(function(h){return h.toString().toLowerCase().trim();});
+    var phCol=uHdr.indexOf("phone"), pwCol=uHdr.indexOf("password");
+    if(phCol===-1||pwCol===-1)return json({result:"error",error:"phone/password column not found"});
+    var normPhone=phone.replace(/^0+/,'');
+    for(var i=1;i<uData.length;i++){
+      var rowPhone=uData[i][phCol].toString().trim().replace(/^0+/,'');
+      if(rowPhone===normPhone){
+        var hashedNew=hashPassword(newPass);
+        uSh.getRange(i+1,pwCol+1).setValue(hashedNew);
+        // Also sync to Firebase
+        syncToFirebase("Users","Users");
+        return json({result:"success",hashed:hashedNew});
+      }
+    }
+    return json({result:"error",error:"User not found: "+phone});
+  }
+
   // ── activateUser ──
   if (action==="activateUser") {
     var ss=SpreadsheetApp.getActiveSpreadsheet();
