@@ -1148,6 +1148,7 @@ function UserEditModal({user,onClose,onSaved,push}){
   const S={...I,appearance:"none"};
 
   return(
+    <>
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:900,display:"flex",flexDirection:"column",justifyContent:"flex-end"}}>
       <div style={{background:C.card,borderRadius:"16px 16px 0 0",padding:"16px 14px 30px",maxHeight:"90vh",overflowY:"auto"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
@@ -1214,6 +1215,7 @@ function UserEditModal({user,onClose,onSaved,push}){
       </div>
     </div>
     {changePwOpen&&<ChangePasswordModal user={user} onClose={()=>setChangePwOpen(false)} push={push}/>}
+    </>
   );
 }
 
