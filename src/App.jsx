@@ -1445,7 +1445,8 @@ function ReportEditModal({report,onClose,onDone,push}){
           fetch(GAS+"?"+new URLSearchParams({
             action:"resolveReport",phone,subject,
             questionId:qid,qsheet,tab:(qdata?._tab||""),
-            reporterName:encodeURIComponent(reporterName)
+            reporterName:encodeURIComponent(reporterName),
+            secret:SECRET
           })),
           new Promise((_,rej)=>setTimeout(()=>rej(new Error("t")),7000))
         ]);
