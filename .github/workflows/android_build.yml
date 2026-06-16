@@ -24,14 +24,14 @@ jobs:
 
       - name: Web Build
         env:
-          VITE_FB_API_KEY:      ${{ secrets.VITE_FB_API_KEY }}
-          VITE_FB_AUTH_DOMAIN:  ${{ secrets.VITE_FB_AUTH_DOMAIN }}
-          VITE_FB_DATABASE_URL: ${{ secrets.VITE_FB_DATABASE_URL }}
-          VITE_FB_PROJECT_ID:   ${{ secrets.VITE_FB_PROJECT_ID }}
-          VITE_GAS_URL:         ${{ secrets.VITE_GAS_URL }}
-          VITE_IMGBB_API_KEY:   ${{ secrets.VITE_IMGBB_API_KEY }}
-          VITE_SECRET_KEY:      ${{ secrets.VITE_SECRET_KEY }}
-          VITE_FB_DB_SECRET:    ${{ secrets.VITE_FB_DB_SECRET }}
+          VITE_FB_API_KEY:         ${{ secrets.VITE_FB_API_KEY }}
+          VITE_FB_AUTH_DOMAIN:     ${{ secrets.VITE_FB_AUTH_DOMAIN }}
+          VITE_FB_DATABASE_URL:    ${{ secrets.VITE_FB_DATABASE_URL }}
+          VITE_FB_PROJECT_ID:      ${{ secrets.VITE_FB_PROJECT_ID }}
+          VITE_FB_DB_SECRET:       ${{ secrets.VITE_FB_DB_SECRET }}
+          VITE_IMGBB_API_KEY:      ${{ secrets.VITE_IMGBB_API_KEY }}
+          VITE_FCM_CLIENT_EMAIL:   ${{ secrets.VITE_FCM_CLIENT_EMAIL }}
+          VITE_FCM_PRIVATE_KEY:    ${{ secrets.VITE_FCM_PRIVATE_KEY }}
         run: npm run build
 
       - name: Initialize Capacitor
