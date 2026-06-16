@@ -4173,6 +4173,25 @@ function LoginScreen({onLogin}){
 }
 
 export default function App(){
+  // ── Android system back button — modal থাকলে close, নইলে double-back-to-exit ──
+  useEffect(()=>{
+    let _depth=0;
+    const inc=()=>_depth++;
+    const dec=()=>{_depth=Math.max(0,_depth-1);};
+    window.addEventListener("modal-open",inc);
+    window.addEventListener("modal-close",dec);
+    const onBack=()=>{
+      if(_depth>0) window.dispatchEvent(new Event("back-press"));
+      // depth===0 হলে MainActivity এর double-back-to-exit কাজ করবে
+    };
+    window.addEventListener("androidBackButton",onBack);
+    return()=>{
+      window.removeEventListener("modal-open",inc);
+      window.removeEventListener("modal-close",dec);
+      window.removeEventListener("androidBackButton",onBack);
+    };
+  },[]);
+
   const[loggedIn,setLoggedIn]=useState(()=>{
     // Check if we have saved credentials — will auto-login in LoginScreen
     return false;
