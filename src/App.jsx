@@ -308,9 +308,191 @@ const fbDelete= async p=>{
 };
 
 
-/* ══════════ GAS helpers ══════════ */
-const gasBg  = params=>setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}),300);
-const gasPost= body  =>setTimeout(()=>fetch(GAS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,secret:SECRET})}).catch(()=>{}),300);
+/* ══════════════════════════════════════════════════════════════
+   🔄 BACKGROUND TASK MANAGER
+   — সব API call (GAS GET/POST) এখানে queue হয়
+   — App minimize / screen off হলেও কাজ চলে
+   — WakeLock API দিয়ে CPU জাগিয়ে রাখে
+   — visibilitychange এ pending tasks flush করে
+   — React component এ live badge দেখায়
+   ══════════════════════════════════════════════════════════════ */
+const _BGM = (() => {
+  const RETRY_DELAYS = [1000, 3000, 8000];
+  const MAX_QUEUE    = 500;
+  let _queue   = [];
+  let _running = false;
+  let _wakeLock= null;
+  let _listeners = [];
+  let _activeCount = 0;
+  let _doneCount   = 0;
+  let _failCount   = 0;
+
+  async function _acquireWake() {
+    if (!navigator.wakeLock) return;
+    try {
+      if (_wakeLock && _wakeLock.released === false) return;
+      _wakeLock = await navigator.wakeLock.request("screen");
+      _LC.info("BGM", "WakeLock acquired");
+    } catch(e) { _LC.warn("BGM", "WakeLock failed: " + e.message); }
+  }
+  async function _releaseWake() {
+    if (_wakeLock && !_wakeLock.released) {
+      try { await _wakeLock.release(); } catch(_){}
+      _wakeLock = null;
+    }
+  }
+
+  document.addEventListener("visibilitychange", async () => {
+    if (!document.hidden && _queue.length > 0) {
+      _LC.lifecycle("BGM", "App foregrounded — flushing " + _queue.length + " pending tasks");
+      await _acquireWake();
+      _flush();
+    }
+  });
+
+  function _notify() {
+    _listeners.forEach(fn => { try { fn(); } catch(_){} });
+  }
+
+  async function _flush() {
+    if (_running) return;
+    if (_queue.length === 0) { _releaseWake(); _notify(); return; }
+    _running = true;
+    await _acquireWake();
+    _notify();
+
+    while (_queue.length > 0) {
+      const task = _queue[0];
+      _activeCount++;
+      _notify();
+      try {
+        await task.fn();
+        _queue.shift();
+        _doneCount++;
+        _LC.log("BGM", "✔ Task done: " + task.label, {doneCount:_doneCount});
+      } catch(e) {
+        task.retries = (task.retries||0) + 1;
+        const delay = RETRY_DELAYS[task.retries - 1];
+        if (delay !== undefined) {
+          _LC.warn("BGM", "↩ Retry " + task.retries + " for: " + task.label + " — " + e.message);
+          await new Promise(r => setTimeout(r, delay));
+        } else {
+          _LC.error("BGM", "✗ Task failed: " + task.label + " — " + e.message);
+          _queue.shift();
+          _failCount++;
+        }
+      }
+      _activeCount = Math.max(0, _activeCount - 1);
+      _notify();
+    }
+
+    _running = false;
+    _releaseWake();
+    _notify();
+  }
+
+  function enqueue(fn, label) {
+    label = label || "task";
+    if (_queue.length >= MAX_QUEUE) { _LC.warn("BGM","Queue full: "+label); return; }
+    _queue.push({ fn, label, retries: 0, ts: Date.now() });
+    _LC.log("BGM", "⏳ Enqueued: " + label + " (queue=" + _queue.length + ")");
+    _notify();
+    setTimeout(_flush, 50);
+  }
+
+  /* ── Native Foreground Service bridge (Android) ── */
+  function _nativeStart(label) {
+    try {
+      const plugin = window.Capacitor?.Plugins?.BgSync;
+      if (plugin) plugin.start({ title: "Admin: কাজ চলছে…", text: label || "Background sync" });
+    } catch(_) {}
+  }
+  function _nativeUpdate(label) {
+    try {
+      const plugin = window.Capacitor?.Plugins?.BgSync;
+      if (plugin) plugin.update({ title: "Admin: কাজ চলছে…", text: label });
+    } catch(_) {}
+  }
+  function _nativeStop() {
+    try {
+      const plugin = window.Capacitor?.Plugins?.BgSync;
+      if (plugin) plugin.stop();
+    } catch(_) {}
+  }
+
+  // Patch enqueue/flush to call native service
+  const _origEnqueue = enqueue;
+  function enqueueWithNative(fn, label) {
+    const wasEmpty = _queue.length === 0;
+    _origEnqueue(fn, label);
+    if (wasEmpty) _nativeStart(label || "task");
+  }
+
+  // Patch flush to stop service when done
+  const _origFlushCheck = _notify;
+  // Override notify to also call native stop when done
+  _listeners._nativeCheck = () => {
+    if (!_running && _queue.length === 0) _nativeStop();
+    else if (_running && _queue.length > 0) _nativeUpdate("বাকি: " + _queue.length + "টি কাজ");
+  };
+  _listeners.push(_listeners._nativeCheck);
+
+  return {
+    enqueue: enqueueWithNative,
+    getState: () => ({ pending:_queue.length, active:_activeCount, done:_doneCount, failed:_failCount, running:_running }),
+    subscribe: fn => { _listeners.push(fn); return () => { _listeners = _listeners.filter(x=>x!==fn); }; },
+  };
+})();
+
+function useBGM() {
+  const [state, setState] = React.useState(() => _BGM.getState());
+  useEffect(() => {
+    const unsub = _BGM.subscribe(() => setState({..._BGM.getState()}));
+    return unsub;
+  }, []);
+  return state;
+}
+
+function BgTaskIndicator() {
+  const { pending, active, done, failed, running } = useBGM();
+  const total = pending + active;
+  if (total === 0 && !running) return null;
+  const isPulsing = running || active > 0;
+  return (
+    <div style={{
+      position:"fixed", top:56, right:10, zIndex:9999,
+      background: failed > 0 ? "#ef444422" : "#3b82f622",
+      border:"1px solid " + (failed > 0 ? "#ef4444aa" : "#3b82f6aa"),
+      borderRadius:20, padding:"4px 10px",
+      display:"flex", alignItems:"center", gap:6,
+      fontSize:10, fontWeight:700, color: failed > 0 ? "#ef4444" : "#3b82f6",
+      backdropFilter:"blur(6px)",
+      animation: isPulsing ? "bgm-pulse 1.4s ease-in-out infinite" : "none",
+      pointerEvents:"none",
+    }}>
+      <span style={{
+        width:7, height:7, borderRadius:"50%",
+        background: failed>0 ? "#ef4444" : "#3b82f6",
+        display:"inline-block",
+        animation: isPulsing ? "bgm-dot 1.4s ease-in-out infinite" : "none",
+      }}/>
+      {running || active > 0
+        ? "⚙️ " + (pending + active) + "টি কাজ চলছে…"
+        : "⏳ " + pending + "টি অপেক্ষায়"}
+      {failed > 0 && <span style={{color:"#ef4444"}}>{"⚠️"}{failed}</span>}
+    </div>
+  );
+}
+
+/* ══════════ GAS helpers — routed through BGM ══════════ */
+const gasBg  = params => _BGM.enqueue(
+  () => fetch(GAS + "?" + new URLSearchParams({...params, secret:SECRET})),
+  "GAS:" + (params.action||params.type||"get")
+);
+const gasPost= body   => _BGM.enqueue(
+  () => fetch(GAS, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({...body, secret:SECRET})}),
+  "GAS:POST:" + (body.action||body.targetTab||"post")
+);
 const gasCall= async params=>{
   _LC.api("gasCall", `GAS call: action=${params.action||params.type||"?"}`, { params: JSON.stringify(params).slice(0,200) });
   try {
@@ -597,6 +779,8 @@ html,body,#root{background:${C.bg};color:${C.text};font-family:'Noto Sans Bengal
 @keyframes su{from{transform:translateY(36px);opacity:0}to{transform:translateY(0);opacity:1}}
 @keyframes shim{0%{background-position:-200% 0}100%{background-position:200% 0}}
 @keyframes ti{from{transform:translateY(-16px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes bgm-pulse{0%,100%{box-shadow:0 0 0 0 #3b82f644}50%{box-shadow:0 0 0 5px #3b82f611}}
+@keyframes bgm-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
 `;
 
 /* ══════════ MINI COMPONENTS ══════════ */
@@ -4001,6 +4185,7 @@ export default function App(){
         })}
       </nav>
       <Toasts t={toasts}/>
+      <BgTaskIndicator/>
     </>
     </ErrorBoundary>
   );
