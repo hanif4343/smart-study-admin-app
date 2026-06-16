@@ -16,7 +16,7 @@ if "mlkit" not in txt and "text-recognition" not in txt:
 else:
     print("ℹ️  MLKit deps already present")
 
-# ── 2. AndroidManifest.xml — permissions ──
+# ── 2. AndroidManifest.xml — permissions + service ──
 manifest_path = "android/app/src/main/AndroidManifest.xml"
 manifest = open(manifest_path).read()
 
@@ -32,30 +32,57 @@ if "WRITE_EXTERNAL_STORAGE" not in manifest:
     permissions_to_add.append('    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />')
 if "READ_MEDIA_VIDEO" not in manifest:
     permissions_to_add.append('    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />')
+# ── Background sync permissions ──
+if "FOREGROUND_SERVICE" not in manifest:
+    permissions_to_add.append('    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />')
+if "FOREGROUND_SERVICE_DATA_SYNC" not in manifest:
+    permissions_to_add.append('    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />')
+if "WAKE_LOCK" not in manifest:
+    permissions_to_add.append('    <uses-permission android:name="android.permission.WAKE_LOCK" />')
+if "RECEIVE_BOOT_COMPLETED" not in manifest:
+    permissions_to_add.append('    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />')
 
 if permissions_to_add:
     perm_block = "\n".join(permissions_to_add) + "\n"
-    # Insert after <manifest ...> opening tag
     manifest = re.sub(
         r'(<manifest[^>]*>)',
         r'\1\n' + perm_block,
         manifest,
         count=1
     )
-    open(manifest_path, "w").write(manifest)
-    print(f"✅ Added {len(permissions_to_add)} permission(s) to AndroidManifest.xml:")
-    for p in permissions_to_add:
-        print(f"   {p.strip()}")
-else:
-    print("ℹ️  All permissions already present")
+    print(f"✅ Added {len(permissions_to_add)} permission(s) to AndroidManifest.xml")
 
-# ── 3. Verify OcrPlugin.kt and MainActivity.kt are in place ──
+# ── Add BackgroundSyncService to manifest ──
+service_decl = '''
+        <service
+            android:name=".BackgroundSyncService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />'''
+
+if "BackgroundSyncService" not in manifest:
+    # Insert before </application>
+    manifest = manifest.replace("</application>", service_decl + "\n    </application>", 1)
+    print("✅ BackgroundSyncService added to AndroidManifest.xml")
+else:
+    print("ℹ️  BackgroundSyncService already in manifest")
+
+open(manifest_path, "w").write(manifest)
+
+# ── 3. Copy Kotlin source files ──
 pkg_dir = "android/app/src/main/java/com/smartstudy/admin"
-for f in ["OcrPlugin.kt", "MainActivity.kt"]:
-    full = os.path.join(pkg_dir, f)
-    if os.path.exists(full):
-        print(f"✅ {f} exists at {full}")
+os.makedirs(pkg_dir, exist_ok=True)
+
+src_dir = "android-src"
+files_to_copy = ["OcrPlugin.kt", "MainActivity.kt", "BackgroundSyncService.kt", "BgSyncPlugin.kt"]
+
+for f in files_to_copy:
+    src = os.path.join(src_dir, f)
+    dst = os.path.join(pkg_dir, f)
+    if os.path.exists(src):
+        import shutil
+        shutil.copy2(src, dst)
+        print(f"✅ {f} copied to {dst}")
     else:
-        print(f"❌ MISSING: {full}")
+        print(f"❌ MISSING source: {src}")
 
 print("\nAll done!")
