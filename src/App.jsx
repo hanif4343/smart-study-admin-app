@@ -307,6 +307,51 @@ const fbDelete= async p=>{
   return _checkResp(r);
 };
 
+/* ══ fbDeleteBatch — Firebase multi-path DELETE (single REST call) ══
+   Firebase PATCH with {key: null} = atomic multi-delete.
+   Root path = sheet (e.g. "QBank"), keys = _fbKey array.
+   Much faster than serial fbDelete per item.
+   Firebase limits: ~1000 keys per call, ~10MB body — we chunk at 500.
+   ══════════════════════════════════════════════════════════════════ */
+const BATCH_SZ = 500;
+async function fbDeleteBatch(sheet, fbKeys, onProgress) {
+  if (!fbKeys || fbKeys.length === 0) return 0;
+  const t = await _tok();
+  if (!t) throw new Error("Not authenticated — please re-login");
+  let deleted = 0;
+  for (let i = 0; i < fbKeys.length; i += BATCH_SZ) {
+    const chunk = fbKeys.slice(i, i + BATCH_SZ);
+    const body = {};
+    chunk.forEach(k => { body[k] = null; }); // null = delete in Firebase
+    const r = await fetch(`${FB}/${sheet}.json${_authQ(t)}`, {
+      method: "PATCH",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    await _checkResp(r);
+    deleted += chunk.length;
+    if (onProgress) onProgress(deleted, fbKeys.length);
+    _LC.log("fbDeleteBatch", `Batch ${Math.ceil((i+1)/BATCH_SZ)}: deleted ${deleted}/${fbKeys.length} from ${sheet}`);
+  }
+  return deleted;
+}
+
+/* ══ fbPatchBatch — parallel PATCH with concurrency limit ══
+   For rename: patch N items, CONCURRENCY at a time.
+   onProgress(done, total) optional callback.
+   ══════════════════════════════════════════════════════════ */
+async function fbPatchBatch(items, onProgress, concurrency) {
+  concurrency = concurrency || 20;
+  let done = 0;
+  for (let i = 0; i < items.length; i += concurrency) {
+    const chunk = items.slice(i, i + concurrency);
+    await Promise.all(chunk.map(({path, data}) => fbPatch(path, data)));
+    done += chunk.length;
+    if (onProgress) onProgress(done, items.length);
+  }
+  return done;
+}
+
 
 /* ══════════════════════════════════════════════════════════════
    🔄 BACKGROUND TASK MANAGER
@@ -484,15 +529,13 @@ function BgTaskIndicator() {
   );
 }
 
-/* ══════════ GAS helpers — routed through BGM ══════════ */
-const gasBg  = params => _BGM.enqueue(
-  () => fetch(GAS + "?" + new URLSearchParams({...params, secret:SECRET})),
-  "GAS:" + (params.action||params.type||"get")
-);
-const gasPost= body   => _BGM.enqueue(
-  () => fetch(GAS, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({...body, secret:SECRET})}),
-  "GAS:POST:" + (body.action||body.targetTab||"post")
-);
+/* ══════════ GAS helpers — fire-and-forget (GAS = Sheet sync only, not critical) ══════════
+   GAS call গুলো critical না — Firebase-ই source of truth।
+   Serial queue তে ঢুকলে 300টা call = 10+ মিনিট।
+   তাই fire-and-forget: fail হলেও Firebase data ঠিক থাকে।
+   ════════════════════════════════════════════════════════════════════════════════════════ */
+const gasBg  = params => { setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}), 200); };
+const gasPost= body   => { setTimeout(()=>fetch(GAS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,secret:SECRET})}).catch(()=>{}), 200); };
 const gasCall= async params=>{
   _LC.api("gasCall", `GAS call: action=${params.action||params.type||"?"}`, { params: JSON.stringify(params).slice(0,200) });
   try {
@@ -658,8 +701,10 @@ function Toasts({t}){return(
 );}
 
 /* ══════════ DELETE WARNING MODAL ══════════ */
-function DeleteWarningModal({title,description,onConfirm,onCancel,loading}){
+function DeleteWarningModal({title,description,onConfirm,onCancel,loading,progress}){
   useModalBack(onCancel);
+  const pct = progress&&progress.total>0 ? Math.round(progress.done/progress.total*100) : 0;
+  const showProgress = loading && progress && progress.total > 0;
   return(
     <div className="ovl" style={{zIndex:300}}>
       <div className="modal" style={{borderTop:`3px solid ${C.red}`}}>
@@ -669,13 +714,25 @@ function DeleteWarningModal({title,description,onConfirm,onCancel,loading}){
           <div style={{fontSize:16,fontWeight:700,color:C.red,marginBottom:6}}>{title}</div>
           <div style={{fontSize:12,color:C.muted,lineHeight:1.6}}>{description}</div>
         </div>
-        <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:11,color:C.red,textAlign:"center",fontWeight:600}}>
-          ⚠️ এই কাজ পূর্বাবস্থায় ফেরানো যাবে না!
-        </div>
+        {showProgress?(
+          <div style={{marginBottom:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:5,color:C.text}}>
+              <span>⚡ ডিলিট হচ্ছে…</span>
+              <span style={{fontWeight:700,color:C.red}}>{progress.done}/{progress.total} ({pct}%)</span>
+            </div>
+            <div style={{height:6,background:C.border,borderRadius:6,overflow:"hidden"}}>
+              <div style={{height:"100%",width:pct+"%",background:C.red,borderRadius:6,transition:"width .3s ease"}}/>
+            </div>
+          </div>
+        ):(
+          <div style={{background:"#ef444412",border:"1px solid #ef444430",borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:11,color:C.red,textAlign:"center",fontWeight:600}}>
+            ⚠️ এই কাজ পূর্বাবস্থায় ফেরানো যাবে না!
+          </div>
+        )}
         <div style={{display:"flex",gap:8}}>
           <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onCancel} disabled={loading}>বাতিল</button>
           <button className="btn" style={{flex:2,justifyContent:"center",background:C.red,color:"#fff"}} onClick={onConfirm} disabled={loading}>
-            {loading?"⏳ ডিলিট হচ্ছে...":"🗑️ হ্যাঁ, ডিলিট করুন"}
+            {loading?`⏳ ${showProgress?pct+"%":"ডিলিট হচ্ছে..."}` :"🗑️ হ্যাঁ, ডিলিট করুন"}
           </button>
         </div>
       </div>
@@ -2834,13 +2891,9 @@ function BrowseTab({push,tick}){
     if(!qs||qs.length===0)return;
     setBulkDelLoading(true);
     try{
-      let deleted=0;
-      for(const q of qs){
-        if(q._fbKey){
-          await fbDelete(`${sheet}/${q._fbKey}`);
-          deleted++;
-        }
-      }
+      // ⚡ Single multi-path PATCH — deletes all duplicates in one Firebase call
+      const keys=qs.map(q=>q._fbKey).filter(Boolean);
+      const deleted=await fbDeleteBatch(sheet, keys);
       invalidate(sheet);
       push("success",`🗑️ ${deleted}টি duplicate ডিলিট!`,"");
       setBulkDelTargets(null);
@@ -3113,24 +3166,26 @@ function RenameTab({push,tick}){
         return(q.Sub_topic||q.sub_topic||"").trim()===oldName;
       });
 
-      // Per-item PATCH — Firebase REST does not support slash-key multi-path
-      for(const q of affected){
-        const fkey=q._fbKey;if(!fkey)continue;
+      // ⚡ Parallel batch PATCH (20 concurrent) — much faster than serial
+      const patchItems=affected.map(q=>{
+        const fkey=q._fbKey;if(!fkey)return null;
+        let data;
         if(type==="subject"){
-          await fbPatch(`${sheet}/${fkey}`,{Subject:nName});
+          data={Subject:nName};
         } else if(type==="topic"){
-          const patch={Topic:nName};
+          data={Topic:nName};
           const st=q.Sub_topic||q.sub_topic||"";
-          if(st.includes(" > ")){const parts=st.split(" > ");if(parts[0].trim()===oldName)patch.Sub_topic=`${nName} > ${parts.slice(1).join(" > ")}`;}
-          await fbPatch(`${sheet}/${fkey}`,patch);
+          if(st.includes(" > ")){const parts=st.split(" > ");if(parts[0].trim()===oldName)data.Sub_topic=`${nName} > ${parts.slice(1).join(" > ")}`;}
         } else {
-          await fbPatch(`${sheet}/${fkey}`,{Sub_topic:nName});
+          data={Sub_topic:nName};
         }
-      }
+        return {path:`${sheet}/${fkey}`,data};
+      }).filter(Boolean);
+      const done=await fbPatchBatch(patchItems);
       invalidate(sheet);
 
-      // GAS renameField skipped — Firebase already updated above; GAS syncToFirebase would overwrite structure
-      push("success","✅ Rename সম্পন্ন!",`"${oldName}" → "${nName}" · ${affected.length}টি`);
+      // GAS renameField skipped — Firebase already updated above
+      push("success","✅ Rename সম্পন্ন!",`"${oldName}" → "${nName}" · ${done}টি`);
       setRenameTarget(null);setNewName("");
     }catch(e){push("error","Rename ব্যর্থ",String(e?.message||e||"unknown error"));}
     setRenaming(false);
@@ -3244,15 +3299,14 @@ function AudienceTagRenameTab({push,tick}){
         });
         if(affected.length===0)continue;
 
-        // Per-item PATCH — Firebase REST does not support slash-key multi-path
-        for(const q of affected){
-          const fkey=q._fbKey;if(!fkey)continue;
+        // ⚡ Parallel batch PATCH (20 concurrent)
+        const patchItems=affected.map(q=>{
+          const fkey=q._fbKey;if(!fkey)return null;
           const fieldKey=q.AudienceTags!=null?"AudienceTags":q.audienceTags!=null?"audienceTags":"audience_tags";
-          await fbPatch(`${sheet}/${fkey}`,{[fieldKey]:nTag});
-          totalUpdated++;
-        }
-
-        // Also invalidate the sheet cache
+          return {path:`${sheet}/${fkey}`,data:{[fieldKey]:nTag}};
+        }).filter(Boolean);
+        const sheetDone=await fbPatchBatch(patchItems);
+        totalUpdated+=sheetDone;
         invalidate(sheet);
       }
 
@@ -3406,20 +3460,22 @@ function DeleteTab({push,tick}){
     return Object.entries(map).sort((a,b)=>b[1].length-a[1].length);
   },[allQ,type]);
 
+  const[delProgress,setDelProgress]=useState({done:0,total:0});
+
   const doBulkDelete=async()=>{
     if(!delTarget)return;
     setDelLoading(true);
+    const[groupName,qs]=delTarget;
+    setDelProgress({done:0,total:qs.length});
     try{
-      const[groupName,qs]=delTarget;
-      // Delete per item — Firebase REST root PATCH with slash-key does not work
-      for(const q of qs){
-        if(q._fbKey) await fbDelete(`${sheet}/${q._fbKey}`);
-      }
+      // ⚡ Single multi-path PATCH call — O(1) instead of O(N) serial deletes
+      const keys=qs.map(q=>q._fbKey).filter(Boolean);
+      const deleted=await fbDeleteBatch(sheet, keys, (done,total)=>setDelProgress({done,total}));
       invalidate(sheet);
-      // gasBg deleteByIds skipped — Firebase already deleted above
-      push("success","🗑️ Bulk Delete!",`"${groupName}" · ${qs.length}টি মুছে গেছে`);
+      push("success","🗑️ Bulk Delete!",`"${groupName}" · ${deleted}টি মুছে গেছে`);
       setDelTarget(null);
     }catch(e){push("error","Delete ব্যর্থ",e.message);}
+    setDelProgress({done:0,total:0});
     setDelLoading(false);
   };
 
@@ -3448,8 +3504,9 @@ function DeleteTab({push,tick}){
       }
       {delTarget&&<DeleteWarningModal
         title={`"${delTarget[0]}" ডিলিট?`}
-        description={`${delTarget[1].length}টি প্রশ্ন Firebase ও Sheet থেকে মুছে যাবে।`}
+        description={`${delTarget[1].length}টি প্রশ্ন Firebase থেকে মুছে যাবে।`}
         onConfirm={doBulkDelete} onCancel={()=>setDelTarget(null)} loading={delLoading}
+        progress={delProgress}
       />}
     </>
   );
