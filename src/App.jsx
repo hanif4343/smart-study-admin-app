@@ -1739,7 +1739,8 @@ function ReportsPage({push,tick}){
              {(r.SubTopic||r.subtopic)&&<span>📌 {r.SubTopic||r.subtopic}</span>}
              {qid2&&<span style={{color:C.accent}}>#{qid2}</span>}
            </div>
-           <div className="ri">{r.Issue||r.issue||r.Question||r.question||"বিস্তারিত নেই"}</div>
+           <div className="ri">{r.Issue||r.issue||"বিস্তারিত নেই"}</div>
+           {(r.Question||r.question)&&<div style={{fontSize:11,color:C.muted,marginTop:4,fontStyle:"italic",borderLeft:`2px solid ${C.border}`,paddingLeft:6}}>প্রশ্ন: {(r.Question||r.question).toString().slice(0,80)}{(r.Question||r.question).length>80?"...":""}</div>}
            <button className="btn bp bb" style={{marginTop:8,background:isMCQ?C.accent:C.purple}} onClick={()=>setEditing(r)}>✏️ এডিট ও সমাধান</button>
          </div>
         );
@@ -1765,10 +1766,11 @@ function ReportEditModal({report,onClose,onDone,push}){
   const[technique,setTechnique]=useState("");
   const[qtype,setQtype]=useState("mcq");
   const qid=(report.QuestionID||report.questionId||"").toString();
+  const qfbKey=(report.QuestionFBKey||report.questionFBKey||report.fbKey||"").toString().trim();
   const qsheet=(report.QSheet||report.qsheet||"").toString().trim();
 
   useEffect(()=>{
-    if(!qid){setLoadQ(false);return;}
+    if(!qid&&!qfbKey){setLoadQ(false);return;}
     let cancelled=false;
     (async()=>{
       setLoadQ(true);
@@ -1777,10 +1779,15 @@ function ReportEditModal({report,onClose,onDone,push}){
         try{
           const raw=await loadPath(t);
           const arr=toArr(raw);
+          // Priority 1: _fbKey দিয়ে exact match — সবচেয়ে reliable
+          // Priority 2: ID field দিয়ে match — fallback
           const qNorm=qid.replace(/^0+/,"");
           const q=arr.find(x=>{
+            // _fbKey exact match (main app যদি fbKey পাঠায়)
+            if(qfbKey && x._fbKey && x._fbKey===qfbKey) return true;
+            // id field দিয়ে match — কিন্তু শুধু exact match, leading zero ছাড়া
             const xid=(x.ID||x.id||x.SL||x.sl||"").toString().replace(/^0+/,"");
-            return xid===qNorm;
+            return qNorm && xid===qNorm;
           });
           if(q&&!cancelled){
             setQdata({...q,_tab:t});
@@ -1798,10 +1805,23 @@ function ReportEditModal({report,onClose,onDone,push}){
           }
         }catch(_){}
       }
-      if(!cancelled)setLoadQ(false);
+      // Firebase এ match না পেলে report এর নিজস্ব Question field ব্যবহার করো
+      if(!cancelled){
+        setLoadQ(false);
+        // Fallback: report এ Question text থাকলে সেটা দিয়ে edit করতে দাও
+        const fallbackQ=report.Question||report.question||"";
+        if(!qdata && fallbackQ && !cancelled){
+          setQuestion(fallbackQ);
+          setCorrect(report.Correct||report.correct||"");
+          setExplanation(report.Explanation||report.explanation||"");
+          const qt=(report.QType||report.qtype||"MCQ").toLowerCase();
+          setQtype(qt==="written"?"written":"mcq");
+          // qdata ছাড়া fbKey save হবে না — user কে জানাতে হবে
+        }
+      }
     })();
     return()=>{cancelled=true;};
-  },[qid,qsheet]);
+  },[qid,qfbKey,qsheet]);
 
   const save=async()=>{
     setSaving(true);
@@ -1879,7 +1899,8 @@ function ReportEditModal({report,onClose,onDone,push}){
             <div style={{fontSize:11,color:C.text}}>{report.Issue||report.issue||"—"}</div>
           </div>
           {loadQ&&<><div className="sk" style={{height:52,marginBottom:8}}/><div className="sk" style={{height:36}}/></>}
-          {!loadQ&&!qdata&&<div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12}}>প্রশ্ন #{qid||"—"} পাওয়া যায়নি।</div>}
+          {!loadQ&&!qdata&&question&&<div style={{background:`${C.yellow}11`,border:`1px solid ${C.yellow}44`,borderRadius:8,padding:"10px 12px",marginBottom:8,fontSize:11,color:C.yellow}}>⚠️ Firebase এ exact match পাওয়া যায়নি (ID: #{qid||"—"})। Report এর question text দেখানো হচ্ছে।</div>}
+          {!loadQ&&!qdata&&!question&&<div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12}}>প্রশ্ন #{qid||"—"} পাওয়া যায়নি।</div>}
           {!loadQ&&qdata&&qtype==="mcq"&&<>
             <div className="fld"><label>❓ প্রশ্ন</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:60}}/></div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:10}}>
