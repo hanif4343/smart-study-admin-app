@@ -45,12 +45,10 @@ jobs:
           npx cap add android
           npx cap sync android
 
-      - name: Inject MLKit OCR Plugin + Permissions
+      - name: Inject Plugins + Permissions (MLKit OCR + Background Sync Service)
         run: |
           PKG_DIR="android/app/src/main/java/com/smartstudy/admin"
           mkdir -p "$PKG_DIR"
-          cp android-src/OcrPlugin.kt "$PKG_DIR/OcrPlugin.kt"
-          cp android-src/MainActivity.kt "$PKG_DIR/MainActivity.kt"
           python3 android-src/add_mlkit.py
 
       - name: Final Capacitor Sync (after plugin inject)
