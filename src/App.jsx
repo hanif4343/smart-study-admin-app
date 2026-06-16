@@ -9,8 +9,14 @@ const IMGBB   = import.meta.env.VITE_IMGBB_API_KEY;
 const SECRET  = import.meta.env.VITE_SECRET_KEY;    // GAS আর call নেই — legacy only
 // FCM v1 — Service Account credentials (GitHub Secrets থেকে build time এ inject হয়)
 const FCM_CLIENT_EMAIL = import.meta.env.VITE_FCM_CLIENT_EMAIL||"";
-const FCM_PRIVATE_KEY  = (import.meta.env.VITE_FCM_PRIVATE_KEY||"").replace(/\\n/g,"\n"); // 
- restore
+const FCM_PRIVATE_KEY = (() => {
+  try {
+    // Vite build এ VITE_FCM_PRIVATE_KEY string হিসেবে inject হয়
+    // GitHub Secret এ \n (দুই char) থাকে — actual newline চাই
+    const raw = import.meta.env.VITE_FCM_PRIVATE_KEY || "";
+    return raw.split("\\n").join("\n");
+  } catch(_) { return ""; }
+})()
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
@@ -20,11 +26,23 @@ const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#2
    Path: AdminAppLogcat/{sessionId}/{pushId}
    ══════════════════════════════════════════════════════════════ */
 const _LC = (() => {
-  const _sessionId = (() => {
+  // Bangladesh time (UTC+6)
+  const _bdNow = () => {
     const now = new Date();
+    const bd = new Date(now.getTime() + 6*60*60*1000);
     const pad = n => String(n).padStart(2,"0");
-    return `${now.getFullYear()}${pad(now.getMonth()+1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}_${Math.random().toString(36).slice(2,7)}`;
-  })();
+    return {
+      date:   `${bd.getUTCFullYear()}-${pad(bd.getUTCMonth()+1)}-${pad(bd.getUTCDate())}`,
+      time:   `${pad(bd.getUTCHours())}-${pad(bd.getUTCMinutes())}-${pad(bd.getUTCSeconds())}`,
+      full:   `${bd.getUTCFullYear()}-${pad(bd.getUTCMonth()+1)}-${pad(bd.getUTCDate())} ${pad(bd.getUTCHours())}:${pad(bd.getUTCMinutes())}:${pad(bd.getUTCSeconds())}`,
+    };
+  };
+  const _startTime = _bdNow();
+  const _rand = Math.random().toString(36).slice(2,6);
+  // Session ID: "2025-06-15 14:23:05 [abc1]" — Firebase এ এটাই key হবে, সরাসরি পড়া যাবে
+  const _sessionId = `${_startTime.date} ${_startTime.time.replace(/-/g,":")} [${_rand}]`;
+  // Date folder: 2025-06-15
+  const _dateFolder = _startTime.date;
 
   const _device = (() => {
     try {
@@ -56,7 +74,9 @@ const _LC = (() => {
     try {
       let authQ = "";
       try { if (window.__adminIdToken) authQ = `?auth=${window.__adminIdToken}`; } catch(e){}
-      const url = `${FB}/AdminAppLogcat/${_sessionId}.json${authQ}`;
+      // Path: AdminAppLogcat/{date}/{session_title}/logs
+      // Firebase এ: AdminAppLogcat > 2025-06-15 > "2025-06-15 14:23:05 [abc1]" > log entries
+      const url = `${FB}/AdminAppLogcat/${_dateFolder}/${encodeURIComponent(_sessionId)}/logs.json${authQ}`;
       await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -79,9 +99,12 @@ const _LC = (() => {
     if (_logCount >= MAX_LOGS_PER_SESSION) return;
     _logCount++;
     const now = new Date();
+    const pad = n => String(n).padStart(2,"0");
+    const bdTime = new Date(now.getTime() + 6*60*60*1000); // UTC+6 Bangladesh
+    const tsLocal = `${bdTime.getUTCFullYear()}-${pad(bdTime.getUTCMonth()+1)}-${pad(bdTime.getUTCDate())} ${pad(bdTime.getUTCHours())}:${pad(bdTime.getUTCMinutes())}:${pad(bdTime.getUTCSeconds())}`;
     const entry = {
-      ts: now.toISOString(),
-      tsMs: now.getTime(),
+      ts: tsLocal,           // "2025-06-15 14:23:05" — readable Bangladesh time
+      tsMs: now.getTime(),   // sort এর জন্য
       session: _sessionId,
       level,
       tag,
@@ -134,6 +157,7 @@ const _LC = (() => {
     device: _device,
     fbUrl: FB ? FB.replace(/https?:\/\//, "").slice(0,40) : "NOT_SET",
     fbProject: FB_PROJ || "NOT_SET",
+    fcmReady: !!(typeof FCM_CLIENT_EMAIL !== "undefined" && FCM_CLIENT_EMAIL),
     appVersion: "1.0",
   });
 
@@ -550,55 +574,62 @@ const gasCall = async ()=>({});  // no-op
 
 /* ── JWT বানাও Service Account দিয়ে (browser crypto API) ── */
 async function _fcmGetAccessToken() {
-  if (!FCM_CLIENT_EMAIL || !FCM_PRIVATE_KEY) return null;
+  if (!FCM_CLIENT_EMAIL || !FCM_PRIVATE_KEY) {
+    _LC.warn("fcmGetToken", "FCM credentials missing");
+    return null;
+  }
   try {
+    if (!crypto?.subtle) {
+      _LC.error("fcmGetToken", "crypto.subtle unavailable");
+      return null;
+    }
     const now = Math.floor(Date.now() / 1000);
-    const header  = { alg: "RS256", typ: "JWT" };
-    const payload = {
-      iss: FCM_CLIENT_EMAIL,
-      sub: FCM_CLIENT_EMAIL,
-      aud: "https://oauth2.googleapis.com/token",
-      iat: now,
-      exp: now + 3600,
-      scope: "https://www.googleapis.com/auth/firebase.messaging",
+    const b64url = obj => {
+      const s = typeof obj === "string" ? obj : JSON.stringify(obj);
+      return btoa(unescape(encodeURIComponent(s)))
+        .replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
     };
-
-    const b64 = obj => btoa(unescape(encodeURIComponent(JSON.stringify(obj))))
-      .replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
-
-    const sigInput = b64(header) + "." + b64(payload);
-
-    // PEM → CryptoKey
+    const header  = {alg:"RS256",typ:"JWT"};
+    const payload = {
+      iss:FCM_CLIENT_EMAIL, sub:FCM_CLIENT_EMAIL,
+      aud:"https://oauth2.googleapis.com/token",
+      iat:now, exp:now+3600,
+      scope:"https://www.googleapis.com/auth/firebase.messaging",
+    };
+    const sigInput = b64url(header) + "." + b64url(payload);
+    // PEM → DER
     const pem = FCM_PRIVATE_KEY
-      .replace(/-----BEGIN PRIVATE KEY-----/,"")
-      .replace(/-----END PRIVATE KEY-----/,"")
-      .replace(/\s/g,"");
+      .replace(/-----BEGIN PRIVATE KEY-----/g,"")
+      .replace(/-----END PRIVATE KEY-----/g,"")
+      .replace(/[\r\n\s]/g,"");
+    if (!pem) { _LC.error("fcmGetToken","Empty PEM after parse"); return null; }
     const der = Uint8Array.from(atob(pem), c => c.charCodeAt(0));
     const key = await crypto.subtle.importKey(
       "pkcs8", der.buffer,
-      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      {name:"RSASSA-PKCS1-v1_5", hash:"SHA-256"},
       false, ["sign"]
     );
-
     const sig = await crypto.subtle.sign(
       "RSASSA-PKCS1-v1_5", key,
       new TextEncoder().encode(sigInput)
     );
     const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)))
       .replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
-
     const jwt = sigInput + "." + sigB64;
-
-    // JWT দিয়ে OAuth access token নাও
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method:"POST",
+      headers:{"Content-Type":"application/x-www-form-urlencoded"},
+      body:"grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion="+jwt,
     });
-    const tokenData = await tokenRes.json();
-    return tokenData.access_token || null;
+    const d = await res.json();
+    if (!d.access_token) {
+      _LC.error("fcmGetToken","Token fail: "+JSON.stringify(d).slice(0,200));
+      return null;
+    }
+    _LC.info("fcmGetToken","FCM token ok");
+    return d.access_token;
   } catch(e) {
-    _LC.error("fcmGetToken", e.message);
+    _LC.error("fcmGetToken","Error: "+e.message+" key_len:"+FCM_PRIVATE_KEY.length);
     return null;
   }
 }
