@@ -4,9 +4,13 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 const FB      = (import.meta.env.VITE_FB_DATABASE_URL||"").replace(/\/+$/,"");
 const FB_KEY  = import.meta.env.VITE_FB_API_KEY||"";
 const FB_PROJ  = import.meta.env.VITE_FB_PROJECT_ID||"";
-const GAS     = import.meta.env.VITE_GAS_URL;
+const GAS     = import.meta.env.VITE_GAS_URL;   // শুধু GAS standalone backup এ লাগবে — app আর call করে না
 const IMGBB   = import.meta.env.VITE_IMGBB_API_KEY;
-const SECRET  = import.meta.env.VITE_SECRET_KEY;
+const SECRET  = import.meta.env.VITE_SECRET_KEY;    // GAS আর call নেই — legacy only
+// FCM v1 — Service Account credentials (GitHub Secrets থেকে build time এ inject হয়)
+const FCM_CLIENT_EMAIL = import.meta.env.VITE_FCM_CLIENT_EMAIL||"";
+const FCM_PRIVATE_KEY  = (import.meta.env.VITE_FCM_PRIVATE_KEY||"").replace(/\\n/g,"\n"); // 
+ restore
 
 const C={bg:"#06080f",card:"#0c1220",border:"#16253d",accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c"};
 
@@ -529,25 +533,169 @@ function BgTaskIndicator() {
   );
 }
 
-/* ══════════ GAS helpers — fire-and-forget (GAS = Sheet sync only, not critical) ══════════
-   GAS call গুলো critical না — Firebase-ই source of truth।
-   Serial queue তে ঢুকলে 300টা call = 10+ মিনিট।
-   তাই fire-and-forget: fail হলেও Firebase data ঠিক থাকে।
-   ════════════════════════════════════════════════════════════════════════════════════════ */
-const gasBg  = params => { setTimeout(()=>fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET})).catch(()=>{}), 200); };
-const gasPost= body   => { setTimeout(()=>fetch(GAS,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...body,secret:SECRET})}).catch(()=>{}), 200); };
-const gasCall= async params=>{
-  _LC.api("gasCall", `GAS call: action=${params.action||params.type||"?"}`, { params: JSON.stringify(params).slice(0,200) });
+/* ══════════ GAS helpers — REMOVED (GAS no longer called from app) ══════════
+   GAS এখন standalone — শুধু Firebase থেকে pull করে Sheet backup দেয়।
+   App থেকে আর কোনো GAS call নেই।
+   ════════════════════════════════════════════════════════════════════════ */
+const gasBg  = ()=>{};      // no-op — GAS আর call হয় না
+const gasPost = ()=>{};     // no-op
+const gasCall = async ()=>({});  // no-op
+
+/* ══════════════════════════════════════════════════════════════════════════
+   📲 FCM v1 DIRECT — Firebase Cloud Messaging HTTP v1 API
+   Service Account JWT দিয়ে OAuth token নিয়ে FCM v1 call — instant।
+   Legacy API deprecated — এটাই নতুন standard।
+   Token path: Users/{phoneKey}/fcmToken  (main app সেখানে save করে)
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── JWT বানাও Service Account দিয়ে (browser crypto API) ── */
+async function _fcmGetAccessToken() {
+  if (!FCM_CLIENT_EMAIL || !FCM_PRIVATE_KEY) return null;
   try {
-    const r=await fetch(GAS+"?"+new URLSearchParams({...params,secret:SECRET}));
-    const data = await r.json();
-    if(data?.error || data?.status==="error") _LC.error("gasCall", `GAS error: ${data?.error||data?.message||JSON.stringify(data).slice(0,200)}`);
-    return data;
+    const now = Math.floor(Date.now() / 1000);
+    const header  = { alg: "RS256", typ: "JWT" };
+    const payload = {
+      iss: FCM_CLIENT_EMAIL,
+      sub: FCM_CLIENT_EMAIL,
+      aud: "https://oauth2.googleapis.com/token",
+      iat: now,
+      exp: now + 3600,
+      scope: "https://www.googleapis.com/auth/firebase.messaging",
+    };
+
+    const b64 = obj => btoa(unescape(encodeURIComponent(JSON.stringify(obj))))
+      .replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+
+    const sigInput = b64(header) + "." + b64(payload);
+
+    // PEM → CryptoKey
+    const pem = FCM_PRIVATE_KEY
+      .replace(/-----BEGIN PRIVATE KEY-----/,"")
+      .replace(/-----END PRIVATE KEY-----/,"")
+      .replace(/\s/g,"");
+    const der = Uint8Array.from(atob(pem), c => c.charCodeAt(0));
+    const key = await crypto.subtle.importKey(
+      "pkcs8", der.buffer,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false, ["sign"]
+    );
+
+    const sig = await crypto.subtle.sign(
+      "RSASSA-PKCS1-v1_5", key,
+      new TextEncoder().encode(sigInput)
+    );
+    const sigB64 = btoa(String.fromCharCode(...new Uint8Array(sig)))
+      .replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+
+    const jwt = sigInput + "." + sigB64;
+
+    // JWT দিয়ে OAuth access token নাও
+    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`,
+    });
+    const tokenData = await tokenRes.json();
+    return tokenData.access_token || null;
   } catch(e) {
-    _LC.error("gasCall", `GAS network fail: ${e.message}`);
-    throw e;
+    _LC.error("fcmGetToken", e.message);
+    return null;
   }
-};
+}
+
+// Access token cache — ১ ঘণ্টা valid
+let _fcmTokenCache = { token: null, exp: 0 };
+async function _fcmToken() {
+  if (_fcmTokenCache.token && Date.now() < _fcmTokenCache.exp) return _fcmTokenCache.token;
+  const t = await _fcmGetAccessToken();
+  if (t) _fcmTokenCache = { token: t, exp: Date.now() + 55 * 60 * 1000 };
+  return t;
+}
+
+/* একজনকে FCM v1 notification পাঠাও */
+async function fcmSendOne(fcmToken, title, body, data) {
+  if (!FCM_CLIENT_EMAIL || !fcmToken) return false;
+  data = data || {};
+  try {
+    const accessToken = await _fcmToken();
+    if (!accessToken) { _LC.warn("fcmSendOne", "No access token"); return false; }
+
+    const projectId = FB_PROJ || FCM_CLIENT_EMAIL.split("@")[1]?.split(".")[0];
+    const r = await fetch(
+      `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`,
+      {
+        method: "POST",
+        headers: {
+          "Authorization": "Bearer " + accessToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          message: {
+            token: fcmToken,
+            notification: { title, body },
+            android: {
+              priority: "high",
+              notification: { sound: "default", click_action: "FLUTTER_NOTIFICATION_CLICK" },
+            },
+            data: Object.fromEntries(
+              Object.entries({ ...data, title, body }).map(([k,v]) => [k, String(v)])
+            ),
+          },
+        }),
+      }
+    );
+    const res = await r.json();
+    const ok = !!res.name;
+    _LC.api("fcmSendOne", ok ? "✅ FCM v1 sent" : "⚠️ FCM v1 fail", { token: fcmToken.slice(-8), title, res });
+    return ok;
+  } catch(e) {
+    _LC.error("fcmSendOne", "FCM v1 error: " + e.message);
+    return false;
+  }
+}
+
+/* Phone নম্বর থেকে FCM token পড়ে notification পাঠাও */
+async function fcmNotifyPhone(phone, title, body, extraData) {
+  if (!phone || !FCM_CLIENT_EMAIL) return false;
+  try {
+    const phK = phoneKey(phone);
+    const t = await _tok();
+    const r = await fetch(`${FB}/Users/${phK}/fcmToken.json${_authQ(t)}`);
+    const token = await r.json();
+    if (!token || typeof token !== "string") {
+      _LC.warn("fcmNotifyPhone", "No FCM token for: " + phone);
+      return false;
+    }
+    return fcmSendOne(token, title, body, extraData || {});
+  } catch(e) {
+    _LC.error("fcmNotifyPhone", e.message);
+    return false;
+  }
+}
+
+/* সব active user কে broadcast FCM — 20 concurrent */
+async function fcmBroadcast(title, body, users) {
+  if (!FCM_CLIENT_EMAIL) return 0;
+  const t = await _tok();
+  let sent = 0;
+  const CONC = 20;
+  for (let i = 0; i < users.length; i += CONC) {
+    const chunk = users.slice(i, i + CONC);
+    const results = await Promise.all(chunk.map(async u => {
+      const phK = phoneKey(u.Phone || u.phone || "");
+      if (!phK) return false;
+      try {
+        const r = await fetch(`${FB}/Users/${phK}/fcmToken.json${_authQ(t)}`);
+        const token = await r.json();
+        if (!token || typeof token !== "string") return false;
+        return fcmSendOne(token, title, body, {});
+      } catch(_) { return false; }
+    }));
+    sent += results.filter(Boolean).length;
+  }
+  _LC.api("fcmBroadcast", `Broadcast done: ${sent}/${users.length}`, { title });
+  return sent;
+}
 
 /* ══════════ SIMPLE FETCH CACHE — no subscriptions, no loops ══════════ */
 const _store = {}; // path -> {data, ts, promise}
@@ -1037,8 +1185,7 @@ function SignupsPage({push,tick}){
     try{
       await fbPatch(`Users/${fkey}`,{Status:"Active"});
       await fbSet(`Notifications/${fkey}/welcome_${Date.now()}`,{type:"welcome",title:"🎉 অ্যাকাউন্ট অ্যাক্টিভ!",body:"Smart Study-তে স্বাগতম!",time:nowTs(),read:false});
-      gasBg({action:"activateUser",phone});
-      push("success","✅ অ্যাক্টিভ!",u.Name||u.name||phone);
+            push("success","✅ অ্যাক্টিভ!",u.Name||u.name||phone);
       setDone(p=>new Set([...p,fkey]));
       invalidate("Users");
     }catch(e){push("error","ব্যর্থ",e.message);}
@@ -1119,8 +1266,7 @@ function StudentsPage({push,tick}){
     try{
       await fbPatch(`Users/${fkey}`,{Status:"Active"});
       await fbSet(`Notifications/${fkey}/welcome_${Date.now()}`,{type:"welcome",title:"🎉 অ্যাকাউন্ট অ্যাক্টিভ!",body:"Smart Study-তে স্বাগতম!",time:nowTs(),read:false});
-      gasBg({action:"activateUser",phone});
-      push("success","✅ অ্যাক্টিভ!",u.Name||u.name||phone);
+            push("success","✅ অ্যাক্টিভ!",u.Name||u.name||phone);
       setSignupDone(p=>new Set([...p,fkey]));
       invalidate("Users");
     }catch(e){push("error","ব্যর্থ",e.message);}
@@ -1134,8 +1280,7 @@ function StudentsPage({push,tick}){
     try{
       await fbPatch(`Users/${fkey}`,{Status:"Active"});
       invalidate("Users");
-      gasBg({action:"activateUser",phone});
-      push("success","✅ অ্যাক্টিভ!",u.Name||u.name);
+            push("success","✅ অ্যাক্টিভ!",u.Name||u.name);
     }catch(e){push("error","ব্যর্থ",e.message);}
     setBusy(null);
   };
@@ -1261,25 +1406,16 @@ function ChangePasswordModal({user,onClose,push}){
     if(newPass!==confirmPass){push("error","পাসওয়ার্ড মিলছে না","আবার চেষ্টা করুন");return;}
     setSaving(true);
     try{
-      // 1. Update password in GAS (hashed) + Firebase sync
-      const gasRes=await gasCall({action:"changePassword",phone:ph,newPassword:encodeURIComponent(newPass)});
-      if(gasRes?.result==="error")throw new Error(gasRes.error||"GAS error");
-
-      // 2. Also update raw password in Firebase (some apps use plain compare fallback)
+      // 1. Firebase এ password update
       await fbPatch(`Users/${phK}`,{Password:newPass});
 
-      // 3. Send notification to user
+      // 2. Firebase notification + FCM direct
       const notifTitle="🔐 পাসওয়ার্ড পরিবর্তন";
       const notifBody=`আপনার অ্যাকাউন্টের পাসওয়ার্ড অ্যাডমিন কর্তৃক পরিবর্তন করা হয়েছে। নতুন পাসওয়ার্ড দিয়ে লগইন করুন।`;
       await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"security",title:notifTitle,body:notifBody,time:nowTs(),read:false});
-      try{
-        await Promise.race([
-          gasCall({action:"personalNotify",phone:ph,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody)}),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000))
-        ]);
-      }catch(_){}
+      const fcmOkPw = await fcmNotifyPhone(ph, notifTitle, notifBody, {type:"security"});
 
-      push("success","✅ পাসওয়ার্ড পরিবর্তন হয়েছে!",`${nm}-কে নোটিফিকেশন পাঠানো হয়েছে`);
+      push("success","✅ পাসওয়ার্ড পরিবর্তন হয়েছে!",`${nm}-কে নোটিফিকেশন ${fcmOkPw?"📲 FCM ✓":"📲 FCM ✗"}`);
       onClose();
     }catch(e){push("error","ব্যর্থ হয়েছে",e.message||String(e));}
     setSaving(false);
@@ -1374,7 +1510,7 @@ function UserEditModal({user,onClose,onSaved,push}){
         {field:"userType",val:userType},
       ];
       fields.forEach(({field,val})=>{
-        gasBg({action:"updateField",sheet:"Users",id:ph,field,content:encodeURIComponent(val)});
+        // Sheet sync → GAS standalone handles this
       });
       invalidate("Users");
       push("success","✅ সেভ হয়েছে!",name.trim());
@@ -1653,8 +1789,7 @@ function ReportEditModal({report,onClose,onDone,push}){
         }
         if(fkey)await fbPatch(`${t}/${fkey}`,patch);
         invalidate(t);
-        gasBg({action:"updateField",sheet:t,id:qid,field:"question",content:encodeURIComponent(question)});
-        if(explanation)gasBg({action:"updateField",sheet:t,id:qid,field:"explanation",content:encodeURIComponent(explanation)});
+        // Sheet sync → GAS standalone handles this
       }
       push("success","✅ সেভ হয়েছে!","");
       setStep(2);
@@ -1681,27 +1816,14 @@ function ReportEditModal({report,onClose,onDone,push}){
       const finalBody=reporterName?`"${subject}" সংশোধন হয়েছে। (${reporterName}-এর রিপোর্ট)`:notifBody;
 
       await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"report_resolved",title:notifTitle,body:finalBody,questionId:qid,qsheet,time:nowTs(),read:false});
-      try{
-        await Promise.race([
-          fetch(GAS+"?"+new URLSearchParams({
-            action:"resolveReport",phone,subject,
-            questionId:qid,qsheet,tab:(qdata?._tab||""),
-            reporterName:encodeURIComponent(reporterName),
-            secret:SECRET
-          })),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("t")),7000))
-        ]);
-      }catch(_){}
+      // FCM direct — instant
+      fcmNotifyPhone(phone, notifTitle, finalBody, {type:"report_resolved", questionId:qid}).catch(()=>{});
 
       // Hard delete: Firebase
       const reportKey=report._fbKey||report.row;
       if(reportKey){
         await fbDelete(`Reports/${reportKey}`);
         invalidate("Reports");
-      }
-      // Hard delete: Google Sheet — GAS expects 'key' not 'reportKey'
-      if(reportKey){
-        gasBg({action:"deleteReport",key:reportKey,phone,questionId:qid});
       }
 
       push("success","✅ নোটিফাই ও ডিলিট!","Report মুছে গেছে");
@@ -1822,7 +1944,7 @@ function EntryPage({push}){
       else rec={ID:id,Question:question,Correct:correct,Subject:subject,Sub_topic:subtopic,Explanation:explanation,Technique:technique,"Question Type":"Study",Timestamp:ts,Image:imgUrl};
       await fbPush(mode,rec);
       invalidate(mode);
-      gasPost({targetTab:mode,question,opt1,opt2,opt3,opt4,correct,subject,topic,sub_topic:subtopic,explanation,technique,qType:qtype,timestamp:ts});
+      // Sheet sync → GAS standalone handles this
       push("success","✅ সেভ হয়েছে!",`${mode} #${id}`);
       reset();
     }catch(e){push("error","ব্যর্থ",e.message);}
@@ -2378,7 +2500,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           if(res?.name){
             await fbSet(`${mode}/${res.name}/id`,res.name);
           }
-          gasPost({targetTab:mode,question:item.q,opt1:item.opt1||"",opt2:item.opt2||"",opt3:item.opt3||"",opt4:item.opt4||"",correct:item.correct||"",subject,sub_topic:subtopic||subject,explanation:item.explanation||"",technique:"",qType:qtype,timestamp:ts});
+          // Sheet sync → GAS standalone handles this
           invalidate(mode);
           sent++;
           addLog(`✔ ${(item.q||"").substring(0,55)}...`,"ok");
@@ -3073,7 +3195,7 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
         ["opt1",opt1],["opt2",opt2],["opt3",opt3],["opt4",opt4],
       ];
       syncFields.forEach(([f,v])=>{
-        if(v&&v.trim()) gasBg({action:"updateField",sheet,id:qid,field:f,content:encodeURIComponent(v)});
+        // Sheet sync → GAS standalone handles this
       });
       push("success","✅ আপডেট!",`#${qid}`);
       onSaved();
@@ -3611,15 +3733,8 @@ function NotifyPage({push,tick}){
         if(!phK)return Promise.resolve();
         return fbSet(`Notifications/${phK}/${notifKey}`,{type:"broadcast",title,body,time:ts,read:false});
       }));
-      // FCM: GAS এ পাঠাও (GAS নিজে FCMTokens থেকে পড়ে পাঠাবে)
-      let fcmSent=0;
-      try{
-        const r=await Promise.race([
-          gasCall({action:"broadcastNotification",title:encodeURIComponent(title),body:encodeURIComponent(body)}),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),10000))
-        ]);
-        fcmSent=r?.fcm?.sent||0;
-      }catch(_){}
+      // FCM direct — সব active user কে একসাথে (20 concurrent)
+      const fcmSent = await fcmBroadcast(title, body, active);
       push("success","📣 পাঠানো হয়েছে!",`Notification: ${active.length}জন · FCM: ${fcmSent}জন`);
       setHist(p=>[{title,body,time:ts,count:active.length},...p.slice(0,9)]);
       setTitle("");setBody("");
@@ -3683,14 +3798,8 @@ function NotifyModal({user,onClose,push,inline}){
       const phone=(user.Phone||user.phone||"").toString();
       const phK=phoneKey(phone);
       await fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"personal",title,body,time:nowTs(),read:false});
-      let fcmOk=false;
-      try{
-        const fr=await Promise.race([
-          gasCall({action:"personalNotify",phone,title:encodeURIComponent(title),body:encodeURIComponent(body)}),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000))
-        ]);
-        fcmOk=!fr?.fcm?.error;
-      }catch(_){}
+      // FCM direct — instant
+      const fcmOk = await fcmNotifyPhone(phone, title, body, {type:"personal"});
       push("success","✅ পাঠানো হয়েছে",(fcmOk?"📲 FCM ✓ ":"📲 FCM ✗ ")+nm);
       if(!inline)onClose();
     }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
@@ -3778,13 +3887,8 @@ function TechniquesPage({push,tick}){
           : "আপনার শেয়ার করা টেকনিকটি এই মুহূর্তে গ্রহণ করা হয়নি।";
         const phK=phoneKey(phone);
         fbSet(`Notifications/${phK}/notif_${Date.now()}`,{type:"technique_"+status,title:notifTitle,body:notifBody,questionId:t._qId||"",time:nowTs(),read:false}).catch(()=>{});
-        Promise.race([
-          fetch(GAS+"?"+new URLSearchParams({
-            action:"personalNotify",phone,title:encodeURIComponent(notifTitle),body:encodeURIComponent(notifBody),
-            type:"technique_"+status,questionId:t._qId||""
-          })),
-          new Promise((_,rej)=>setTimeout(()=>rej(new Error("t")),7000))
-        ]).catch(()=>{});
+        // FCM direct — instant
+        fcmNotifyPhone(phone, notifTitle, notifBody, {type:"technique_"+status, questionId:t._qId||""}).catch(()=>{});
       }
     }catch(e){push("error","ব্যর্থ",e.message);}
     setBusy(null);
