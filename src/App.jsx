@@ -1765,63 +1765,113 @@ function ReportEditModal({report,onClose,onDone,push}){
   const[explanation,setExplanation]=useState("");
   const[technique,setTechnique]=useState("");
   const[qtype,setQtype]=useState("mcq");
-  const qid=(report.QuestionID||report.questionId||"").toString();
-  const qfbKey=(report.QuestionFBKey||report.questionFBKey||report.fbKey||"").toString().trim();
-  const qsheet=(report.QSheet||report.qsheet||"").toString().trim();
+  // Report এ কোন fields আছে সেটা normalize করো
+  const qfbKey  = (report.QuestionFBKey||report.questionFBKey||report.fbKey||"").toString().trim();
+  const qsheet  = (report.QSheet||report.qsheet||"").toString().trim();
+  const qidRaw  = (report.QuestionID||report.questionId||"").toString().trim();
+  // "0", "null", "" — এগুলো invalid ID
+  const qid     = (qidRaw===""||qidRaw==="0"||qidRaw==="null"||qidRaw==="undefined") ? "" : qidRaw;
+  // Report এর নিজস্ব question text — সবচেয়ে reliable fallback
+  const reportQText = (report.Question||report.question||"").trim();
 
   useEffect(()=>{
-    if(!qid&&!qfbKey){setLoadQ(false);return;}
+    // কোনো identifier নেই — সরাসরি report এর text দিয়ে যাও
+    if(!qid && !qfbKey && !reportQText){ setLoadQ(false); return; }
+
     let cancelled=false;
     (async()=>{
       setLoadQ(true);
-      const sheetsToTry=qsheet?[qsheet]:["QBank","Quiz","Study"];
-      for(const t of sheetsToTry){
-        try{
-          const raw=await loadPath(t);
-          const arr=toArr(raw);
-          // Priority 1: _fbKey দিয়ে exact match — সবচেয়ে reliable
-          // Priority 2: ID field দিয়ে match — fallback
-          const qNorm=qid.replace(/^0+/,"");
-          const q=arr.find(x=>{
-            // _fbKey exact match (main app যদি fbKey পাঠায়)
-            if(qfbKey && x._fbKey && x._fbKey===qfbKey) return true;
-            // id field দিয়ে match — কিন্তু শুধু exact match, leading zero ছাড়া
-            const xid=(x.ID||x.id||x.SL||x.sl||"").toString().replace(/^0+/,"");
-            return qNorm && xid===qNorm;
-          });
-          if(q&&!cancelled){
-            setQdata({...q,_tab:t});
-            setQuestion(q.Question||q.question||"");
-            setOpt1(q.Opt1||q.opt1||q.Option1||q.option1||"");
-            setOpt2(q.Opt2||q.opt2||q.Option2||q.option2||"");
-            setOpt3(q.Opt3||q.opt3||q.Option3||q.option3||"");
-            setOpt4(q.Opt4||q.opt4||q.Option4||q.option4||"");
-            setCorrect(q.Correct||q.correct||"");
-            setExplanation(q.Explanation||q.explanation||"");
-            setTechnique(q.Technique||q.technique||"");
-            const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
-            setQtype(t==="Study"?"study":qt==="written"?"written":"mcq");
-            break;
-          }
-        }catch(_){}
-      }
-      // Firebase এ match না পেলে report এর নিজস্ব Question field ব্যবহার করো
-      if(!cancelled){
-        setLoadQ(false);
-        // Fallback: report এ Question text থাকলে সেটা দিয়ে edit করতে দাও
-        const fallbackQ=report.Question||report.question||"";
-        if(!qdata && fallbackQ && !cancelled){
-          setQuestion(fallbackQ);
-          setCorrect(report.Correct||report.correct||"");
-          setExplanation(report.Explanation||report.explanation||"");
-          const qt=(report.QType||report.qtype||"MCQ").toLowerCase();
-          setQtype(qt==="written"?"written":"mcq");
-          // qdata ছাড়া fbKey save হবে না — user কে জানাতে হবে
+      let found=false;
+
+      // ── Firebase থেকে match করার চেষ্টা ──
+      if(qid || qfbKey){
+        const sheetsToTry=qsheet?[qsheet]:["QBank","Quiz","Study"];
+        for(const t of sheetsToTry){
+          if(found) break;
+          try{
+            const raw=await loadPath(t);
+            const arr=toArr(raw);
+            const qNorm=qid.replace(/^0+/,"");
+            const q=arr.find(x=>{
+              // Priority 1: Firebase key exact match
+              if(qfbKey && x._fbKey && x._fbKey===qfbKey) return true;
+              // Priority 2: Question text exact match — সবচেয়ে reliable
+              if(reportQText){
+                const xq=(x.Question||x.question||"").trim();
+                if(xq && xq===reportQText) return true;
+              }
+              // Priority 3: ID field match
+              if(qNorm){
+                const xid=(x.ID||x.id||"").toString().replace(/^0+/,"");
+                if(xid && xid===qNorm) return true;
+              }
+              return false;
+            });
+            if(q&&!cancelled){
+              found=true;
+              setQdata({...q,_tab:t});
+              setQuestion(q.Question||q.question||"");
+              setOpt1(q.Opt1||q.opt1||q.Option1||q.option1||"");
+              setOpt2(q.Opt2||q.opt2||q.Option2||q.option2||"");
+              setOpt3(q.Opt3||q.opt3||q.Option3||q.option3||"");
+              setOpt4(q.Opt4||q.opt4||q.Option4||q.option4||"");
+              setCorrect(q.Correct||q.correct||"");
+              setExplanation(q.Explanation||q.explanation||"");
+              setTechnique(q.Technique||q.technique||"");
+              const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
+              setQtype(t==="Study"?"study":qt==="written"?"written":"mcq");
+            }
+          }catch(_){}
         }
       }
+
+      // ── Firebase match না পেলে — Question text দিয়ে সব sheet search ──
+      if(!found && reportQText && !cancelled){
+        const sheetsAll=["QBank","Quiz","Study"];
+        for(const t of sheetsAll){
+          if(found) break;
+          try{
+            const raw=await loadPath(t);
+            const arr=toArr(raw);
+            const q=arr.find(x=>{
+              const xq=(x.Question||x.question||"").trim();
+              return xq && xq===reportQText;
+            });
+            if(q&&!cancelled){
+              found=true;
+              setQdata({...q,_tab:t});
+              setQuestion(q.Question||q.question||"");
+              setOpt1(q.Opt1||q.opt1||q.Option1||q.option1||"");
+              setOpt2(q.Opt2||q.opt2||q.Option2||q.option2||"");
+              setOpt3(q.Opt3||q.opt3||q.Option3||q.option3||"");
+              setOpt4(q.Opt4||q.opt4||q.Option4||q.option4||"");
+              setCorrect(q.Correct||q.correct||"");
+              setExplanation(q.Explanation||q.explanation||"");
+              setTechnique(q.Technique||q.technique||"");
+              const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
+              setQtype(t==="Study"?"study":qt==="written"?"written":"mcq");
+            }
+          }catch(_){}
+        }
+      }
+
+      // ── শেষ fallback — report এর নিজের data দিয়ে fill করো ──
+      if(!found && reportQText && !cancelled){
+        setQuestion(reportQText);
+        setOpt1(report.Opt1||report.opt1||"");
+        setOpt2(report.Opt2||report.opt2||"");
+        setOpt3(report.Opt3||report.opt3||"");
+        setOpt4(report.Opt4||report.opt4||"");
+        setCorrect(report.Correct||report.correct||"");
+        setExplanation(report.Explanation||report.explanation||"");
+        const qt=(report.QType||report.qtype||"MCQ").toLowerCase();
+        setQtype(qt==="written"?"written":"mcq");
+      }
+
+      if(!cancelled) setLoadQ(false);
     })();
     return()=>{cancelled=true;};
-  },[qid,qfbKey,qsheet]);
+  },[qid,qfbKey,qsheet,reportQText]);
 
   const save=async()=>{
     setSaving(true);
@@ -1899,8 +1949,8 @@ function ReportEditModal({report,onClose,onDone,push}){
             <div style={{fontSize:11,color:C.text}}>{report.Issue||report.issue||"—"}</div>
           </div>
           {loadQ&&<><div className="sk" style={{height:52,marginBottom:8}}/><div className="sk" style={{height:36}}/></>}
-          {!loadQ&&!qdata&&question&&<div style={{background:`${C.yellow}11`,border:`1px solid ${C.yellow}44`,borderRadius:8,padding:"10px 12px",marginBottom:8,fontSize:11,color:C.yellow}}>⚠️ Firebase এ exact match পাওয়া যায়নি (ID: #{qid||"—"})। Report এর question text দেখানো হচ্ছে।</div>}
-          {!loadQ&&!qdata&&!question&&<div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12}}>প্রশ্ন #{qid||"—"} পাওয়া যায়নি।</div>}
+          {!loadQ&&!qdata&&question&&<div style={{background:`${C.yellow}11`,border:`1px solid ${C.yellow}44`,borderRadius:8,padding:"10px 12px",marginBottom:8,fontSize:11,color:C.yellow}}>⚠️ Firebase এ fbKey match হয়নি — question text দিয়ে fill করা হয়েছে। Save করলে Firebase আপডেট হবে না।</div>}
+          {!loadQ&&!qdata&&!question&&<div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12}}>প্রশ্ন পাওয়া যায়নি।</div>}
           {!loadQ&&qdata&&qtype==="mcq"&&<>
             <div className="fld"><label>❓ প্রশ্ন</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:60}}/></div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:7,marginBottom:10}}>
@@ -3771,6 +3821,15 @@ function NotifyPage({push,tick}){
     }).slice(0,8);
   },[q,userList]);
 
+  // Firebase থেকে notification history load করো
+  useEffect(()=>{
+    loadPath("AdminNotifHistory").then(raw=>{
+      if(!raw)return;
+      const arr=toArr(raw).sort((a,b)=>(b.sentAt||0)-(a.sentAt||0));
+      setHist(arr);
+    }).catch(()=>{});
+  },[tick]);
+
   const send=async()=>{
     if(!title||!body){push("warn","তথ্য দিন","");return;}
     setSending(true);
@@ -3787,8 +3846,14 @@ function NotifyPage({push,tick}){
       }));
       // FCM direct — সব active user কে একসাথে (20 concurrent)
       const fcmSent = await fcmBroadcast(title, body, active);
+      // ✅ Firebase এ history save করো — restart করলেও থাকবে
+      const histKey=`notif_${Date.now()}`;
+      await fbSet(`AdminNotifHistory/${histKey}`,{
+        type:"broadcast", title, body, time:ts, sentAt:Date.now(),
+        totalUsers:active.length, fcmSent, sentBy:"admin"
+      });
       push("success","📣 পাঠানো হয়েছে!",`Notification: ${active.length}জন · FCM: ${fcmSent}জন`);
-      setHist(p=>[{title,body,time:ts,count:active.length},...p.slice(0,9)]);
+      setHist(p=>[{title,body,time:ts,count:active.length,fcmSent,totalUsers:active.length},...p.slice(0,49)]);
       setTitle("");setBody("");
     }catch(e){push("error","ব্যর্থ",String(e?.message||e||""));}
     setSending(false);
