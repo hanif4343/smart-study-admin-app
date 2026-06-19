@@ -1258,7 +1258,7 @@ function SignupsPage({push,tick}){
 }
 
 /* ══════════ STUDENTS (signup tab সহ) ══════════ */
-function StudentsPage({push,tick}){
+function StudentsPage({push,tick,pushLayer}){
   const{data:usersRaw,loading}=useFB("Users",tick);
   const[search,setSrc]=useState("");
   const[tab,setTab]=useState("signups"); // default: signup দেখাবে
@@ -1316,6 +1316,11 @@ function StudentsPage({push,tick}){
     setBusy(null);
   };
 
+  // StudentDetail খুললে layer push
+  const openDetail=useCallback((u)=>{
+    setDetail(u);
+    if(pushLayer){ pushLayer(()=>setDetail(null)); }
+  },[pushLayer]);
   if(detail)return<StudentDetail user={detail} onBack={()=>setDetail(null)} push={push}/>;
 
   return(
@@ -1381,7 +1386,7 @@ function StudentsPage({push,tick}){
             const mins=parseInt(u.totalMinutes||u.studyMinutes||u.totalTime||0);
             return(
               <div key={fkey||i} className="card" style={{padding:11}}>
-                <div style={{cursor:"pointer",display:"flex",alignItems:"center",gap:9,marginBottom:8}} onClick={()=>setDetail(u)}>
+                <div style={{cursor:"pointer",display:"flex",alignItems:"center",gap:9,marginBottom:8}} onClick={()=>openDetail(u)}>
                   <div className="av">{initials(nm)}</div>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
@@ -1404,7 +1409,7 @@ function StudentsPage({push,tick}){
               {st!=="active"&&<button className="btn bs" style={{flex:1,justifyContent:"center",fontSize:11}} disabled={!!busy} onClick={()=>activateStudent(u)}>{busy===fkey?"⏳":"✅ অ্যাক্টিভ"}</button>}
               <button className="btn bg" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setNotify(u)}>📣</button>
               <button className="btn" style={{flex:1,justifyContent:"center",fontSize:11,background:"#f59e0b22",color:C.yellow,border:"1px solid #f59e0b44"}} onClick={()=>setEditUser(u)}>✏️</button>
-              <button className="btn bp" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setDetail(u)}>👁</button>
+              <button className="btn bp" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>openDetail(u)}>👁</button>
             </div>
           </div>
         );
@@ -1858,10 +1863,10 @@ function ReportEditModal({report,onClose,onDone,push}){
       // ── শেষ fallback — report এর নিজের data দিয়ে fill করো ──
       if(!found && reportQText && !cancelled){
         setQuestion(reportQText);
-        setOpt1(report.Opt1||report.opt1||"");
-        setOpt2(report.Opt2||report.opt2||"");
-        setOpt3(report.Opt3||report.opt3||"");
-        setOpt4(report.Opt4||report.opt4||"");
+        setOpt1(report.Opt1||report.opt1||report.Option1||report.option1||"");
+        setOpt2(report.Opt2||report.opt2||report.Option2||report.option2||"");
+        setOpt3(report.Opt3||report.opt3||report.Option3||report.option3||"");
+        setOpt4(report.Opt4||report.opt4||report.Option4||report.option4||"");
         setCorrect(report.Correct||report.correct||"");
         setExplanation(report.Explanation||report.explanation||"");
         const qt=(report.QType||report.qtype||"MCQ").toLowerCase();
@@ -2990,17 +2995,29 @@ function BulkQTypeTab({push,tick}){
   );
 }
 
-function ContentManagerPage({push,tick}){
+function ContentManagerPage({push,tick,pushLayer}){
   const[tab,setTab]=useState("browse");
+
+  const goTab=useCallback((t)=>{
+    if(t==="browse"){ setTab(t); return; }
+    setTab(t);
+    // sub-tab খুললে layer push — back চাপলে browse এ ফিরবে
+    if(pushLayer){
+      const pop=pushLayer(()=>setTab("browse"));
+      // tab change হলে layer remove
+      return pop;
+    }
+  },[pushLayer]);
+
   return(
     <div className="page" style={{paddingTop:0}}>
       <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
         <div className="atabs">
           <button className={`atab${tab==="browse"?" on":""}`} onClick={()=>setTab("browse")}>📋 Browse</button>
-          <button className={`atab${tab==="rename"?" on":""}`} onClick={()=>setTab("rename")}>✏️ Rename</button>
-          <button className={`atab${tab==="audience"?" on":""}`} onClick={()=>setTab("audience")}>🎯 Audience</button>
-          <button className={`atab${tab==="qtype"?" on":""}`} onClick={()=>setTab("qtype")} style={{color:tab==="qtype"?C.green:undefined}}>🏷️ QType</button>
-          <button className={`atab${tab==="delete"?" on":""}`} onClick={()=>setTab("delete")}>🗑️ Delete</button>
+          <button className={`atab${tab==="rename"?" on":""}`} onClick={()=>goTab("rename")}>✏️ Rename</button>
+          <button className={`atab${tab==="audience"?" on":""}`} onClick={()=>goTab("audience")}>🎯 Audience</button>
+          <button className={`atab${tab==="qtype"?" on":""}`} onClick={()=>goTab("qtype")} style={{color:tab==="qtype"?C.green:undefined}}>🏷️ QType</button>
+          <button className={`atab${tab==="delete"?" on":""}`} onClick={()=>goTab("delete")}>🗑️ Delete</button>
         </div>
       </div>
       {tab==="browse"&&<BrowseTab push={push} tick={tick}/>}
@@ -3263,10 +3280,12 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
   const[questionType,setQuestionType]=useState(initQt);
   const qt=questionType==="Study"?"study":questionType==="Written"?"written":"mcq";
   const[question,setQuestion]=useState(q.Question||q.question||"");
-  const[opt1,setOpt1]=useState(q.Opt1||q.opt1||q.Option1||"");
-  const[opt2,setOpt2]=useState(q.Opt2||q.opt2||q.Option2||"");
-  const[opt3,setOpt3]=useState(q.Opt3||q.opt3||q.Option3||"");
-  const[opt4,setOpt4]=useState(q.Opt4||q.opt4||q.Option4||"");
+  // Firebase এ option field নানা নামে থাকতে পারে — সব check করো
+  const _o=(k1,k2,k3,k4)=>q[k1]||q[k2]||q[k3]||q[k4]||"";
+  const[opt1,setOpt1]=useState(_o("Opt1","opt1","Option1","option1"));
+  const[opt2,setOpt2]=useState(_o("Opt2","opt2","Option2","option2"));
+  const[opt3,setOpt3]=useState(_o("Opt3","opt3","Option3","option3"));
+  const[opt4,setOpt4]=useState(_o("Opt4","opt4","Option4","option4"));
   const[correct,setCorrect]=useState(q.Correct||q.correct||"");
   const[explanation,setExplanation]=useState(q.Explanation||q.explanation||"");
   const[technique,setTechnique]=useState(q.Technique||q.technique||"");
@@ -3283,8 +3302,9 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
       } else if(questionType==="Written"){
         patch={Question:question,Explanation:explanation,Technique:technique,"Question Type":"Written"};
       } else {
-        const o1k=q.Opt1!=null?"Opt1":q.opt1!=null?"opt1":"Option1";
-        const o2k=o1k.replace(/1$/,"2"),o3k=o1k.replace(/1$/,"3"),o4k=o1k.replace(/1$/,"4");
+        // Firebase এ যে key name আছে সেটাই use করো
+        const o1k=q.Opt1!=null?"Opt1":q.opt1!=null?"opt1":q.Option1!=null?"Option1":q.option1!=null?"option1":"Option1";
+        const o2k=o1k.replace("1","2"),o3k=o1k.replace("1","3"),o4k=o1k.replace("1","4");
         patch={Question:question,[o1k]:opt1,[o2k]:opt2,[o3k]:opt3,[o4k]:opt4,Correct:correct,Explanation:explanation,Technique:technique,"Question Type":"MCQ"};
       }
       if(fkey)await fbPatch(`${sheet}/${fkey}`,patch);
@@ -3345,10 +3365,18 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
         {questionType==="Study"&&<div className="fld"><label>✅ উত্তর</label><textarea className="ta" value={correct} onChange={e=>setCorrect(e.target.value)} style={{minHeight:60}}/></div>}
         <div className="fld"><label>📖 Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:60}}/></div>
         <div className="fld"><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:45}}/></div>
-        <div style={{display:"flex",gap:7,marginTop:4}}>
-          <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
-          <button className="btn bp" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={save}>{saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করুন"}</button>
-        </div>
+        <div style={{height:4}}/>
+      </div>
+      {/* Sticky footer — keyboard উঠলেও দেখা যাবে */}
+      <div style={{
+        position:"sticky",bottom:0,left:0,right:0,
+        background:C.card,borderTop:`1px solid ${C.border}`,
+        padding:"10px 16px",display:"flex",gap:7,zIndex:10,
+      }}>
+        <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
+        <button className="btn bp" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={save}>
+          {saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করুন"}
+        </button>
       </div>
     </div>
   );
@@ -4284,33 +4312,98 @@ export default function App(){
     });
   },[]);
 
+  // ══════════════════════════════════════════════════════════
+  //  LAYERED BACK STACK
+  //  প্রতিটা layer push/pop হয়। back চাপলে top layer pop হয়।
+  //  Layer types: modal | sublayer | page | exit-confirm
+  // ══════════════════════════════════════════════════════════
+  const layerStack = useRef([]); // [{type, pop}]
+  const[exitConfirm,setExitConfirm]=useState(false);
+  const exitTimer=useRef(null);
+
+  // Layer push — যেকোনো component call করবে
+  const pushLayer = useCallback((popFn)=>{
+    const id = Date.now() + Math.random();
+    layerStack.current = [...layerStack.current, {id, pop: popFn}];
+    return ()=>{
+      layerStack.current = layerStack.current.filter(l=>l.id!==id);
+    };
+  },[]);
+
+  // Global modal-open/close events → layer stack এ যাবে
   useEffect(()=>{
     if(!loggedIn) return;
-    const onModalOpen =()=>{ modalOpen.current=true; };
+    // modal-open event এ layer push (useModalBack থেকে আসে)
+    const onModalOpen = (e)=>{
+      // back-press event dispatch হলে top modal close হবে
+      modalOpen.current = true;
+    };
     const onModalClose=()=>{ modalOpen.current=false; };
-    window.addEventListener("modal-open", onModalOpen);
-    window.addEventListener("modal-close",onModalClose);
-    return()=>{ window.removeEventListener("modal-open",onModalOpen); window.removeEventListener("modal-close",onModalClose); };
+    window.addEventListener("modal-open",  onModalOpen);
+    window.addEventListener("modal-close", onModalClose);
+    return()=>{
+      window.removeEventListener("modal-open",  onModalOpen);
+      window.removeEventListener("modal-close", onModalClose);
+    };
   },[loggedIn]);
 
   useEffect(()=>{
     if(!loggedIn) return;
     const handleBack=(e)=>{
       if(e&&e.preventDefault) e.preventDefault();
+
+      // 1. SearchDetail (Student profile from search)
       if(searchDetail){ setSearchDetail(null); return; }
-      if(modalOpen.current){ window.dispatchEvent(new Event("back-press")); return; }
-      if(page!=="dashboard"){
-        const stack=backStack.current;
-        if(stack.length>1){ const ns=stack.slice(0,-1);backStack.current=ns;setPage(ns[ns.length-1]); }
-        else { setPage("dashboard");backStack.current=["dashboard"]; }
+
+      // 2. Modal খোলা → modal close
+      if(modalOpen.current){
+        window.dispatchEvent(new Event("back-press"));
         return;
       }
-      if(window.Capacitor?.Plugins?.App) window.Capacitor.Plugins.App.minimizeApp();
-      else if(window.history.length>1) window.history.back();
+
+      // 3. Sub-layer stack এ কিছু আছে → pop
+      if(layerStack.current.length>0){
+        const top=layerStack.current[layerStack.current.length-1];
+        layerStack.current=layerStack.current.slice(0,-1);
+        try{ top.pop(); } catch(_){}
+        return;
+      }
+
+      // 4. Page back
+      if(page!=="dashboard"){
+        const stack=backStack.current;
+        if(stack.length>1){
+          const ns=stack.slice(0,-1);
+          backStack.current=ns;
+          setPage(ns[ns.length-1]);
+        } else {
+          setPage("dashboard");
+          backStack.current=["dashboard"];
+        }
+        return;
+      }
+
+      // 5. Dashboard এ → exit confirm (2 সেকেন্ড)
+      if(exitConfirm){
+        clearTimeout(exitTimer.current);
+        setExitConfirm(false);
+        if(window.Capacitor?.Plugins?.App) window.Capacitor.Plugins.App.exitApp();
+        else window.close();
+        return;
+      }
+      setExitConfirm(true);
+      exitTimer.current=setTimeout(()=>setExitConfirm(false),2000);
     };
+
+    // Capacitor back button + browser popstate
     document.addEventListener("backbutton",handleBack,false);
-    return()=>document.removeEventListener("backbutton",handleBack,false);
-  },[loggedIn,page,searchDetail]);
+    window.addEventListener("androidBackButton",handleBack);
+    return()=>{
+      document.removeEventListener("backbutton",handleBack,false);
+      window.removeEventListener("androidBackButton",handleBack);
+      clearTimeout(exitTimer.current);
+    };
+  },[loggedIn,page,searchDetail,exitConfirm]);
 
   const refresh=useCallback(()=>{
     setSpin(true);invalidateAll();setTick(t=>t+1);
@@ -4447,14 +4540,14 @@ export default function App(){
         </div>
         <div style={{display:"flex",gap:6}}>
           <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
-          <button className="icon-btn" title="Logout" onClick={()=>{ _LC.auth("logout","Admin logged out manually"); localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");localStorage.removeItem("fb_refresh_token");window.__adminIdToken=null;_idToken=null;setLoggedIn(false); }}>🚪</button>
+          <button className="icon-btn" title="Logout" onClick={()=>{ _LC.auth("logout","Admin logged out manually"); localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");localStorage.removeItem("fb_refresh_token");window.__adminIdToken=null;_idToken=null;setLoggedIn(false); }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
         </div>
       </div>
 
       <div style={{display:page==="dashboard"?"block":"none"}}><DashboardPage push={push} tick={tick}/></div>
-      <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} tick={tick}/></div>
+      <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} tick={tick} pushLayer={pushLayer}/></div>
       <div style={{display:page==="reports"  ?"block":"none"}}><ReportsPage   push={push} tick={tick}/></div>
-      <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick}/></div>
+      <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick} pushLayer={pushLayer}/></div>
       <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push} tick={tick}/></div>
       <div style={{display:page==="uploader" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill("")}/></div>
@@ -4483,6 +4576,19 @@ export default function App(){
       </nav>
       <Toasts t={toasts}/>
       <BgTaskIndicator/>
+      {exitConfirm&&(
+        <div style={{
+          position:"fixed",bottom:80,left:"50%",transform:"translateX(-50%)",
+          background:"#1e293b",border:"1px solid #334155",
+          borderRadius:12,padding:"10px 20px",
+          fontSize:13,color:"#e2e8f0",fontWeight:600,
+          zIndex:9999,whiteSpace:"nowrap",
+          boxShadow:"0 4px 20px #0008",
+          animation:"ti .2s ease",
+        }}>
+          আবার Back চাপুন বন্ধ করতে
+        </div>
+      )}
     </>
     </ErrorBoundary>
   );
