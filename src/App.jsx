@@ -3334,6 +3334,12 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
             {sheet==="Study"?"📖 Study":qt==="written"?"✍️ Written":"❓ MCQ"}
           </span>
           <span style={{fontSize:10,color:C.muted}}>#{qid} · {sheet}</span>
+          <div style={{marginLeft:"auto",display:"flex",gap:6}}>
+            <button className="btn bg" style={{padding:"5px 12px",fontSize:11}} onClick={onClose} disabled={saving}>বাতিল</button>
+            <button className="btn bp" style={{padding:"5px 14px",fontSize:11,fontWeight:700}} onClick={save} disabled={saving}>
+              {saving?"⏳":"💾"} সেভ
+            </button>
+          </div>
         </div>
         <div className="fld" style={{marginBottom:10}}>
           <label style={{marginBottom:6,display:"block"}}>🏷️ Question Type</label>
