@@ -3371,18 +3371,12 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
         {questionType==="Study"&&<div className="fld"><label>✅ উত্তর</label><textarea className="ta" value={correct} onChange={e=>setCorrect(e.target.value)} style={{minHeight:60}}/></div>}
         <div className="fld"><label>📖 Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:60}}/></div>
         <div className="fld"><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:45}}/></div>
-        <div style={{height:4}}/>
-      </div>
-      {/* Sticky footer — keyboard উঠলেও দেখা যাবে */}
-      <div style={{
-        position:"sticky",bottom:0,left:0,right:0,
-        background:C.card,borderTop:`1px solid ${C.border}`,
-        padding:"10px 16px",display:"flex",gap:7,zIndex:10,
-      }}>
-        <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
-        <button className="btn bp" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={save}>
-          {saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করুন"}
-        </button>
+        <div style={{display:"flex",gap:7,marginTop:12}}>
+          <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={onClose}>বাতিল</button>
+          <button className="btn bp" style={{flex:2,justifyContent:"center"}} disabled={saving} onClick={save}>
+            {saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করুন"}
+          </button>
+        </div>
       </div>
     </div>
   );
