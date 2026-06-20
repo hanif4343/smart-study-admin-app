@@ -3537,7 +3537,7 @@ function AudienceTagRenameTab({push,tick}){
     bulkSheetData.forEach(q=>{
       const key=bulkMode==="subject"
         ?(q.Subject||q.subject||"").trim()
-        :(q.Topic||q.topic||q.Sub_topic||q.sub_topic||"").trim();
+        :(q.Sub_topic||q.sub_topic||q.SubTopic||q.subTopic||"").trim(); // subtopic, not topic
       if(!key)return;
       if(!map[key])map[key]={count:0,hasMissing:false};
       map[key].count++;
@@ -3685,7 +3685,7 @@ function AudienceTagRenameTab({push,tick}){
               background:bulkMode==="topic"?C.accent:"transparent",
               color:bulkMode==="topic"?"#fff":C.muted,
               outline:bulkMode==="topic"?"none":`1px solid ${C.border}`}}>
-            🏷️ Topic অনুযায়ী
+            🏷️ Subtopic অনুযায়ী
           </button>
         </div>
 
@@ -3699,7 +3699,7 @@ function AudienceTagRenameTab({push,tick}){
         {/* Select all / clear */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
           <span style={{fontSize:11,color:C.muted}}>
-            {bulkSelected.size>0?`${bulkSelected.size}টি সিলেক্ট`:`${bulkGroupList.length}টি ${bulkMode==="subject"?"Subject":"Topic"}`}
+            {bulkSelected.size>0?`${bulkSelected.size}টি সিলেক্ট`:`${bulkGroupList.length}টি ${bulkMode==="subject"?"Subject":"Subtopic"}`}
           </span>
           <div style={{display:"flex",gap:6}}>
             <button onClick={selectAll} style={{fontSize:10,padding:"3px 8px",borderRadius:6,border:`1px solid ${C.border}`,background:"transparent",color:C.muted,cursor:"pointer"}}>সব</button>
@@ -4369,14 +4369,18 @@ function TechniquesPage({push,tick}){
 }
 
 const NAV=[
-  {id:"dashboard",icon:"📊",label:"Dashboard"},
-  {id:"students", icon:"👥",label:"Students",badge:true},
-  {id:"reports",  icon:"🚨",label:"Reports",badge:true},
-  {id:"content",  icon:"📋",label:"Content"},
-  {id:"techniques",icon:"🧠",label:"টেকনিক",badge:true},
-  {id:"notify",   icon:"📣",label:"Notify"},
-  {id:"uploader", icon:"📤",label:"Uploader"},
-  {id:"aiimport", icon:"📸",label:"AI Import"},
+  {id:"dashboard",  icon:"📊", label:"Dashboard"},
+  {id:"students",   icon:"👥", label:"Users",    badge:true},
+  {id:"reports",    icon:"🚨", label:"Reports",  badge:true},
+  {id:"content",    icon:"📋", label:"Content"},
+  {id:"techniques", icon:"🧠", label:"Techniques",badge:true},
+  {id:"notify",     icon:"📣", label:"Notify"},
+  {id:"uploader",   icon:"📤", label:"Upload",
+    children:[
+      {id:"uploader", icon:"📝", label:"Bulk Upload"},
+      {id:"aiimport", icon:"📸", label:"AI Import"},
+    ]
+  },
 ];
 
 /* ══════════ LOGIN SCREEN ══════════ */
@@ -4507,6 +4511,7 @@ export default function App(){
   const layerStack = useRef([]); // [{type, pop}]
   const[exitConfirm,setExitConfirm]=useState(false);
   const exitTimer=useRef(null);
+  const[uploadMenuOpen,setUploadMenuOpen]=useState(false);
 
   // Layer push — যেকোনো component call করবে
   const pushLayer = useCallback((popFn)=>{
@@ -4696,7 +4701,8 @@ export default function App(){
   },[techRawBadge]);
 
   const badgeMap={students:signupBadge,reports:reportBadge,techniques:techBadge};
-  const pageLabel=NAV.find(n=>n.id===page);
+  const pageLabel=NAV.find(n=>n.id===page) ||
+    NAV.flatMap(n=>n.children||[]).find(c=>c.id===page);
 
   // ── Render ──
   if(!loggedIn) return(
@@ -4743,8 +4749,18 @@ export default function App(){
       <nav className="bottom-nav">
         {NAV.map(n=>{
           const cnt=badgeMap[n.id]||0;
+          const isActive=n.children?n.children.some(c=>c.id===page):page===n.id;
           return(
-            <button key={n.id} className={`nav-btn${page===n.id?" active":""}`} onClick={()=>goPage(n.id)}>
+            <button key={n.id} className={`nav-btn${isActive?" active":""}`}
+              onClick={()=>{
+                if(n.children){
+                  // Upload — sub-menu popup দেখাবে
+                  setUploadMenuOpen(v=>!v);
+                } else {
+                  goPage(n.id);
+                  setUploadMenuOpen(false);
+                }
+              }}>
               <span className="nav-icon" style={{position:"relative",display:"inline-block"}}>
                 {n.icon}
                 {cnt>0&&(
@@ -4756,10 +4772,39 @@ export default function App(){
                   </span>
                 )}
               </span>
-              <span>{n.label}</span>
+              <span>{n.label}{n.children?"▾":""}</span>
             </button>
           );
         })}
+        {/* Upload sub-menu popup */}
+        {uploadMenuOpen&&(()=>{
+          const uploadNav=NAV.find(n=>n.children);
+          if(!uploadNav)return null;
+          return(
+            <div style={{
+              position:"fixed",bottom:64,left:"50%",transform:"translateX(-50%)",
+              background:C.card,border:`1px solid ${C.border}`,
+              borderRadius:14,padding:"8px",zIndex:9998,
+              display:"flex",gap:6,boxShadow:"0 -4px 20px #0009",
+              minWidth:200,
+            }}>
+              {uploadNav.children.map(c=>(
+                <button key={c.id}
+                  onClick={()=>{goPage(c.id);setUploadMenuOpen(false);}}
+                  style={{
+                    flex:1,padding:"10px 8px",borderRadius:10,border:"none",cursor:"pointer",
+                    background:page===c.id?`${C.accent}22`:"transparent",
+                    color:page===c.id?C.accent:C.text,
+                    fontSize:11,fontWeight:700,
+                    display:"flex",flexDirection:"column",alignItems:"center",gap:4,
+                  }}>
+                  <span style={{fontSize:20}}>{c.icon}</span>
+                  <span>{c.label}</span>
+                </button>
+              ))}
+            </div>
+          );
+        })()}
       </nav>
       <Toasts t={toasts}/>
       <BgTaskIndicator/>
