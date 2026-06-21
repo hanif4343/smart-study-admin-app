@@ -1513,13 +1513,15 @@ function UserEditModal({user,onClose,onSaved,push}){
   const[name,setName]=useState(user.Name||user.name||"");
   const[email,setEmail]=useState(user.Email||user.email||"");
   const[status,setStatus]=useState(user.Status||user.status||"Active");
-  const[role,setRole]=useState(user.Role||user.role||user.type||"User");
-  const[classLevel,setClassLevel]=useState(user.classLevel||user.ClassLevel||user.class||"");
-  const[userType,setUserType]=useState(user.userType||user.UserType||"Student");
+  const[role,setRole]=useState(user.Role||user.role||"User");
+  // মূল অ্যাপ (User.kt → fromFirebaseMap) ঠিক এই অর্ডারেই ফিল্ড পড়ে: UserType→userType→Type→type, ClassLevel→classLevel→Class→class
+  const[classLevel,setClassLevel]=useState(user.ClassLevel||user.classLevel||user.Class||user.class||"");
+  const[userType,setUserType]=useState(user.UserType||user.userType||user.Type||user.type||"Student");
   const[saving,setSaving]=useState(false);
 
-  const CLASS_LEVELS=["Honours 1","Honours 2","Honours 3","Honours 4","Masters 1","Masters 2","Class 12","Job"];
-  const TYPES=["Student","Job Seeker"];
+  // মূল অ্যাপের AuthScreen.kt / ProfilePage.kt তে ব্যবহৃত আসল ভ্যালুগুলোর সাথে হুবহু মিল রাখা হয়েছে
+  const CLASS_LEVELS=["Class 1","Class 2","Class 3","Class 4","Class 5","Class 6","Class 7","Class 8","Class 9","Class 10","Class 11","Class 12","Honours 1","Honours 2","Honours 3","Honours 4","Masters 1","Masters 2","Masters Final"];
+  const TYPES=[{v:"Student",l:"Student (শিক্ষার্থী)"},{v:"Job",l:"Job (চাকরিজীবী)"}];
   const ROLES=["User","Admin"];
   const STATUSES=["Active","Inactive","Pending","Banned"];
 
@@ -1527,27 +1529,19 @@ function UserEditModal({user,onClose,onSaved,push}){
     if(!name.trim()){push("error","নাম দিন","");return;}
     setSaving(true);
     try{
+      // "UserType"/"ClassLevel" = ইউজার Student/Job কিনা ও কোন শ্রেণি (মূল অ্যাপ এই ফিল্ড থেকেই "ধরন"/"শ্রেণি" দেখায়)
+      // "Role" = অ্যাডমিন পারমিশন (User/Admin) — সম্পূর্ণ আলাদা ফিল্ড, আগে "type:role" লিখে এটাকেই ওভাররাইট করা হতো
       const patch={
         Name:name.trim(),
         Email:email.trim(),
         Status:status,
         Role:role,
-        type:role,
-        classLevel:classLevel,
+        UserType:userType,
         userType:userType,
+        ClassLevel:userType==="Job"?"":classLevel,
+        classLevel:userType==="Job"?"":classLevel,
       };
       await fbPatch(`Users/${fkey}`,patch);
-      const fields=[
-        {field:"name",val:name.trim()},
-        {field:"email",val:email.trim()},
-        {field:"status",val:status},
-        {field:"type",val:role},
-        {field:"classLevel",val:classLevel},
-        {field:"userType",val:userType},
-      ];
-      fields.forEach(({field,val})=>{
-        // Sheet sync → GAS standalone handles this
-      });
       invalidate("Users");
       push("success","✅ সেভ হয়েছে!",name.trim());
       onSaved({...user,...patch,_fbKey:fkey});
@@ -1600,12 +1594,12 @@ function UserEditModal({user,onClose,onSaved,push}){
 
         <div style={F}>
           <label style={L}>🏷️ টাইপ</label>
-          <select style={S} value={userType} onChange={e=>{setUserType(e.target.value);if(e.target.value==="Job Seeker")setClassLevel("");}}>
-            {TYPES.map(t=><option key={t} value={t}>{t}</option>)}
+          <select style={S} value={userType} onChange={e=>{setUserType(e.target.value);if(e.target.value==="Job")setClassLevel("");}}>
+            {TYPES.map(t=><option key={t.v} value={t.v}>{t.l}</option>)}
           </select>
         </div>
 
-        {userType==="Student"&&(
+        {userType!=="Job"&&(
         <div style={F}>
           <label style={L}>📚 ক্লাস লেভেল</label>
           <select style={S} value={classLevel} onChange={e=>setClassLevel(e.target.value)}>
@@ -1662,7 +1656,7 @@ function StudentDetail({user:userProp,onBack,push}){
           <div style={{fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{nm}</div>
           <div style={{fontSize:10,color:C.muted}}>📱 {ph}</div>
           {(user.classLevel||user.ClassLevel)&&<div style={{fontSize:10,color:C.accent}}>{user.classLevel||user.ClassLevel}{(user.userType||user.UserType)?` · ${user.userType||user.UserType}`:""}</div>}
-          {(user.Role||user.role||user.type)&&<div style={{fontSize:10,color:C.yellow}}>🎭 {user.Role||user.role||user.type}</div>}
+          {(user.Role||user.role)&&<div style={{fontSize:10,color:C.yellow}}>🎭 {user.Role||user.role}</div>}
         </div>
         <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5}}>
           <span className={`pill ${st==="active"?"pa":"pi"}`}>{st==="active"?"✅":"🔴"}</span>
