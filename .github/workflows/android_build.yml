@@ -46,7 +46,19 @@ jobs:
           npx cap sync android
 
       - name: Add google-services.json (Admin app FCM config)
-        run: echo "${{ secrets.ADMIN_GOOGLE_SERVICES_JSON_BASE64 }}" | base64 --decode > android/app/google-services.json
+        run: |
+          printf '%s' "${{ secrets.ADMIN_GOOGLE_SERVICES_JSON_BASE64 }}" | base64 --decode > android/app/google-services.json
+          echo "── google-services.json byte size: $(wc -c < android/app/google-services.json) bytes"
+          if ! python3 -m json.tool android/app/google-services.json > /dev/null 2>&1; then
+            echo "❌ google-services.json is NOT valid JSON after decode — the ADMIN_GOOGLE_SERVICES_JSON_BASE64 secret is likely truncated or corrupted."
+            echo "── First 200 chars of decoded file: ──"
+            head -c 200 android/app/google-services.json
+            echo ""
+            echo "── Last 200 chars of decoded file: ──"
+            tail -c 200 android/app/google-services.json
+            exit 1
+          fi
+          echo "✅ google-services.json decoded and is valid JSON"
 
       - name: Inject Plugins + Permissions (MLKit OCR + Background Sync Service)
         run: |
