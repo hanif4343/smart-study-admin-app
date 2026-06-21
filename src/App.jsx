@@ -380,6 +380,54 @@ async function fbPatchBatch(items, onProgress, concurrency) {
   return done;
 }
 
+/* ── Admin FCM Token Save ──
+   Login এর পরে admin এর FCM token Firebase এ save করো।
+   Main app এই token ব্যবহার করে admin কে push notification পাঠায়।
+   Path: users/{adminPhone}/fcmToken (lowercase users — main app এখান থেকে পড়ে)
+   Also sets Users/{phone}/Role = "admin" যাতে main app admin চিনতে পারে
+   ─────────────────────────────────────────────────────────────────── */
+async function _saveAdminFcmToken() {
+  try {
+    // Capacitor FCM plugin দিয়ে token নাও
+    const plugin = window.Capacitor?.Plugins?.FcmToken;
+    if (!plugin) { _LC.warn("FCM","FcmToken plugin not available"); return; }
+    const { token } = await plugin.getToken();
+    if (!token) { _LC.warn("FCM","Empty FCM token"); return; }
+
+    // Admin phone — Users node থেকে admin এর phone বের করো
+    const t = await _tok();
+    const usersRaw = await (await fetch(`${FB}/Users.json${_authQ(t)}`)).json();
+    const users = Object.entries(usersRaw||{});
+    const adminEntry = users.find(([,u])=>(u?.Role||u?.role||"").toLowerCase()==="admin");
+    let adminPhone = adminEntry ? adminEntry[0] : null;
+
+    if (!adminPhone) {
+      // Phone নেই — UID দিয়ে fallback path ব্যবহার করো
+      _LC.warn("FCM","No admin phone found — saving to AdminFCMTokens");
+      await fbSet("AdminFCMTokens/token", token);
+      _LC.info("FCM","✅ Admin FCM token saved to AdminFCMTokens/token");
+      return;
+    }
+
+    // users/{phone}/fcmToken — main app এখান থেকে পড়ে
+    await fbSet(`users/${adminPhone}/fcmToken`, token);
+    _LC.info("FCM",`✅ Admin FCM token saved for ${adminPhone}`);
+
+    // Token refresh listener
+    window.addEventListener("fcmTokenRefresh", async (e) => {
+      try {
+        const newToken = e.detail?.token || JSON.parse(e.detail||"{}").token;
+        if (newToken) {
+          await fbSet(`users/${adminPhone}/fcmToken`, newToken);
+          _LC.info("FCM","🔄 FCM token refreshed");
+        }
+      } catch(_) {}
+    });
+  } catch(e) {
+    _LC.error("FCM","_saveAdminFcmToken: " + e.message);
+  }
+}
+
 
 /* ══════════════════════════════════════════════════════════════
    🔄 BACKGROUND TASK MANAGER
@@ -4451,6 +4499,22 @@ function LoginScreen({onLogin}){
 }
 
 export default function App(){
+  // ── FCM Notification click → page navigate ──
+  useEffect(()=>{
+    const onNavTo = (e) => {
+      try {
+        const data = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail;
+        const pg = data?.page || "";
+        if(!pg || !loggedIn) return;
+        if(pg === "reports")    { goPage("reports");    }
+        if(pg === "techniques") { goPage("techniques"); }
+        _LC.info("FCM","📲 Deeplink nav to: " + pg);
+      } catch(_) {}
+    };
+    window.addEventListener("adminNavTo", onNavTo);
+    return () => window.removeEventListener("adminNavTo", onNavTo);
+  }, [loggedIn, goPage]);
+
   // ── Android system back button — modal থাকলে close, নইলে double-back-to-exit ──
   useEffect(()=>{
     let _depth=0;
@@ -4702,7 +4766,7 @@ export default function App(){
   if(!loggedIn) return(
     <ErrorBoundary>
       <style>{css}</style>
-      <LoginScreen onLogin={()=>{ _LC.lifecycle("App","User logged in — entering admin panel"); setLoggedIn(true); }}/>
+      <LoginScreen onLogin={()=>{ _LC.lifecycle("App","User logged in — entering admin panel"); setLoggedIn(true); _saveAdminFcmToken(); }}/>
     </ErrorBoundary>
   );
 
