@@ -1250,6 +1250,8 @@ function SignupsPage({push,tick}){
   const{data:usersRaw,loading}=useFB("Users",tick);
   const[activating,setActivating]=useState(null);
   const[done,setDone]=useState(new Set());
+  const[rejectTarget,setRejectTarget]=useState(null); // user object pending reject confirm
+  const[rejecting,setRejecting]=useState(false);
 
   const rows=useMemo(()=>toArr(usersRaw).filter(u=>{
     const st=(u.Status||u.status||"").toLowerCase();
@@ -1269,6 +1271,22 @@ function SignupsPage({push,tick}){
       invalidate("Users");
     }catch(e){push("error","ব্যর্থ",e.message);}
     setActivating(null);
+  };
+
+  const confirmReject=async()=>{
+    if(!rejectTarget)return;
+    const u=rejectTarget;
+    const phone=u.Phone||u.phone||"";
+    const fkey=u._fbKey||phoneKey(phone);
+    setRejecting(true);
+    try{
+      await fbDelete(`Users/${fkey}`); // permanently remove — শুধু inactive না, পুরোপুরি delete
+      push("success","🗑️ রিজেক্ট হয়েছে",(u.Name||u.name||phone)+" সম্পূর্ণ ডিলিট হয়েছে");
+      setDone(p=>new Set([...p,fkey]));
+      invalidate("Users");
+      setRejectTarget(null);
+    }catch(e){push("error","ব্যর্থ",e.message);}
+    setRejecting(false);
   };
 
   return(
@@ -1294,13 +1312,27 @@ function SignupsPage({push,tick}){
               </div>
               <span className="pill pp">⏳ পেন্ডিং</span>
             </div>
-            <button className="btn bs bb" disabled={!!activating} onClick={()=>activate(u)}>
-              {activating===fkey?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
-            </button>
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn bs bb" style={{flex:2,justifyContent:"center"}} disabled={!!activating||rejecting} onClick={()=>activate(u)}>
+                {activating===fkey?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
+              </button>
+              <button className="btn bg" style={{flex:1,justifyContent:"center",color:C.red,borderColor:`${C.red}40`}} disabled={!!activating||rejecting} onClick={()=>setRejectTarget(u)}>
+                ❌ রিজেক্ট
+              </button>
+            </div>
           </div>
         );
        })
       }
+      {rejectTarget&&(
+        <DeleteWarningModal
+          title="সাইনআপ রিজেক্ট করবেন?"
+          description={`"${rejectTarget.Name||rejectTarget.name||rejectTarget.Phone||rejectTarget.phone||"এই ইউজার"}" কে রিজেক্ট করলে ইউজারটি Firebase থেকে সম্পূর্ণভাবে ডিলিট হয়ে যাবে — শুধু ইনঅ্যাক্টিভ হবে না।`}
+          onConfirm={confirmReject}
+          onCancel={()=>!rejecting&&setRejectTarget(null)}
+          loading={rejecting}
+        />
+      )}
     </div>
   );
 }
@@ -1316,6 +1348,8 @@ function StudentsPage({push,tick,pushLayer}){
   const[busy,setBusy]=useState(null);
   const[activating,setActivating]=useState(null);
   const[signupDone,setSignupDone]=useState(new Set());
+  const[rejectTarget,setRejectTarget]=useState(null); // pending signup user to reject/delete
+  const[rejecting,setRejecting]=useState(false);
 
   const users=useMemo(()=>toArr(usersRaw),[usersRaw]);
 
@@ -1350,6 +1384,22 @@ function StudentsPage({push,tick,pushLayer}){
       invalidate("Users");
     }catch(e){push("error","ব্যর্থ",e.message);}
     setActivating(null);
+  };
+
+  const confirmReject=async()=>{
+    if(!rejectTarget)return;
+    const u=rejectTarget;
+    const phone=u.Phone||u.phone||"";
+    const fkey=u._fbKey||phoneKey(phone);
+    setRejecting(true);
+    try{
+      await fbDelete(`Users/${fkey}`); // পুরোপুরি ডিলিট — শুধু inactive মার্ক না
+      push("success","🗑️ রিজেক্ট হয়েছে",(u.Name||u.name||phone)+" সম্পূর্ণ ডিলিট হয়েছে");
+      setSignupDone(p=>new Set([...p,fkey]));
+      invalidate("Users");
+      setRejectTarget(null);
+    }catch(e){push("error","ব্যর্থ",e.message);}
+    setRejecting(false);
   };
 
   const activateStudent=async u=>{
@@ -1408,13 +1458,27 @@ function StudentsPage({push,tick,pushLayer}){
                   </div>
                   <span className="pill pp">⏳ পেন্ডিং</span>
                 </div>
-                <button className="btn bs bb" disabled={!!activating} onClick={()=>activate(u)}>
-                  {activating===fkey?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
-                </button>
+                <div style={{display:"flex",gap:8}}>
+                  <button className="btn bs bb" style={{flex:2,justifyContent:"center"}} disabled={!!activating||rejecting} onClick={()=>activate(u)}>
+                    {activating===fkey?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
+                  </button>
+                  <button className="btn bg" style={{flex:1,justifyContent:"center",color:C.red,borderColor:`${C.red}40`}} disabled={!!activating||rejecting} onClick={()=>setRejectTarget(u)}>
+                    ❌ রিজেক্ট
+                  </button>
+                </div>
               </div>
             );
            })
           }
+          {rejectTarget&&(
+            <DeleteWarningModal
+              title="সাইনআপ রিজেক্ট করবেন?"
+              description={`"${rejectTarget.Name||rejectTarget.name||rejectTarget.Phone||rejectTarget.phone||"এই ইউজার"}" কে রিজেক্ট করলে ইউজারটি Firebase থেকে সম্পূর্ণভাবে ডিলিট হয়ে যাবে — শুধু ইনঅ্যাক্টিভ হবে না।`}
+              onConfirm={confirmReject}
+              onCancel={()=>!rejecting&&setRejectTarget(null)}
+              loading={rejecting}
+            />
+          )}
         </>
       )}
 
