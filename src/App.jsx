@@ -4499,22 +4499,6 @@ function LoginScreen({onLogin}){
 }
 
 export default function App(){
-  // ── FCM Notification click → page navigate ──
-  useEffect(()=>{
-    const onNavTo = (e) => {
-      try {
-        const data = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail;
-        const pg = data?.page || "";
-        if(!pg || !loggedIn) return;
-        if(pg === "reports")    { goPage("reports");    }
-        if(pg === "techniques") { goPage("techniques"); }
-        _LC.info("FCM","📲 Deeplink nav to: " + pg);
-      } catch(_) {}
-    };
-    window.addEventListener("adminNavTo", onNavTo);
-    return () => window.removeEventListener("adminNavTo", onNavTo);
-  }, [loggedIn, goPage]);
-
   // ── Android system back button — modal থাকলে close, নইলে double-back-to-exit ──
   useEffect(()=>{
     let _depth=0;
@@ -4560,6 +4544,22 @@ export default function App(){
       return p;
     });
   },[]);
+
+  // ── FCM Notification click → page navigate (deeplink) ──
+  useEffect(()=>{
+    const onNavTo = (e) => {
+      try {
+        const data = typeof e.detail === "string" ? JSON.parse(e.detail) : e.detail;
+        const pg = data?.page || "";
+        if(!pg || !loggedIn) return;
+        if(pg === "reports")    { goPage("reports");    }
+        if(pg === "techniques") { goPage("techniques"); }
+        _LC.info("FCM","📲 Deeplink nav to: " + pg);
+      } catch(_) {}
+    };
+    window.addEventListener("adminNavTo", onNavTo);
+    return () => window.removeEventListener("adminNavTo", onNavTo);
+  }, [loggedIn, goPage]);
 
   // ══════════════════════════════════════════════════════════
   //  LAYERED BACK STACK
