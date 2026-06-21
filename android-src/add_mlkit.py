@@ -13,6 +13,25 @@ if "mlkit" not in txt and "text-recognition" not in txt:
     txt = re.sub(r'(dependencies\s*\{)', r'\1' + mlkit_deps, txt, count=1)
     open(gradle_path, "w").write(txt)
     print("✅ MLKit deps added to build.gradle")
+
+# Add google-services plugin if missing
+app_gradle = open(gradle_path).read()
+if "google-services" not in app_gradle:
+    app_gradle = app_gradle.replace(
+        "plugins {",
+        "plugins {\n    id("com.google.gms.google-services")",
+        1
+    )
+    open(gradle_path, "w").write(app_gradle)
+    print("✅ google-services plugin added to app/build.gradle")
+
+# Add FCM dependency
+if "firebase-messaging" not in app_gradle:
+    with open(gradle_path, "r") as f: g = f.read()
+    fcm_dep = '\n    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))\n    implementation("com.google.firebase:firebase-messaging-ktx")'
+    g = re.sub(r"(dependencies\s*\{)", r"\1" + fcm_dep, g, count=1)
+    open(gradle_path, "w").write(g)
+    print("✅ Firebase Messaging dep added")
 else:
     print("ℹ️  MLKit deps already present")
 
@@ -73,7 +92,7 @@ pkg_dir = "android/app/src/main/java/com/smartstudy/admin"
 os.makedirs(pkg_dir, exist_ok=True)
 
 src_dir = "android-src"
-files_to_copy = ["OcrPlugin.kt", "MainActivity.kt", "BackgroundSyncService.kt", "BgSyncPlugin.kt"]
+files_to_copy = ["OcrPlugin.kt", "MainActivity.kt", "BackgroundSyncService.kt", "BgSyncPlugin.kt", "FcmTokenPlugin.kt", "AdminMessagingService.kt"]
 
 for f in files_to_copy:
     src = os.path.join(src_dir, f)
