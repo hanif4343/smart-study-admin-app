@@ -45,6 +45,9 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Add google-services.json (Admin app FCM config)
+        run: echo "${{ secrets.ADMIN_GOOGLE_SERVICES_JSON_BASE64 }}" | base64 --decode > android/app/google-services.json
+
       - name: Inject Plugins + Permissions (MLKit OCR + Background Sync Service)
         run: |
           PKG_DIR="android/app/src/main/java/com/smartstudy/admin"
