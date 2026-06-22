@@ -410,7 +410,9 @@ async function _saveAdminFcmToken() {
     }
 
     // users/{phone}/fcmToken — main app এখান থেকে পড়ে
-    await fbSet(`users/${adminPhone}/fcmToken`, token);
+    // admin app এর token আলাদা field এ রাখি যাতে main app এর
+    // users/{phone}/fcmToken (regular user token) overwrite না হয়
+    await fbSet(`users/${adminPhone}/adminFcmToken`, token);
     _LC.info("FCM",`✅ Admin FCM token saved for ${adminPhone}`);
 
     // Token refresh listener
