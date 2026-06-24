@@ -1,5 +1,27 @@
 import re, sys, os, shutil, json
 
+# ── 0. Add Kotlin plugin to app/build.gradle ─────────────────────────────────
+# Capacitor 5 default project is Java-only. We need Kotlin to compile *.kt plugins.
+gradle_path = "android/app/build.gradle"
+txt0 = open(gradle_path).read()
+if "kotlin-android" not in txt0 and "org.jetbrains.kotlin.android" not in txt0:
+    # Add kotlin plugin inside plugins {} block
+    txt0 = re.sub(
+        r'(plugins\s*\{)',
+        r'\1\n    id "org.jetbrains.kotlin.android" version "1.9.0" apply true',
+        txt0, count=1
+    )
+    # Add kotlin-stdlib dependency
+    txt0 = re.sub(
+        r'(dependencies\s*\{)',
+        r'\1\n    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"',
+        txt0, count=1
+    )
+    open(gradle_path, "w").write(txt0)
+    print("✅ Kotlin plugin added to app/build.gradle")
+else:
+    print("ℹ️  Kotlin plugin already present")
+
 # ── 1. build.gradle — MLKit + FCM deps ──
 gradle_path = "android/app/build.gradle"
 txt = open(gradle_path).read()
