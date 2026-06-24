@@ -2228,6 +2228,8 @@ function AIImportPage({push,onSendToBulk}){
     if(!cam){
       const available=Object.keys(P).join(", ")||"(none)";
       _LC.error("camera",`Camera plugin not found. Available plugins: ${available}`);
+      // সরাসরি দেখানোর জন্য push notification
+      push("error","Available Plugins:",available||"(none)");
     }
     return cam;
   };
