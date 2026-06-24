@@ -25,6 +25,7 @@ class MainActivity : BridgeActivity() {
         registerPlugin(OcrPlugin::class.java)
         registerPlugin(BgSyncPlugin::class.java)
         registerPlugin(FcmTokenPlugin::class.java)
+        registerPlugin(AdminPushPlugin::class.java)
         super.onCreate(savedInstanceState)
 
         // FCM notification click — page navigate
