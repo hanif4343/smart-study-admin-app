@@ -159,3 +159,33 @@ for cp in custom_plugins:
 
 open(plugins_json_path, "w").write(json.dumps(existing, indent=2))
 print(f"✅ capacitor.plugins.json updated — {added} custom plugin(s) added ({plugins_json_path})")
+
+# ── 5. Ensure Camera plugin Gradle project is included ───────────────────────
+# cap sync normally adds capacitor-camera to settings.gradle and app/build.gradle
+# But if it didn't, we force-add it here.
+settings_path = "android/settings.gradle"
+if os.path.exists(settings_path):
+    settings = open(settings_path).read()
+    camera_include = "include ':capacitor-camera'"
+    camera_proj    = "project(':capacitor-camera').projectDir = new File('../node_modules/@capacitor/camera/android')"
+    changed = False
+    if camera_include not in settings:
+        settings += f"\n{camera_include}\n{camera_proj}\n"
+        changed = True
+    if changed:
+        open(settings_path, "w").write(settings)
+        print("✅ capacitor-camera added to settings.gradle")
+    else:
+        print("ℹ️  capacitor-camera already in settings.gradle")
+
+# Ensure app/build.gradle has capacitor-camera implementation
+gradle_app = "android/app/build.gradle"
+if os.path.exists(gradle_app):
+    g = open(gradle_app).read()
+    cam_dep = 'implementation project(":capacitor-camera")'
+    if cam_dep not in g:
+        g = re.sub(r'(dependencies\s*\{)', r'\1\n    ' + cam_dep, g, count=1)
+        open(gradle_app, "w").write(g)
+        print("✅ capacitor-camera implementation added to app/build.gradle")
+    else:
+        print("ℹ️  capacitor-camera already in app/build.gradle")
