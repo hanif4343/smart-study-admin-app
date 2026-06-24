@@ -22,8 +22,9 @@ import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -51,22 +52,21 @@ public class OcrPlugin extends Plugin {
 
         // ── COLUMN SPLIT ──────────────────────────────────────────────────────
         // exam paper সবসময় 2-column। portrait হলেও সবসময় দুই ভাগ করি।
-        // (landscape হলে আরো obvious যে 2-column)
         int mid = enhanced.getWidth() / 2;
-        final Bitmap leftCol  = Bitmap.createBitmap(enhanced, 0,   0, mid,                     enhanced.getHeight());
+        final Bitmap leftCol  = Bitmap.createBitmap(enhanced, 0,   0, mid,                      enhanced.getHeight());
         final Bitmap rightCol = Bitmap.createBitmap(enhanced, mid, 0, enhanced.getWidth() - mid, enhanced.getHeight());
         final Bitmap[] strips = { leftCol, rightCol };
 
         // প্রতিটি strip: Latin + Devanagari → best result রাখি
         // total pending = 2 strips × 2 recognizers = 4
-        final String[]  results  = { "", "" };   // per-strip best
-        final int[]     pending  = { 2, 2 };     // each strip: 2 remaining
-        final Object    lock     = new Object();
+        final String[] results = { "", "" };
+        final int[]    pending = { 2, 2 };
+        final Object   lock    = new Object();
 
         for (int si = 0; si < strips.length; si++) {
-            final int stripIndex = si;
-            final Bitmap strip   = strips[si];
-            final InputImage img = InputImage.fromBitmap(strip, 0);
+            final int    stripIndex = si;
+            final Bitmap strip      = strips[si];
+            final InputImage img    = InputImage.fromBitmap(strip, 0);
 
             // Latin recognizer
             TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
@@ -77,21 +77,18 @@ public class OcrPlugin extends Plugin {
                         if (grouped.length() > results[stripIndex].length())
                             results[stripIndex] = grouped;
                         pending[stripIndex]--;
-                        checkDone(call, results, pending, lock,
-                                  sized, bmp, enhanced, strips);
+                        checkDone(call, results, pending, lock, sized, bmp, enhanced, strips);
                     }
                 })
                 .addOnFailureListener(e -> {
                     synchronized (lock) {
                         pending[stripIndex]--;
-                        checkDone(call, results, pending, lock,
-                                  sized, bmp, enhanced, strips);
+                        checkDone(call, results, pending, lock, sized, bmp, enhanced, strips);
                     }
                 });
 
             // Devanagari (Bengali) recognizer
-            TextRecognition.getClient(
-                    new DevanagariTextRecognizerOptions.Builder().build())
+            TextRecognition.getClient(new DevanagariTextRecognizerOptions.Builder().build())
                 .process(img)
                 .addOnSuccessListener(r -> {
                     synchronized (lock) {
@@ -99,15 +96,13 @@ public class OcrPlugin extends Plugin {
                         if (grouped.length() > results[stripIndex].length())
                             results[stripIndex] = grouped;
                         pending[stripIndex]--;
-                        checkDone(call, results, pending, lock,
-                                  sized, bmp, enhanced, strips);
+                        checkDone(call, results, pending, lock, sized, bmp, enhanced, strips);
                     }
                 })
                 .addOnFailureListener(e -> {
                     synchronized (lock) {
                         pending[stripIndex]--;
-                        checkDone(call, results, pending, lock,
-                                  sized, bmp, enhanced, strips);
+                        checkDone(call, results, pending, lock, sized, bmp, enhanced, strips);
                     }
                 });
         }
@@ -117,23 +112,16 @@ public class OcrPlugin extends Plugin {
     private void checkDone(PluginCall call, String[] results, int[] pending,
                            Object lock, Bitmap sized, Bitmap bmp,
                            Bitmap enhanced, Bitmap[] strips) {
-        // Must be called inside synchronized(lock)
         boolean allDone = true;
         for (int p : pending) if (p > 0) { allDone = false; break; }
         if (!allDone) return;
 
-        // cleanup
         if (sized != bmp)     sized.recycle();
         enhanced.recycle();
         for (Bitmap s : strips) if (s != enhanced) s.recycle();
 
-        // merge columns — বাম কলামের পরে ডান কলাম
-        String leftText  = results[0];
-        String rightText = results[1];
-        String finalText = leftText + "\n\n--- COLUMN ---\n\n" + rightText;
-
-        // parse
-        String parsed = parseQuestions(finalText);
+        String finalText = results[0] + "\n\n--- COLUMN ---\n\n" + results[1];
+        String parsed    = parseQuestions(finalText);
 
         JSObject ret = new JSObject();
         ret.put("text",   finalText);
@@ -141,14 +129,10 @@ public class OcrPlugin extends Plugin {
         call.resolve(ret);
     }
 
-    // ─── IMPROVEMENT: Bounding-box line grouping ──────────────────────────────
-    // MLKit TextBlock গুলো bounding box দিয়ে sort করি:
-    //   - Y position অনুযায়ী row-এ group (Y পার্থক্য < avgLineHeight × 0.55)
-    //   - প্রতিটি row-এ X অনুযায়ী sort (বাম→ডান)
+    // ─── Bounding-box line grouping ───────────────────────────────────────────
     private String groupByBoundingBox(Text result) {
-        // LineBlock: top, left, height, text
-        List<int[]> blocks = new ArrayList<>();  // [top, left, height]
-        List<String> texts = new ArrayList<>();
+        List<int[]>  blocks = new ArrayList<>();   // [top, left, height]
+        List<String> texts  = new ArrayList<>();
 
         for (Text.TextBlock block : result.getTextBlocks()) {
             for (Text.Line line : block.getLines()) {
@@ -160,13 +144,11 @@ public class OcrPlugin extends Plugin {
         }
         if (blocks.isEmpty()) return "";
 
-        // average line height
         int sumH = 0;
         for (int[] b : blocks) sumH += b[2];
         int avgH      = Math.max(sumH / blocks.size(), 20);
         int threshold = (int)(avgH * 0.55);
 
-        // index list, Y-sort
         List<Integer> indices = new ArrayList<>();
         for (int i = 0; i < blocks.size(); i++) indices.add(i);
         Collections.sort(indices, (a, b2) -> {
@@ -174,24 +156,19 @@ public class OcrPlugin extends Plugin {
             return cmp != 0 ? cmp : Integer.compare(blocks.get(a)[1], blocks.get(b2)[1]);
         });
 
-        // group into rows
         List<List<Integer>> rows = new ArrayList<>();
         for (int idx : indices) {
             int top = blocks.get(idx)[0];
             if (!rows.isEmpty()) {
                 List<Integer> lastRow = rows.get(rows.size() - 1);
                 int lastTop = blocks.get(lastRow.get(lastRow.size() - 1))[0];
-                if (top - lastTop < threshold) {
-                    lastRow.add(idx);
-                    continue;
-                }
+                if (top - lastTop < threshold) { lastRow.add(idx); continue; }
             }
             List<Integer> newRow = new ArrayList<>();
             newRow.add(idx);
             rows.add(newRow);
         }
 
-        // build text: each row → sort by X → join with space
         StringBuilder sb = new StringBuilder();
         for (List<Integer> row : rows) {
             Collections.sort(row, (a, b2) ->
@@ -205,104 +182,260 @@ public class OcrPlugin extends Plugin {
         return sb.toString().trim();
     }
 
-    // ─── IMPROVEMENT: Regex MCQ parser ───────────────────────────────────────
+    // ─── MCQ Parser (v2 — 7 bugs fixed) ──────────────────────────────────────
     //
-    // Supports:
-    //   প্রশ্ন নম্বর:  ৫৮. / ৫৮। / 58. / 58।   (বাংলা ও Arabic উভয়)
-    //   অপশন (বাংলা): ক. / ক) / ক। + text
-    //   অপশন (Latin):  a. / a) + text
-    //   উত্তর hint:   উ. ক / উ. খ / উ: ক / Answer: a   ইত্যাদি
-    //   multi-line প্রশ্ন: পরের line-ও প্রশ্নের অংশ (যতক্ষণ option না আসে)
-    //
-    // Output: প্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;সঠিক_উত্তর
+    // FIX 1 — Noise filter expanded: পৃষ্ঠা, বিসিএস, Facebook/Facehok,
+    //          আমাদের, সকল চাকরির, শতভাগ, অগ্রদূত বাংলা, ডাক বিভাগ,
+    //          পদের নাম, সময়:, পূর্ণমান, পরীক্ষার — সব skip
+    // FIX 2 — Option comma separator: "ক, পদাবলি" এখন ধরে (ক[,.)।] সব)
+    // FIX 3 — Trailing bare answer letter: "...নিরপেক্ষ ক" শেষে ক=answer
+    // FIX 4 — Single-line multi-option: "ক, x খ. y গ, z ঘ, w উ. গ" → 4 opts
+    // FIX 5 — Dirty option cleanup: option text থেকে "উ. ক" strip করা হয়
+    // FIX 6 — Question number sort: 2-column merge-এর পর num অনুযায়ী sort
+    // FIX 7 — Duplicate dedup: একই number দুবার আসলে প্রথমটা রাখা হয়
     //
     private String parseQuestions(String rawText) {
 
-        // বাংলা digit → latin digit (normalize করি তুলনার জন্য)
+        // ── Noise patterns ────────────────────────────────────────────────────
+        // এই pattern-এর যেকোনো একটা match হলে line skip
+        Pattern[] noisePatterns = {
+            Pattern.compile("পৃষ্ঠা[:\\s]"),
+            Pattern.compile("বিসিএস"),
+            Pattern.compile("[Ff]ace[bBhH]"),         // Facebook / Facehok
+            Pattern.compile("আমাদের\\s"),
+            Pattern.compile("সকল চাকরির"),
+            Pattern.compile("শতভাগ কম"),
+            Pattern.compile("অগ্রদূত\\s*(বাংলা|Recent|Confirm|onfiru)"),
+            Pattern.compile("^---"),                  // --- COLUMN --- / --- ছবি ---
+            Pattern.compile("^\\d+\\s*$"),            // lone page number
+            Pattern.compile("^(ডাক বিভাগ|পদের নাম|সময়[:\\s]|পূর্ণমান|পরীক্ষার)"),
+        };
+
+        // ── Core patterns ─────────────────────────────────────────────────────
+        // প্রশ্ন নম্বর: বাংলা digit normalize করে Latin-এ match করি
+        Pattern pQuestion = Pattern.compile("^(\\d{1,3})[.।,]\\s*(.+)");
+
+        // FIX 2: option separator = comma, period, paren, বা space
+        Pattern pOptBn   = Pattern.compile("^([ক-ঘ])[,.)।]\\s*(.+)");
+        Pattern pOptLa   = Pattern.compile("^([a-dA-D])[,.)\\s]\\s*(.+)");
+
+        // উত্তর hint: "উ. ক", "উ, খ", "উ ক", "উঃ গ", "ans: b"
+        Pattern pAnswer  = Pattern.compile(
+            "(?:উ[।.,:\\s]+|[Aa]ns(?:wer)?[:\\s]+)([কখগঘa-dA-D])");
+
+        // FIX 3: trailing bare answer letter at end of line: "...নিরপেক্ষ ক"
+        Pattern pTrailing = Pattern.compile("[,.)\\s]([কখগঘ])\\s*$");
+
+        // FIX 4: detect if a line has multiple Bengali option markers
+        // e.g. "ক, x খ. y গ, z ঘ, w উ. গ"
+        Pattern pMultiOpt = Pattern.compile("[ক-ঘ][,.)।]");
+
+        // ── Internal class to hold parsed MCQ ────────────────────────────────
+        // Java 7 compatible: use array [num, q, o1, o2, o3, o4, ans]
+        List<Object[]> questions = new ArrayList<>();
+        // current: index 0=num(Integer), 1=question, 2-5=opts, 6=answer
+        Object[] cur   = null;
+        int      optIdx = 2;   // next opt slot (2,3,4,5)
+        boolean  inQ    = false;
+
+        Set<Integer> seenNums = new HashSet<>();
+
         String normalized = toBnDigitNorm(rawText);
-        String[] lines = normalized.split("\n");
-
-        // Patterns
-        Pattern pQuestion  = Pattern.compile(
-            "^([\\d]{1,3})[.।]\\s*(.+)");
-        Pattern pOptBengali = Pattern.compile(
-            "^[ক-ঘ][.)।]\\s*(.+)");
-        Pattern pOptLatin   = Pattern.compile(
-            "^[a-dA-D][.)\\s]\\s*(.+)");
-        // উত্তর: "উ. ক", "উ: খ", "উঃ গ", "Answer: b", "ans: c"
-        Pattern pAnswer     = Pattern.compile(
-            "(?:উ[।.:\\s]+|[Aa]ns(?:wer)?[:\\s]+)([কখগঘa-dA-D])");
-        // পৃষ্ঠা নম্বর line — skip করব
-        Pattern pPageSkip   = Pattern.compile(
-            "^পৃষ্ঠা|^--- COLUMN ---|^page\\s*\\d");
-
-        // State
-        List<String[]> questions = new ArrayList<>();
-        // current: [question, opt1, opt2, opt3, opt4, answer]
-        String[]  cur     = null;
-        int       optIdx  = 0;
-        boolean   inQ     = false; // প্রশ্নের text এখনো আসছে
+        String[] lines    = normalized.split("\n");
 
         for (String rawLine : lines) {
             String line = rawLine.trim();
             if (line.isEmpty()) continue;
-            if (pPageSkip.matcher(line).find()) continue;
 
+            // FIX 1: noise filter
+            boolean isNoise = false;
+            for (Pattern np : noisePatterns) {
+                if (np.matcher(line).find()) { isNoise = true; break; }
+            }
+            if (isNoise) continue;
+
+            // ── New question? ─────────────────────────────────────────────────
             Matcher qm = pQuestion.matcher(line);
             if (qm.find()) {
-                // নতুন প্রশ্ন
+                int num = Integer.parseInt(qm.group(1));
+
+                // FIX 7: dedup
+                if (seenNums.contains(num)) continue;
+                seenNums.add(num);
+
                 if (cur != null) questions.add(cur);
-                cur    = new String[]{ qm.group(2).trim(), "", "", "", "", "" };
-                optIdx = 1;
+                cur    = new Object[]{ num, qm.group(2).trim(), "", "", "", "", "" };
+                optIdx = 2;
                 inQ    = true;
+
+                // FIX 4: options on same line as question number?
+                String qRest = (String) cur[1];
+                Matcher mmo = pMultiOpt.matcher(qRest);
+                int moCount = 0;
+                while (mmo.find()) moCount++;
+                if (moCount >= 2) {
+                    String[] parsed = splitInlineOpts(qRest, pOptBn, pAnswer, pTrailing);
+                    // parsed[0]=cleanQ, [1-4]=opts, [5]=ans
+                    cur[1] = parsed[0];
+                    if (!parsed[1].isEmpty()) { cur[2]=parsed[1]; optIdx=3; }
+                    if (!parsed[2].isEmpty()) { cur[3]=parsed[2]; optIdx=4; }
+                    if (!parsed[3].isEmpty()) { cur[4]=parsed[3]; optIdx=5; }
+                    if (!parsed[4].isEmpty()) { cur[5]=parsed[4]; optIdx=6; }
+                    if (!parsed[5].isEmpty())   cur[6]=parsed[5];
+                    inQ = false;
+                }
                 continue;
             }
             if (cur == null) continue;
 
-            Matcher om_bn = pOptBengali.matcher(line);
-            Matcher om_la = pOptLatin.matcher(line);
-            String optText = null;
-            if (om_bn.find())       { optText = om_bn.group(1).trim(); inQ = false; }
-            else if (om_la.find())  { optText = om_la.group(1).trim(); inQ = false; }
+            // ── Option line? ──────────────────────────────────────────────────
+            // FIX 4: multiple options on one line?
+            Matcher mmo = pMultiOpt.matcher(line);
+            int moCount = 0;
+            while (mmo.find()) moCount++;
 
-            if (optText != null && optIdx <= 4) {
+            if (moCount >= 2) {
+                // FIX 4: split inline opts
+                String[] parsed = splitInlineOpts(line, pOptBn, pAnswer, pTrailing);
+                // parsed[0] ignored (no question prefix here)
+                if (!parsed[1].isEmpty() && optIdx <= 5) { cur[optIdx]=parsed[1]; optIdx++; }
+                if (!parsed[2].isEmpty() && optIdx <= 5) { cur[optIdx]=parsed[2]; optIdx++; }
+                if (!parsed[3].isEmpty() && optIdx <= 5) { cur[optIdx]=parsed[3]; optIdx++; }
+                if (!parsed[4].isEmpty() && optIdx <= 5) { cur[optIdx]=parsed[4]; optIdx++; }
+                if (!parsed[5].isEmpty() && ((String)cur[6]).isEmpty()) cur[6]=parsed[5];
+                inQ = false;
+                continue;
+            }
+
+            Matcher om_bn = pOptBn.matcher(line);
+            Matcher om_la = pOptLa.matcher(line);
+            String optText = null;
+            if (om_bn.find()) {
+                // FIX 5: strip answer hint from option text
+                optText = cleanOptText(om_bn.group(2).trim(), pAnswer, pTrailing);
+                inQ = false;
+            } else if (om_la.find()) {
+                optText = cleanOptText(om_la.group(2).trim(), pAnswer, pTrailing);
+                inQ = false;
+            }
+
+            if (optText != null && optIdx <= 5) {
                 cur[optIdx] = optText;
                 optIdx++;
-                continue;
             }
 
-            // উত্তর hint
+            // ── Answer hint? ──────────────────────────────────────────────────
             Matcher am = pAnswer.matcher(line);
-            if (am.find()) {
-                String letter = am.group(1);
-                int ai = letterToIndex(letter);
-                if (ai >= 1 && ai <= 4 && !cur[ai].isEmpty())
-                    cur[5] = cur[ai];
+            if (am.find() && ((String)cur[6]).isEmpty()) {
+                int ai = letterToIndex(am.group(1)) + 1; // +1 because cur[2]=opt1
+                if (ai >= 2 && ai <= 5 && !((String)cur[ai]).isEmpty())
+                    cur[6] = cur[ai];
                 continue;
             }
 
-            // multi-line প্রশ্ন: option শুরু না হলে প্রশ্নের অংশ
-            if (inQ && optIdx == 1) {
-                cur[0] = cur[0] + " " + line;
+            // FIX 3: trailing bare answer letter (no "উ." prefix)
+            if (optText == null) {
+                Matcher ta = pTrailing.matcher(line);
+                if (ta.find() && ((String)cur[6]).isEmpty()) {
+                    int ai = letterToIndex(ta.group(1)) + 1;
+                    if (ai >= 2 && ai <= 5 && !((String)cur[ai]).isEmpty())
+                        cur[6] = cur[ai];
+                    continue;
+                }
+            }
+
+            // multi-line question continuation
+            if (inQ && optIdx == 2) {
+                cur[1] = cur[1] + " " + line;
             }
         }
         if (cur != null) questions.add(cur);
-
         if (questions.isEmpty()) return "";
 
+        // FIX 6: sort by question number
+        Collections.sort(questions, (a, b2) ->
+            Integer.compare((Integer)a[0], (Integer)b2[0]));
+
         StringBuilder sb = new StringBuilder();
-        for (String[] q : questions) {
-            sb.append(esc(q[0])).append(';')
-              .append(esc(q[1])).append(';')
-              .append(esc(q[2])).append(';')
-              .append(esc(q[3])).append(';')
-              .append(esc(q[4])).append(';')
-              .append(esc(q[5])).append('\n');
+        for (Object[] q : questions) {
+            sb.append(esc((String)q[1])).append(';')
+              .append(esc((String)q[2])).append(';')
+              .append(esc((String)q[3])).append(';')
+              .append(esc((String)q[4])).append(';')
+              .append(esc((String)q[5])).append(';')
+              .append(esc((String)q[6])).append('\n');
         }
         return sb.toString().trim();
     }
 
-    // বাংলা সংখ্যা → Latin digit  (শুধু question number match-এর জন্য)
+    // ─── FIX 4 helper: split "ক, x খ. y গ, z ঘ, w উ. গ" ─────────────────────
+    // Returns String[6]: [cleanPrefix, opt1, opt2, opt3, opt4, answer]
+    private String[] splitInlineOpts(String line, Pattern pOptBn,
+                                     Pattern pAnswer, Pattern pTrailing) {
+        String[] result = {"", "", "", "", "", ""};
+
+        // Find all ক/খ/গ/ঘ markers with their positions
+        Pattern markerPat = Pattern.compile("[ক-ঘ][,.)।]\\s*");
+        Matcher mm = markerPat.matcher(line);
+
+        List<Integer> starts = new ArrayList<>();
+        List<Character> letters = new ArrayList<>();
+        while (mm.find()) {
+            starts.add(mm.start());
+            letters.add(line.charAt(mm.start()));
+        }
+        if (starts.isEmpty()) return result;
+
+        // text before first marker = question remainder / prefix
+        result[0] = line.substring(0, starts.get(0)).trim();
+
+        for (int i = 0; i < starts.size(); i++) {
+            int textStart = starts.get(i);
+            // skip past the marker itself (letter + separator + spaces)
+            Matcher skip = Pattern.compile("[ক-ঘ][,.)।]\\s*").matcher(line.substring(textStart));
+            int after = textStart;
+            if (skip.find()) after = textStart + skip.end();
+
+            int textEnd = (i + 1 < starts.size()) ? starts.get(i + 1) : line.length();
+            String optText = line.substring(after, textEnd).trim();
+
+            // FIX 5: strip answer hint from option text
+            optText = pAnswer.matcher(optText).replaceAll("").trim();
+            optText = pTrailing.matcher(optText).replaceAll("").trim();
+
+            // map ক→slot1, খ→slot2, গ→slot3, ঘ→slot4
+            char letter = letters.get(i);
+            int slot = letter == 'ক' ? 1 : letter == 'খ' ? 2 :
+                       letter == 'গ' ? 3 : letter == 'ঘ' ? 4 : 0;
+            if (slot >= 1 && slot <= 4) result[slot] = optText;
+        }
+
+        // Extract answer from full line
+        Matcher am = pAnswer.matcher(line);
+        if (am.find()) {
+            int ai = letterToIndex(am.group(1));
+            if (ai >= 0 && ai <= 3 && !result[ai + 1].isEmpty())
+                result[5] = result[ai + 1];
+        } else {
+            // FIX 3: trailing bare letter
+            Matcher ta = pTrailing.matcher(result[4].isEmpty() ? line : result[4]);
+            if (ta.find()) {
+                int ai = letterToIndex(ta.group(1));
+                if (ai >= 0 && ai <= 3 && !result[ai + 1].isEmpty())
+                    result[5] = result[ai + 1];
+            }
+        }
+        return result;
+    }
+
+    // FIX 5: strip "উ. ক" / trailing bare letter from option text
+    private String cleanOptText(String text, Pattern pAnswer, Pattern pTrailing) {
+        String cleaned = pAnswer.matcher(text).replaceAll("").trim();
+        cleaned = pTrailing.matcher(cleaned).replaceAll("").trim();
+        return cleaned;
+    }
+
+    // বাংলা সংখ্যা → Latin digit
     private String toBnDigitNorm(String s) {
         return s
             .replace('০','0').replace('১','1').replace('২','2')
@@ -311,20 +444,19 @@ public class OcrPlugin extends Plugin {
             .replace('৯','9');
     }
 
-    // ক→1, খ→2, গ→3, ঘ→4, a/A→1 ...
+    // ক→0, খ→1, গ→2, ঘ→3  (0-based)
     private int letterToIndex(String l) {
         switch (l) {
-            case "ক": case "a": case "A": return 1;
-            case "খ": case "b": case "B": return 2;
-            case "গ": case "c": case "C": return 3;
-            case "ঘ": case "d": case "D": return 4;
+            case "ক": case "a": case "A": return 0;
+            case "খ": case "b": case "B": return 1;
+            case "গ": case "c": case "C": return 2;
+            case "ঘ": case "d": case "D": return 3;
         }
         return -1;
     }
 
-    // semicolon escape
     private String esc(String s) {
-        return s == null ? "" : s.replace(";", "|");
+        return s == null ? "" : s.replace(";", "|").trim();
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -340,9 +472,9 @@ public class OcrPlugin extends Plugin {
     private Bitmap enhance(Bitmap src) {
         Bitmap out = Bitmap.createBitmap(src.getWidth(), src.getHeight(),
                                           Bitmap.Config.ARGB_8888);
-        Paint p = new Paint(Paint.ANTI_ALIAS_FLAG);
+        Paint p  = new Paint(Paint.ANTI_ALIAS_FLAG);
         ColorMatrix cm = new ColorMatrix();
-        cm.setSaturation(0f);           // grayscale
+        cm.setSaturation(0f);
         cm.postConcat(new ColorMatrix(new float[]{
             1.8f, 0, 0, 0, -60f,
             0, 1.8f, 0, 0, -60f,
