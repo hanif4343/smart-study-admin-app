@@ -94,7 +94,7 @@ os.makedirs(pkg_dir, exist_ok=True)
 
 files_to_copy = [
     "OcrPlugin.kt",
-    "MainActivity.kt",
+    "MainActivity.java",
     "BackgroundSyncService.kt",
     "BgSyncPlugin.kt",
     "FcmTokenPlugin.kt",
@@ -190,12 +190,12 @@ if os.path.exists(gradle_app):
     else:
         print("ℹ️  capacitor-camera already in app/build.gradle")
 
-# ── 6. Remove Capacitor's auto-generated MainActivity.java ───────────────────
-# cap sync generates a default MainActivity.java which takes priority over
-# our MainActivity.kt during compilation, causing registerPlugin() to never run.
-main_java = "android/app/src/main/java/com/smartstudy/admin/MainActivity.java"
-if os.path.exists(main_java):
-    os.remove(main_java)
-    print("✅ Removed auto-generated MainActivity.java (our .kt will be used)")
+# ── 6. Remove MainActivity.kt to avoid Kotlin compile conflict ───────────────
+# We now use MainActivity.java (Java-based, compatible with Capacitor 5 default project)
+# Remove .kt if it somehow got copied
+main_kt = "android/app/src/main/java/com/smartstudy/admin/MainActivity.kt"
+if os.path.exists(main_kt):
+    os.remove(main_kt)
+    print("✅ Removed MainActivity.kt (using MainActivity.java instead)")
 else:
-    print("ℹ️  MainActivity.java not found (already clean)")
+    print("ℹ️  MainActivity.kt not present (clean)")
