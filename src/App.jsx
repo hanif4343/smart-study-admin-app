@@ -2220,14 +2220,23 @@ function AIImportPage({push,onSendToBulk}){
 
   /* ── Capacitor Camera plugin ── */
 
+  // Capacitor 5 এ Camera plugin নানা নামে আসতে পারে।
+  // সব possible name try করি, না পেলে available plugins log করি।
+  const _getCamera=()=>{
+    const P=window.Capacitor?.Plugins||{};
+    const cam=P.Camera||P.CameraPlugin||P["@capacitor/camera"]||null;
+    if(!cam){
+      const available=Object.keys(P).join(", ")||"(none)";
+      _LC.error("camera",`Camera plugin not found. Available plugins: ${available}`);
+    }
+    return cam;
+  };
+
   // Permission helper — Android 13+ needs READ_MEDIA_IMAGES
   const _ensureMediaPermission=async()=>{
     try{
-      const {Permissions}=window.Capacitor?.Plugins||{};
-      if(!Permissions) return true; // web — skip
-      // Check camera permission (covers READ_MEDIA_IMAGES via Capacitor Camera plugin)
-      const {Camera}=window.Capacitor?.Plugins||{};
-      if(!Camera) return true;
+      const Camera=_getCamera();
+      if(!Camera) return true; // plugin নেই, proceed করি permission ছাড়া
       const perm=await Camera.checkPermissions();
       if(perm?.photos==="granted"||perm?.photos==="limited") return true;
       const req=await Camera.requestPermissions({permissions:["photos","camera"]});
@@ -2245,10 +2254,9 @@ function AIImportPage({push,onSendToBulk}){
 
   const pickGallery=async()=>{
     try{
-      const {Camera}=window.Capacitor?.Plugins||{};
+      const Camera=_getCamera();
       if(!Camera){
-        _LC.error("gallery","Camera plugin missing — OcrPlugin not injected or APK not rebuilt");
-        push("warn","Camera plugin নেই","APK rebuild করুন");
+        push("warn","Camera plugin নেই","Logcat দেখুন — available plugins log করা হয়েছে");
         return;
       }
       const allowed=await _ensureMediaPermission();
@@ -2268,8 +2276,8 @@ function AIImportPage({push,onSendToBulk}){
 
   const openCamera=async()=>{
     try{
-      const {Camera}=window.Capacitor?.Plugins||{};
-      if(!Camera){push("warn","Camera plugin নেই","APK rebuild করুন");return;}
+      const Camera=_getCamera();
+      if(!Camera){push("warn","Camera plugin নেই","Logcat দেখুন");return;}
       const allowed=await _ensureMediaPermission();
       if(!allowed) return;
       const res=await Camera.getPhoto({quality:90,resultType:"base64",source:"CAMERA"});
@@ -2321,9 +2329,8 @@ function AIImportPage({push,onSendToBulk}){
   const runOcrOnBase64=async(b64)=>{
     const {OcrPlugin}=window.Capacitor?.Plugins||{};
     if(!OcrPlugin){
-      _LC.crash("OcrPlugin","OcrPlugin missing from Capacitor.Plugins — MLKit inject failed or APK not rebuilt",{
-        availablePlugins: Object.keys(window.Capacitor?.Plugins||{}).join(",")
-      });
+      const available=Object.keys(window.Capacitor?.Plugins||{}).join(", ")||"(none)";
+      _LC.crash("OcrPlugin",`OcrPlugin missing. Available: ${available}`,{available});
       throw new Error("OcrPlugin নেই — APK rebuild করুন");
     }
     try{
