@@ -61,7 +61,14 @@ jobs:
           echo "✅ google-services.json decoded and is valid JSON"
 
       - name: Final Capacitor Sync (Camera + other @capacitor/* plugins)
-        run: npx cap sync android
+        run: |
+          npx cap sync android
+          echo "── settings.gradle ──"
+          cat android/settings.gradle
+          echo "── app/build.gradle dependencies ──"
+          grep -A 30 "^dependencies" android/app/build.gradle | head -40
+          echo "── capacitor.plugins.json ──"
+          cat android/app/src/main/assets/capacitor.plugins.json
 
       - name: Inject Custom Plugins + Permissions (MLKit OCR + Background Sync)
         run: |
