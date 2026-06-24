@@ -1,4 +1,4 @@
-import re, sys, os, shutil
+import re, sys, os, shutil, json
 
 # ── 1. build.gradle — MLKit + FCM deps ──
 gradle_path = "android/app/build.gradle"
@@ -111,3 +111,46 @@ for f in files_to_copy:
         print(f"❌ MISSING: {src}")
 
 print("\nAll done!")
+
+# ── 4. capacitor.plugins.json — custom plugin registration ──────────────────
+# Capacitor-এর JS bridge শুধু capacitor.plugins.json-এ listed plugin-ই
+# window.Capacitor.Plugins.* এ expose করে।
+# Local native plugin (npm package নয়) manually এখানে add করতে হয়।
+plugins_json_path = "android/app/src/main/assets/capacitor.plugins.json"
+
+custom_plugins = [
+    {
+        "pkg":         "com.smartstudy.admin",
+        "classpath":   "com.smartstudy.admin.OcrPlugin"
+    },
+    {
+        "pkg":         "com.smartstudy.admin",
+        "classpath":   "com.smartstudy.admin.BgSyncPlugin"
+    },
+    {
+        "pkg":         "com.smartstudy.admin",
+        "classpath":   "com.smartstudy.admin.FcmTokenPlugin"
+    },
+]
+
+if os.path.exists(plugins_json_path):
+    try:
+        existing = json.loads(open(plugins_json_path).read())
+        if not isinstance(existing, list):
+            existing = []
+    except Exception:
+        existing = []
+else:
+    existing = []
+    os.makedirs(os.path.dirname(plugins_json_path), exist_ok=True)
+
+# আগে যা ছিল তাতে আমাদের plugin add করি (duplicate skip)
+existing_classpaths = {p.get("classpath","") for p in existing}
+added = 0
+for cp in custom_plugins:
+    if cp["classpath"] not in existing_classpaths:
+        existing.append(cp)
+        added += 1
+
+open(plugins_json_path, "w").write(json.dumps(existing, indent=2))
+print(f"✅ capacitor.plugins.json updated — {added} custom plugin(s) added ({plugins_json_path})")
