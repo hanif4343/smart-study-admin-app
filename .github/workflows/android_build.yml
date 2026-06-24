@@ -77,6 +77,14 @@ jobs:
           python3 android-src/add_mlkit.py
           echo "── capacitor.plugins.json after inject ──"
           cat android/app/src/main/assets/capacitor.plugins.json
+          echo "── MainActivity.kt content check ──"
+          grep "registerPlugin\|CameraPlugin\|import com.capacitorjs" "$PKG_DIR/MainActivity.kt" || echo "❌ MainActivity.kt missing or registerPlugin not found"
+          echo "── All .kt files in pkg dir ──"
+          ls -la "$PKG_DIR/"
+          echo "── settings.gradle camera check ──"
+          grep -i "camera" android/settings.gradle || echo "camera NOT in settings.gradle"
+          echo "── app/build.gradle camera check ──"
+          grep -i "camera" android/app/build.gradle || echo "camera NOT in app/build.gradle"
 
       - name: Cache Gradle
         uses: actions/cache@v4
