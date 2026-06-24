@@ -99,6 +99,7 @@ files_to_copy = [
     "BgSyncPlugin.kt",
     "FcmTokenPlugin.kt",
     "AdminMessagingService.kt",
+    "AdminPushPlugin.kt",
 ]
 
 for f in files_to_copy:
@@ -130,6 +131,10 @@ custom_plugins = [
     {
         "pkg":         "com.smartstudy.admin",
         "classpath":   "com.smartstudy.admin.FcmTokenPlugin"
+    },
+    {
+        "pkg":         "com.smartstudy.admin",
+        "classpath":   "com.smartstudy.admin.AdminPushPlugin"
     },
 ]
 
