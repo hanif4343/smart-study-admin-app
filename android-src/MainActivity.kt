@@ -9,6 +9,7 @@ import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
 import com.getcapacitor.BridgeActivity
+import com.capacitorjs.plugins.camera.CameraPlugin
 
 class MainActivity : BridgeActivity() {
     private var backPressedOnce = false
@@ -22,6 +23,7 @@ class MainActivity : BridgeActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        registerPlugin(CameraPlugin::class.java)
         registerPlugin(OcrPlugin::class.java)
         registerPlugin(BgSyncPlugin::class.java)
         registerPlugin(FcmTokenPlugin::class.java)
