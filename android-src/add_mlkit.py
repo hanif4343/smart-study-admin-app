@@ -189,3 +189,13 @@ if os.path.exists(gradle_app):
         print("✅ capacitor-camera implementation added to app/build.gradle")
     else:
         print("ℹ️  capacitor-camera already in app/build.gradle")
+
+# ── 6. Remove Capacitor's auto-generated MainActivity.java ───────────────────
+# cap sync generates a default MainActivity.java which takes priority over
+# our MainActivity.kt during compilation, causing registerPlugin() to never run.
+main_java = "android/app/src/main/java/com/smartstudy/admin/MainActivity.java"
+if os.path.exists(main_java):
+    os.remove(main_java)
+    print("✅ Removed auto-generated MainActivity.java (our .kt will be used)")
+else:
+    print("ℹ️  MainActivity.java not found (already clean)")
