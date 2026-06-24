@@ -1,29 +1,22 @@
 import re, sys, os, shutil, json
 
-# ── 0. Add Kotlin plugin to app/build.gradle ─────────────────────────────────
-# Capacitor 5 default project is Java-only. We need Kotlin to compile *.kt plugins.
+# ── 0. Kotlin plugin থেকে সরানো — এখন সব .java ──────────────────────────────
+# Capacitor 5 default project Java-only।
+# আমাদের সব plugin .java-তে rewrite করা হয়েছে।
+# তাই Kotlin plugin আর দরকার নেই।
 gradle_path = "android/app/build.gradle"
 txt0 = open(gradle_path).read()
-if "kotlin-android" not in txt0 and "org.jetbrains.kotlin.android" not in txt0:
-    # Add kotlin plugin inside plugins {} block
-    txt0 = re.sub(
-        r'(plugins\s*\{)',
-        r'\1\n    id "org.jetbrains.kotlin.android" version "1.9.0" apply true',
-        txt0, count=1
-    )
-    # Add kotlin-stdlib dependency
-    txt0 = re.sub(
-        r'(dependencies\s*\{)',
-        r'\1\n    implementation "org.jetbrains.kotlin:kotlin-stdlib:1.9.0"',
-        txt0, count=1
-    )
+if "kotlin-android" in txt0 or "org.jetbrains.kotlin.android" in txt0:
+    print("ℹ️  Kotlin plugin detected in build.gradle — removing (we use pure Java now)")
+    txt0 = re.sub(r'\n?\s*id\s*["\']org\.jetbrains\.kotlin\.android["\'][^\n]*\n?', '\n', txt0)
+    txt0 = re.sub(r'\n?\s*id\s*["\']kotlin-android["\'][^\n]*\n?', '\n', txt0)
+    txt0 = re.sub(r'\n?\s*implementation\s*["\']org\.jetbrains\.kotlin:kotlin-stdlib[^"\']*["\'][^\n]*\n?', '\n', txt0)
     open(gradle_path, "w").write(txt0)
-    print("✅ Kotlin plugin added to app/build.gradle")
+    print("✅ Kotlin references removed from app/build.gradle")
 else:
-    print("ℹ️  Kotlin plugin already present")
+    print("ℹ️  No Kotlin plugin in build.gradle (clean)")
 
-# ── 1. build.gradle — MLKit + FCM deps ──
-gradle_path = "android/app/build.gradle"
+# ── 1. build.gradle — MLKit + FCM deps ───────────────────────────────────────
 txt = open(gradle_path).read()
 
 mlkit_deps = (
@@ -45,34 +38,38 @@ if "google-services" not in txt2:
     txt2 = txt2.replace("plugins {", "plugins {\n    " + gms_line, 1)
     open(gradle_path, "w").write(txt2)
     print("✅ google-services plugin added to app/build.gradle")
+else:
+    print("ℹ️  google-services already present")
 
 # Add FCM dependency if missing
 txt3 = open(gradle_path).read()
 if "firebase-messaging" not in txt3:
     fcm_dep = (
         '\n    implementation(platform("com.google.firebase:firebase-bom:32.7.0"))'
-        '\n    implementation("com.google.firebase:firebase-messaging-ktx")'
+        '\n    implementation("com.google.firebase:firebase-messaging")'
     )
     txt3 = re.sub(r'(dependencies\s*\{)', r'\1' + fcm_dep, txt3, count=1)
     open(gradle_path, "w").write(txt3)
     print("✅ Firebase Messaging dep added")
+else:
+    print("ℹ️  Firebase Messaging already present")
 
-# ── 2. AndroidManifest.xml — permissions + services ──
+# ── 2. AndroidManifest.xml — permissions + services ──────────────────────────
 manifest_path = "android/app/src/main/AndroidManifest.xml"
 manifest = open(manifest_path).read()
 
-permissions_to_add = []
 perm_map = {
-    "READ_MEDIA_IMAGES":         '    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />',
-    "READ_EXTERNAL_STORAGE":     '    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
-    "CAMERA":                    '    <uses-permission android:name="android.permission.CAMERA" />',
-    "WRITE_EXTERNAL_STORAGE":    '    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />',
-    "READ_MEDIA_VIDEO":          '    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />',
-    "FOREGROUND_SERVICE\"":      '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />',
-    "FOREGROUND_SERVICE_DATA":   '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />',
-    "WAKE_LOCK":                 '    <uses-permission android:name="android.permission.WAKE_LOCK" />',
-    "RECEIVE_BOOT_COMPLETED":    '    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />',
+    "READ_MEDIA_IMAGES":       '    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />',
+    "READ_EXTERNAL_STORAGE":   '    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
+    "CAMERA":                  '    <uses-permission android:name="android.permission.CAMERA" />',
+    "WRITE_EXTERNAL_STORAGE":  '    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />',
+    "READ_MEDIA_VIDEO":        '    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />',
+    'FOREGROUND_SERVICE"':     '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />',
+    "FOREGROUND_SERVICE_DATA": '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />',
+    "WAKE_LOCK":               '    <uses-permission android:name="android.permission.WAKE_LOCK" />',
+    "RECEIVE_BOOT_COMPLETED":  '    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />',
 }
+permissions_to_add = []
 for key, decl in perm_map.items():
     if key not in manifest:
         permissions_to_add.append(decl)
@@ -81,8 +78,9 @@ if permissions_to_add:
     perm_block = "\n".join(permissions_to_add) + "\n"
     manifest = re.sub(r'(<manifest[^>]*>)', r'\1\n' + perm_block, manifest, count=1)
     print(f"✅ Added {len(permissions_to_add)} permission(s)")
+else:
+    print("ℹ️  All permissions already present")
 
-# Services to inject
 services = {
     "BackgroundSyncService": (
         '\n        <service'
@@ -110,18 +108,19 @@ for svc_name, decl in services.items():
 
 open(manifest_path, "w").write(manifest)
 
-# ── 3. Copy Kotlin source files ──
+# ── 3. Copy Java source files (Kotlin .kt ফাইল SKIP করি) ────────────────────
 pkg_dir = "android/app/src/main/java/com/smartstudy/admin"
 os.makedirs(pkg_dir, exist_ok=True)
 
+# সব plugin এখন .java — Kotlin নেই
 files_to_copy = [
-    "OcrPlugin.kt",
+    "OcrPlugin.java",
+    "BgSyncPlugin.java",
+    "FcmTokenPlugin.java",
+    "AdminPushPlugin.java",
+    "AdminMessagingService.java",
+    "BackgroundSyncService.java",
     "MainActivity.java",
-    "BackgroundSyncService.kt",
-    "BgSyncPlugin.kt",
-    "FcmTokenPlugin.kt",
-    "AdminMessagingService.kt",
-    "AdminPushPlugin.kt",
 ]
 
 for f in files_to_copy:
@@ -129,35 +128,29 @@ for f in files_to_copy:
     dst = os.path.join(pkg_dir, f)
     if os.path.exists(src):
         shutil.copy2(src, dst)
-        print(f"✅ {f} copied")
+        print(f"✅ {f} copied → {dst}")
     else:
         print(f"❌ MISSING: {src}")
 
-print("\nAll done!")
+# ── 4. Remove all .kt files from pkg_dir (compile conflict এড়াতে) ────────────
+kt_removed = 0
+for fname in os.listdir(pkg_dir):
+    if fname.endswith(".kt"):
+        kt_path = os.path.join(pkg_dir, fname)
+        os.remove(kt_path)
+        print(f"✅ Removed stale .kt: {fname}")
+        kt_removed += 1
+if kt_removed == 0:
+    print("ℹ️  No .kt files to remove")
 
-# ── 4. capacitor.plugins.json — custom plugin registration ──────────────────
-# Capacitor-এর JS bridge শুধু capacitor.plugins.json-এ listed plugin-ই
-# window.Capacitor.Plugins.* এ expose করে।
-# Local native plugin (npm package নয়) manually এখানে add করতে হয়।
+# ── 5. capacitor.plugins.json — custom plugin registration ───────────────────
 plugins_json_path = "android/app/src/main/assets/capacitor.plugins.json"
 
 custom_plugins = [
-    {
-        "pkg":         "com.smartstudy.admin",
-        "classpath":   "com.smartstudy.admin.OcrPlugin"
-    },
-    {
-        "pkg":         "com.smartstudy.admin",
-        "classpath":   "com.smartstudy.admin.BgSyncPlugin"
-    },
-    {
-        "pkg":         "com.smartstudy.admin",
-        "classpath":   "com.smartstudy.admin.FcmTokenPlugin"
-    },
-    {
-        "pkg":         "com.smartstudy.admin",
-        "classpath":   "com.smartstudy.admin.AdminPushPlugin"
-    },
+    { "pkg": "com.smartstudy.admin", "classpath": "com.smartstudy.admin.OcrPlugin"      },
+    { "pkg": "com.smartstudy.admin", "classpath": "com.smartstudy.admin.BgSyncPlugin"   },
+    { "pkg": "com.smartstudy.admin", "classpath": "com.smartstudy.admin.FcmTokenPlugin" },
+    { "pkg": "com.smartstudy.admin", "classpath": "com.smartstudy.admin.AdminPushPlugin"},
 ]
 
 if os.path.exists(plugins_json_path):
@@ -171,8 +164,7 @@ else:
     existing = []
     os.makedirs(os.path.dirname(plugins_json_path), exist_ok=True)
 
-# আগে যা ছিল তাতে আমাদের plugin add করি (duplicate skip)
-existing_classpaths = {p.get("classpath","") for p in existing}
+existing_classpaths = {p.get("classpath", "") for p in existing}
 added = 0
 for cp in custom_plugins:
     if cp["classpath"] not in existing_classpaths:
@@ -180,11 +172,9 @@ for cp in custom_plugins:
         added += 1
 
 open(plugins_json_path, "w").write(json.dumps(existing, indent=2))
-print(f"✅ capacitor.plugins.json updated — {added} custom plugin(s) added ({plugins_json_path})")
+print(f"✅ capacitor.plugins.json updated — {added} custom plugin(s) added")
 
-# ── 5. Ensure Camera plugin Gradle project is included ───────────────────────
-# cap sync normally adds capacitor-camera to settings.gradle and app/build.gradle
-# But if it didn't, we force-add it here.
+# ── 6. capacitor-camera — settings.gradle + app/build.gradle ─────────────────
 settings_path = "android/settings.gradle"
 if os.path.exists(settings_path):
     settings = open(settings_path).read()
@@ -200,7 +190,6 @@ if os.path.exists(settings_path):
     else:
         print("ℹ️  capacitor-camera already in settings.gradle")
 
-# Ensure app/build.gradle has capacitor-camera implementation
 gradle_app = "android/app/build.gradle"
 if os.path.exists(gradle_app):
     g = open(gradle_app).read()
@@ -212,12 +201,5 @@ if os.path.exists(gradle_app):
     else:
         print("ℹ️  capacitor-camera already in app/build.gradle")
 
-# ── 6. Remove MainActivity.kt to avoid Kotlin compile conflict ───────────────
-# We now use MainActivity.java (Java-based, compatible with Capacitor 5 default project)
-# Remove .kt if it somehow got copied
-main_kt = "android/app/src/main/java/com/smartstudy/admin/MainActivity.kt"
-if os.path.exists(main_kt):
-    os.remove(main_kt)
-    print("✅ Removed MainActivity.kt (using MainActivity.java instead)")
-else:
-    print("ℹ️  MainActivity.kt not present (clean)")
+print("\n✅ All done! এখন Android Studio তে Sync & Build করুন।")
+print("   বা: cd android && ./gradlew assembleDebug")
