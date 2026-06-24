@@ -14,13 +14,14 @@ import com.capacitorjs.plugins.camera.CameraPlugin;
 public class MainActivity extends BridgeActivity {
     private boolean backPressedOnce = false;
 
-    private BroadcastReceiver tokenReceiver = new BroadcastReceiver() {
+    private final BroadcastReceiver tokenReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context ctx, Intent intent) {
             String token = intent.getStringExtra("token");
             if (token == null) return;
             if (getBridge() != null)
-                getBridge().triggerWindowJSEvent("fcmTokenRefresh", "{\"token\":\"" + token + "\"}");
+                getBridge().triggerWindowJSEvent("fcmTokenRefresh",
+                    "{\"token\":\"" + token + "\"}");
         }
     };
 
@@ -60,20 +61,18 @@ public class MainActivity extends BridgeActivity {
         if (page == null || page.isEmpty()) return;
         new Handler(Looper.getMainLooper()).postDelayed(() -> {
             if (getBridge() != null)
-                getBridge().triggerWindowJSEvent("adminNavTo", "{\"page\":\"" + page + "\"}");
+                getBridge().triggerWindowJSEvent("adminNavTo",
+                    "{\"page\":\"" + page + "\"}");
         }, 800);
     }
 
     @Override
     public void onBackPressed() {
-        Object handled = getBridge() != null ?
-            getBridge().triggerWindowJSEvent("androidBackButton", "{}") : null;
-        if (handled == null || !((Boolean) handled)) {
-            if (backPressedOnce) { super.onBackPressed(); return; }
-            backPressedOnce = true;
-            Toast.makeText(this, "আবার Back চাপুন বন্ধ করতে", Toast.LENGTH_SHORT).show();
-            new Handler(Looper.getMainLooper()).postDelayed(
-                () -> backPressedOnce = false, 2000);
-        }
+        if (getBridge() != null)
+            getBridge().triggerWindowJSEvent("androidBackButton", "{}");
+        if (backPressedOnce) { super.onBackPressed(); return; }
+        backPressedOnce = true;
+        Toast.makeText(this, "আবার Back চাপুন বন্ধ করতে", Toast.LENGTH_SHORT).show();
+        new Handler(Looper.getMainLooper()).postDelayed(() -> backPressedOnce = false, 2000);
     }
 }
