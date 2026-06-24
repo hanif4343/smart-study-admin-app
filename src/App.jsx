@@ -2282,7 +2282,7 @@ function AIImportPage({push,onSendToBulk}){
   };
 
   const removeImg=(id)=>setImages(p=>p.filter(x=>x.id!==id));
-  const clearAll=()=>{setImages([]);setOcrAll("");setCopied(false);};
+  const clearAll=()=>{setImages([]);setOcrAll("");setParsedAll("");setCopied(false);setShowParsed(true);};
 
   /* ── Convert webPath → base64 ── */
   const toBase64=async(img)=>{
@@ -2317,6 +2317,7 @@ function AIImportPage({push,onSendToBulk}){
   };
 
   /* ── ML Kit OCR via native plugin ── */
+  // Returns {raw, parsed} — raw=full text, parsed=semicolon lines (bulk ready)
   const runOcrOnBase64=async(b64)=>{
     const {OcrPlugin}=window.Capacitor?.Plugins||{};
     if(!OcrPlugin){
@@ -2328,9 +2329,10 @@ function AIImportPage({push,onSendToBulk}){
     try{
       _LC.api("OcrPlugin","recognizeText called");
       const res=await OcrPlugin.recognizeText({base64:b64});
-      const text=res.text||"";
-      _LC.log("OcrPlugin",`OCR result: ${text.length} chars`);
-      return text;
+      const raw=res.text||"";
+      const parsed=res.parsed||"";  // semicolon format from Kotlin parser
+      _LC.log("OcrPlugin",`OCR result: ${raw.length} chars, parsed: ${parsed.split("\n").filter(Boolean).length} questions`);
+      return {raw, parsed};
     }catch(e){
       _LC.error("OcrPlugin",`recognizeText failed: ${e.message}`);
       throw e;
@@ -2338,11 +2340,16 @@ function AIImportPage({push,onSendToBulk}){
   };
 
   /* ── Run OCR on all images serially ── */
+  // ocrAll = raw text (দেখার জন্য), parsedAll = semicolon lines (bulk-ready)
+  const[parsedAll,setParsedAll]=useState("");
+  const[showParsed,setShowParsed]=useState(true); // toggle raw/parsed view
+
   const startOcr=async()=>{
     if(!images.length){push("warn","ছবি যোগ করুন","");return;}
     setRunning(true);stopRef.current=false;
-    setOcrAll("");setCopied(false);
-    let combined="";
+    setOcrAll("");setParsedAll("");setCopied(false);setShowParsed(true);
+    let combinedRaw="";
+    let combinedParsed="";
     setProgress({cur:0,total:images.length});
 
     for(let i=0;i<images.length;i++){
@@ -2350,24 +2357,31 @@ function AIImportPage({push,onSendToBulk}){
       setProgress({cur:i+1,total:images.length});
       setImages(p=>p.map((x,j)=>j===i?{...x,status:"running"}:x));
       try{
+        // toBase64 returns string or [left,right] for wide pages
+        // — Column split is now also done in Kotlin (OcrPlugin) for portrait
+        // Here we handle the JS-side landscape split (original behavior kept)
         const b64raw=await toBase64(images[i]);
         const parts=Array.isArray(b64raw)?b64raw:[b64raw];
-        let pageText="";
+        let pageRaw="", pageParsed="";
         for(const b64 of parts){
-          const txt=await runOcrOnBase64(b64);
-          if(txt)pageText+=(pageText?"\n":"")+txt;
+          const {raw,parsed}=await runOcrOnBase64(b64);
+          if(raw)    pageRaw    +=(pageRaw?"\n":"")+raw;
+          if(parsed) pageParsed +=(pageParsed?"\n":"")+parsed;
         }
-        setImages(p=>p.map((x,j)=>j===i?{...x,status:"done",ocrText:pageText}:x));
-        combined+=`--- ছবি ${i+1} ---\n${pageText}\n\n`;
-        setOcrAll(combined);
+        setImages(p=>p.map((x,j)=>j===i?{...x,status:"done",ocrText:pageRaw}:x));
+        combinedRaw    +=`--- ছবি ${i+1} ---\n${pageRaw}\n\n`;
+        combinedParsed +=pageParsed?(pageParsed+"\n"):"";
+        setOcrAll(combinedRaw);
+        setParsedAll(combinedParsed);
       }catch(e){
         setImages(p=>p.map((x,j)=>j===i?{...x,status:"error",ocrText:e.message}:x));
-        combined+=`--- ছবি ${i+1} ERROR: ${e.message} ---\n\n`;
-        setOcrAll(combined);
+        combinedRaw+=`--- ছবি ${i+1} ERROR: ${e.message} ---\n\n`;
+        setOcrAll(combinedRaw);
       }
     }
     setRunning(false);
-    push("success",`✅ OCR সম্পন্ন!`,`${images.length}টি ছবি`);
+    const qCount=combinedParsed.split("\n").filter(l=>l.trim()&&l.includes(";")).length;
+    push("success",`✅ OCR সম্পন্ন!`,`${images.length}টি ছবি — ${qCount}টি প্রশ্ন parse হয়েছে`);
   };
 
   /* ── Copy OCR + Prompt ── */
@@ -2387,9 +2401,16 @@ function AIImportPage({push,onSendToBulk}){
   };
 
   /* ── Send to Bulk ── */
+  // parsed থাকলে সেটাই পাঠাই (semicolon-ready), না থাকলে raw OCR text
   const sendToBulk=()=>{
-    if(!ocrAll.trim()){push("warn","আগে OCR চালান","");return;}
-    onSendToBulk(ocrAll);
+    const toSend=(parsedAll&&parsedAll.trim())?parsedAll:ocrAll;
+    if(!toSend.trim()){push("warn","আগে OCR চালান","");return;}
+    const isParsed=!!(parsedAll&&parsedAll.trim());
+    onSendToBulk(toSend);
+    push("success",
+      isParsed?"✅ Parsed প্রশ্ন Bulk-এ পাঠানো হয়েছে!":"📋 Raw OCR text Bulk-এ পাঠানো হয়েছে",
+      isParsed?"Shuffle করুন → Upload করুন":"Gemini দিয়ে format করুন"
+    );
   };
 
   const pct=progress.total?Math.round(progress.cur/progress.total*100):0;
@@ -2457,15 +2478,49 @@ function AIImportPage({push,onSendToBulk}){
         </div>
       )}
 
-      {/* OCR Result */}
+      {/* OCR Result — Parsed / Raw toggle */}
       {ocrAll&&(
         <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+          {/* Header row */}
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
             <span style={{fontSize:12,fontWeight:800,color:C.text}}>📄 OCR Result</span>
-            <span style={{fontSize:10,color:C.muted}}>{ocrAll.length} chars</span>
+            <div style={{display:"flex",gap:5,alignItems:"center"}}>
+              {parsedAll&&(
+                <div style={{display:"flex",borderRadius:20,overflow:"hidden",border:`1px solid ${C.border}`}}>
+                  <button onClick={()=>setShowParsed(true)} style={{
+                    fontSize:10,padding:"3px 10px",border:"none",cursor:"pointer",fontWeight:700,
+                    background:showParsed?"#10b981":"transparent",
+                    color:showParsed?"#fff":C.muted
+                  }}>✅ Parsed</button>
+                  <button onClick={()=>setShowParsed(false)} style={{
+                    fontSize:10,padding:"3px 10px",border:"none",cursor:"pointer",fontWeight:700,
+                    background:!showParsed?"#6366f1":"transparent",
+                    color:!showParsed?"#fff":C.muted
+                  }}>📝 Raw</button>
+                </div>
+              )}
+              <span style={{fontSize:10,color:C.muted}}>
+                {showParsed&&parsedAll
+                  ? `${parsedAll.split("\n").filter(l=>l.trim()&&l.includes(";")).length} প্রশ্ন`
+                  : `${ocrAll.length} chars`}
+              </span>
+            </div>
           </div>
-          <textarea className="ta" style={{minHeight:120,fontSize:11,fontFamily:"monospace",marginBottom:0}}
-            value={ocrAll} onChange={e=>setOcrAll(e.target.value)}/>
+          {/* Parsed result info bar */}
+          {showParsed&&parsedAll&&(
+            <div style={{fontSize:11,color:"#10b981",fontWeight:700,marginBottom:6,padding:"4px 10px",
+              background:"#052e16",borderRadius:8,border:"1px solid #10b98133"}}>
+              🎯 Auto-parsed! প্রশ্ন + অপশন আলাদা হয়েছে। নিচে দেখুন ও দরকারে edit করুন।
+            </div>
+          )}
+          {showParsed&&parsedAll?(
+            <textarea className="ta" style={{minHeight:120,fontSize:11,fontFamily:"monospace",marginBottom:0,
+              borderColor:"#10b98144"}}
+              value={parsedAll} onChange={e=>setParsedAll(e.target.value)}/>
+          ):(
+            <textarea className="ta" style={{minHeight:120,fontSize:11,fontFamily:"monospace",marginBottom:0}}
+              value={ocrAll} onChange={e=>setOcrAll(e.target.value)}/>
+          )}
         </div>
       )}
 
@@ -2503,7 +2558,7 @@ function AIImportPage({push,onSendToBulk}){
             </div>
             <button className="btn" onClick={sendToBulk}
               style={{background:"#052e16",color:"#10b981",borderColor:"#10b981",justifyContent:"center"}}>
-              📤 STEP 3: Bulk-এ পাঠান (OCR text সরাসরি)
+              {parsedAll?"📤 STEP 3: Parsed প্রশ্ন → Bulk-এ পাঠান":"📤 STEP 3: Raw OCR → Bulk-এ পাঠান"}
             </button>
           </>
         )}
@@ -2629,6 +2684,49 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const handleText=(v)=>{setBulkText(v);runValidate(v,mode,qtype);};
   const handleQtype=(v)=>{setQtype(v);runValidate(bulkText,mode,v);};
   const handleMode=(v)=>{setMode(v);runValidate(bulkText,v,qtype);};
+
+  /* ── Shuffle MCQ Options ──
+     প্রতিটি MCQ লাইনে অপশনগুলো (col 1-4) random করে সাজায়,
+     correct field (col 5) সেই অনুযায়ী আপডেট করে।
+     { } block এবং plain line দুটো format-ই handle করে।
+  */
+  const[shuffleInfo,setShuffleInfo]=useState(null); // {count} — কতটা shuffle হলো
+  const handleShuffle=()=>{
+    if(!bulkText.trim()||getEffectiveType(mode,qtype)!=="MCQ"){return;}
+    const entries=getEntries(bulkText);
+    let shuffled=0;
+    const newLines=entries.map(entry=>{
+      const tr=entry.trim();
+      if(!tr||tr.startsWith("#"))return entry;
+      const flat=tr.replace(/\r?\n/g," ").replace(/\s+/g," ");
+      const parts=flat.split(";").map(p=>p.trim());
+      // MCQ: index 0=প্রশ্ন, 1-4=অপশন, 5=correct, 6=ব্যাখ্যা(optional)
+      if(parts.length<6)return entry;
+      const q=parts[0];
+      const opts=[parts[1],parts[2],parts[3],parts[4]];
+      const correct=parts[5];
+      const expl=parts[6]||"";
+      // Fisher-Yates shuffle
+      for(let i=opts.length-1;i>0;i--){
+        const j=Math.floor(Math.random()*(i+1));
+        [opts[i],opts[j]]=[opts[j],opts[i]];
+      }
+      // correct field = shuffled text-এ যেটা সঠিক (value same থাকে)
+      const newLine=expl
+        ?`${q} ; ${opts[0]} ; ${opts[1]} ; ${opts[2]} ; ${opts[3]} ; ${correct} ; ${expl}`
+        :`${q} ; ${opts[0]} ; ${opts[1]} ; ${opts[2]} ; ${opts[3]} ; ${correct}`;
+      shuffled++;
+      return newLine;
+    });
+    // { } block ছিলে কিনা detect করি
+    const wasBlock=/\{[\s\S]+?\}/.test(bulkText);
+    const result=wasBlock
+      ? newLines.map(l=>`{ ${l} }`).join("\n")
+      : newLines.join("\n");
+    setShuffleInfo({count:shuffled});
+    handleText(result);
+    setTimeout(()=>setShuffleInfo(null),3000);
+  };
 
   /* Audience tag helpers */
   const addTag=()=>{
@@ -2872,7 +2970,27 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
 
       {/* Bulk Textarea */}
       <div className="fld">
-        <label>প্রশ্নগুলো লিখুন / পেস্ট করুন</label>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+          <label style={{marginBottom:0}}>প্রশ্নগুলো লিখুন / পেস্ট করুন</label>
+          {getEffectiveType(mode,qtype)==="MCQ"&&bulkText.trim()&&(
+            <button
+              type="button"
+              onClick={handleShuffle}
+              style={{
+                fontSize:11,fontWeight:800,padding:"4px 12px",borderRadius:20,
+                border:`1px solid #f59e0b`,background:"#1c1004",color:"#f59e0b",
+                cursor:"pointer",display:"flex",alignItems:"center",gap:5,whiteSpace:"nowrap",flexShrink:0
+              }}
+            >
+              🔀 Options Shuffle
+            </button>
+          )}
+        </div>
+        {shuffleInfo&&(
+          <div style={{fontSize:11,color:"#10b981",fontWeight:700,marginBottom:6,padding:"4px 10px",background:"#052e16",borderRadius:8,border:"1px solid #10b98133"}}>
+            ✅ {shuffleInfo.count}টি প্রশ্নের অপশন shuffle হয়েছে!
+          </div>
+        )}
         <textarea className="ta" style={{minHeight:160,fontFamily:"monospace",fontSize:12}} value={bulkText}
           onChange={e=>handleText(e.target.value)}
           placeholder={mode==="Study"
