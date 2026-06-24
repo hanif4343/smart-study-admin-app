@@ -6,7 +6,6 @@ import android.graphics.Canvas
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
-import android.graphics.Rect
 import android.util.Base64
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
@@ -14,7 +13,6 @@ import com.getcapacitor.PluginCall
 import com.getcapacitor.PluginMethod
 import com.getcapacitor.annotation.CapacitorPlugin
 import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
@@ -120,26 +118,20 @@ class OcrPlugin : Plugin() {
     //   - Y position অনুযায়ী row-এ group করি (একই "row" = Y পার্থক্য < lineHeight×0.6)
     //   - প্রতিটি row-এর মধ্যে X অনুযায়ী sort করি (বাম→ডান)
     // এতে বিক্ষিপ্ত blocks সঠিক পড়ার ক্রমে আসে।
-    private fun groupByBoundingBox(result: Text): String {
-        data class LineBlock(val top: Int, val left: Int, val text: String)
+    private fun groupByBoundingBox(result: com.google.mlkit.vision.text.Text): String {
+        data class LineBlock(val top: Int, val left: Int, val height: Int, val text: String)
 
         val blocks = mutableListOf<LineBlock>()
         for (block in result.textBlocks) {
             for (line in block.lines) {
                 val box = line.boundingBox ?: continue
-                blocks.add(LineBlock(box.top, box.left, line.text))
+                blocks.add(LineBlock(box.top, box.left, box.height(), line.text))
             }
         }
         if (blocks.isEmpty()) return ""
 
-        // average line height হিসেব করি — grouping threshold-এ কাজে লাগবে
-        val avgH = blocks.map { b ->
-            result.textBlocks
-                .flatMap { it.lines }
-                .find { it.text == b.text }
-                ?.boundingBox?.height() ?: 30
-        }.average().toInt().coerceAtLeast(20)
-
+        // average line height সরাসরি bounding box থেকে
+        val avgH = blocks.map { it.height }.average().toInt().coerceAtLeast(20)
         val threshold = (avgH * 0.55).toInt()
 
         // Y দিয়ে sort করে row-এ group করি
