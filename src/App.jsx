@@ -4702,7 +4702,6 @@ async function callAiProvider(ocrText){
 }
 
 function ApiSettingsPage({push}){
-  const C=useColors();
   const[providers,setProviders]=React.useState(loadProviders);
   const[editing,setEditing]=React.useState(null);
   const[keyInput,setKeyInput]=React.useState("");
