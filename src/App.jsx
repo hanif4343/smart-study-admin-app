@@ -2339,8 +2339,19 @@ function AIImportPage({push,onSendToBulk}){
       _LC.api("OcrPlugin","recognizeText called");
       const res=await OcrPlugin.recognizeText({base64:b64});
       const raw=res.text||"";
-      const parsed=res.parsed||"";  // semicolon format from Kotlin parser
+      let parsed=res.parsed||"";  // semicolon format from Kotlin parser
       _LC.log("OcrPlugin",`OCR result: ${raw.length} chars, parsed: ${parsed.split("\n").filter(Boolean).length} questions`);
+      // ── Auto AI parse if provider active ─────────────────────────────────
+      try{
+        const aiResult=await callAiProvider(raw);
+        if(aiResult&&aiResult.includes(";")){
+          parsed=aiResult;  // AI parse replaces local parser output
+          _LC.log("OcrPlugin","AI parse success: "+aiResult.split("\n").filter(Boolean).length+" questions");
+        }
+      }catch(aiErr){
+        _LC.warn("OcrPlugin","AI parse skipped ("+aiErr.message+") — using local parser");
+        // fallback: keep local parsed result
+      }
       return {raw, parsed};
     }catch(e){
       _LC.error("OcrPlugin",`recognizeText failed: ${e.message}`);
@@ -4616,7 +4627,209 @@ const NAV=[
       {id:"aiimport", icon:"📸", label:"AI Import"},
     ]
   },
+  {id:"apisettings",icon:"🔑", label:"API Keys"},
 ];
+
+
+/* ══════════════════════════════════════════════════════════════════
+   API SETTINGS  —  OCR auto-parse provider manager
+   localStorage-এ সেভ → rebuild লাগে না, key চেঞ্জ করা যায়
+   ══════════════════════════════════════════════════════════════════ */
+const DEFAULT_PROVIDERS=[
+  {id:"gemini",name:"Google Gemini",icon:"🟢",free:true,
+   model:"gemini-1.5-flash",
+   url:"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=",
+   keyHint:"aistudio.google.com → Get API Key (Gmail, free, no card)",
+   limit:"1500 req/day free"},
+  {id:"mistral",name:"Mistral AI",icon:"🔵",free:true,
+   model:"mistral-small-latest",
+   url:"https://api.mistral.ai/v1/chat/completions",
+   keyHint:"console.mistral.ai → API Keys",
+   limit:"Free tier available"},
+  {id:"openrouter",name:"OpenRouter",icon:"🟣",free:true,
+   model:"mistralai/mistral-7b-instruct:free",
+   url:"https://openrouter.ai/api/v1/chat/completions",
+   keyHint:"openrouter.ai → Keys (free models, no card needed)",
+   limit:"Free models available"},
+];
+const LS_PROV="ocr_api_providers";
+function loadProviders(){
+  try{
+    const s=JSON.parse(localStorage.getItem(LS_PROV)||"{}");
+    return DEFAULT_PROVIDERS.map(p=>({...p,key:s[p.id]?.key||"",active:s[p.id]?.active||false}));
+  }catch{return DEFAULT_PROVIDERS.map(p=>({...p,key:"",active:false}));}
+}
+function saveProviders(providers){
+  const o={};
+  providers.forEach(p=>{o[p.id]={key:p.key,active:p.active};});
+  localStorage.setItem(LS_PROV,JSON.stringify(o));
+}
+function getActiveProvider(){
+  return loadProviders().find(p=>p.active&&p.key)||null;
+}
+const OCR_PROMPT=`তুমি একজন বাংলা MCQ প্রশ্নপত্র formatter।
+নিচের OCR text থেকে সব MCQ প্রশ্ন বের করে নিচের format-এ দাও।
+প্রশ্ন;অপশন১;অপশন২;অপশন৩;অপশন৪;সঠিকউত্তর
+RULES:
+- শুধু formatted data দাও, কোনো label বা explanation নয়
+- Serial number বাদ দাও
+- 2-column হলে প্রশ্ন নম্বর অনুযায়ী sort করো
+- পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
+- উ. ক/খ/গ/ঘ দেখে সঠিক option text দাও (letter নয়)
+- field-এ ; থাকলে | দিয়ে replace করো
+- কোনো প্রশ্ন বাদ দিও না
+=== OCR TEXT ===
+`;
+async function callAiProvider(ocrText){
+  const p=getActiveProvider();
+  if(!p) return null; // no active provider = skip silently
+  const prompt=OCR_PROMPT+ocrText;
+  if(p.id==="gemini"){
+    const res=await fetch(p.url+p.key,{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({contents:[{parts:[{text:prompt}]}]})});
+    if(!res.ok) throw new Error("Gemini HTTP "+res.status);
+    const d=await res.json();
+    return d?.candidates?.[0]?.content?.parts?.[0]?.text?.trim()||null;
+  }
+  const headers={"Content-Type":"application/json","Authorization":"Bearer "+p.key};
+  if(p.id==="openrouter") headers["HTTP-Referer"]="https://smartstudy.admin";
+  const res=await fetch(p.url,{method:"POST",headers,
+    body:JSON.stringify({model:p.model,messages:[{role:"user",content:prompt}],max_tokens:4096})});
+  if(!res.ok) throw new Error(p.name+" HTTP "+res.status);
+  const d=await res.json();
+  return d?.choices?.[0]?.message?.content?.trim()||null;
+}
+
+function ApiSettingsPage({push}){
+  const C=useColors();
+  const[providers,setProviders]=React.useState(loadProviders);
+  const[editing,setEditing]=React.useState(null);
+  const[keyInput,setKeyInput]=React.useState("");
+  const[testing,setTesting]=React.useState(null);
+  const[showKey,setShowKey]=React.useState({});
+  const active=providers.find(p=>p.active&&p.key);
+
+  const doSetActive=(id)=>{
+    const upd=providers.map(p=>({...p,active:p.id===id&&!!p.key}));
+    setProviders(upd);saveProviders(upd);
+    push("success","✅ Active করা হয়েছে!","OCR-এর পর auto parse হবে");
+  };
+  const doSaveKey=(id)=>{
+    const upd=providers.map(p=>p.id===id?{...p,key:keyInput.trim()}:p);
+    setProviders(upd);saveProviders(upd);setEditing(null);setKeyInput("");
+    push("success","✅ Key সেভ হয়েছে!","এখন Active করুন");
+  };
+  const doDelete=(id)=>{
+    const upd=providers.map(p=>p.id===id?{...p,key:"",active:false}:p);
+    setProviders(upd);saveProviders(upd);
+    push("warn","Key মুছে দেওয়া হয়েছে","");
+  };
+  const doTest=async(p)=>{
+    if(!p.key){push("warn","আগে Key দিন","");return;}
+    setTesting(p.id);
+    try{
+      const tmp=[...providers].map(x=>({...x,active:x.id===p.id}));
+      saveProviders(tmp);
+      const r=await callAiProvider("১. বাংলাদেশের রাজধানী কোনটি?\nক. ঢাকা খ. চট্টগ্রাম গ. খুলনা ঘ. রাজশাহী উ. ক");
+      saveProviders(providers);
+      if(r&&r.includes(";")) push("success","✅ "+p.name+" কাজ করছে!",r.substring(0,80));
+      else push("warn","⚠️ Response অদ্ভুত",(r||"empty").substring(0,60));
+    }catch(e){push("error","❌ "+p.name+" ব্যর্থ",e.message);saveProviders(providers);}
+    setTesting(null);
+  };
+
+  return(
+    <div className="page">
+      <div style={{background:"linear-gradient(135deg,#0f172a,#1e3a5f)",borderRadius:14,
+        padding:"14px 16px",marginBottom:14,color:"#fff"}}>
+        <div style={{fontWeight:900,fontSize:16}}>🔑 API Key Settings</div>
+        <div style={{fontSize:11,opacity:.8,marginTop:2}}>OCR-এর পর auto parse — একটাই active থাকবে</div>
+      </div>
+      <div style={{background:active?"#052e16":"#450a0a",borderRadius:10,
+        padding:"10px 14px",marginBottom:12,
+        border:"1px solid "+(active?"#16a34a":"#991b1b")}}>
+        {active
+          ?<span style={{color:"#4ade80",fontWeight:700}}>✅ Active: {active.icon} {active.name} — {active.limit}</span>
+          :<span style={{color:"#f87171",fontWeight:700}}>⚠️ কোনো provider active নেই — নিচে key দিয়ে Active করুন</span>}
+      </div>
+      {providers.map(p=>(
+        <div key={p.id} style={{background:C.card,borderRadius:12,marginBottom:10,
+          border:"2px solid "+(p.active?"#6366f1":C.border),overflow:"hidden"}}>
+          <div style={{padding:"12px 14px",display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>{p.icon}</span>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:800,color:C.text,fontSize:14}}>{p.name}</div>
+              <div style={{fontSize:10,color:C.sub}}>{p.limit}</div>
+            </div>
+            {p.active&&p.key&&<span style={{background:"#4f46e5",color:"#fff",fontSize:10,
+              fontWeight:700,borderRadius:999,padding:"2px 8px"}}>ACTIVE</span>}
+          </div>
+          <div style={{padding:"0 14px 12px"}}>
+            {editing===p.id?(
+              <div>
+                <div style={{fontSize:11,color:C.sub,marginBottom:4}}>{p.keyHint}</div>
+                <input style={{width:"100%",background:C.input,border:"1px solid "+C.border,
+                  borderRadius:8,padding:"8px 10px",color:C.text,fontSize:12,
+                  fontFamily:"monospace",boxSizing:"border-box",marginBottom:6}}
+                  placeholder={p.name+" API Key..."}
+                  value={keyInput} onChange={e=>setKeyInput(e.target.value)} autoFocus/>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>doSaveKey(p.id)} style={{flex:1,background:"#4f46e5",
+                    color:"#fff",border:"none",borderRadius:8,padding:8,fontWeight:700,fontSize:12}}>
+                    💾 Save</button>
+                  <button onClick={()=>{setEditing(null);setKeyInput("");}}
+                    style={{background:C.border,color:C.text,border:"none",borderRadius:8,padding:"8px 12px",fontSize:12}}>
+                    বাতিল</button>
+                </div>
+              </div>
+            ):p.key?(
+              <div>
+                <div style={{background:C.input,borderRadius:8,padding:"7px 10px",
+                  marginBottom:8,display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{flex:1,fontFamily:"monospace",fontSize:11,color:C.sub,wordBreak:"break-all"}}>
+                    {showKey[p.id]?p.key:p.key.substring(0,8)+"••••••••••••"+p.key.slice(-4)}</span>
+                  <button onClick={()=>setShowKey(v=>({...v,[p.id]:!v[p.id]}))}
+                    style={{background:"none",border:"none",color:C.sub,fontSize:14,cursor:"pointer"}}>
+                    {showKey[p.id]?"🙈":"👁️"}</button>
+                </div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {!p.active&&<button onClick={()=>doSetActive(p.id)}
+                    style={{flex:1,background:"#4f46e5",color:"#fff",border:"none",
+                      borderRadius:8,padding:7,fontWeight:700,fontSize:12}}>⚡ Active</button>}
+                  <button onClick={()=>doTest(p)} disabled={!!testing}
+                    style={{flex:1,background:"#065f46",color:"#fff",border:"none",
+                      borderRadius:8,padding:7,fontWeight:700,fontSize:12}}>
+                    {testing===p.id?"⏳...":"🧪 Test"}</button>
+                  <button onClick={()=>{setEditing(p.id);setKeyInput(p.key);}}
+                    style={{background:C.border,color:C.text,border:"none",borderRadius:8,padding:"7px 10px",fontSize:12}}>✏️</button>
+                  <button onClick={()=>doDelete(p.id)}
+                    style={{background:"#450a0a",color:"#f87171",border:"none",borderRadius:8,padding:"7px 10px",fontSize:12}}>🗑️</button>
+                </div>
+              </div>
+            ):(
+              <div>
+                <div style={{fontSize:11,color:C.sub,marginBottom:6}}>{p.keyHint}</div>
+                <button onClick={()=>{setEditing(p.id);setKeyInput("");}}
+                  style={{width:"100%",background:"#1e3a5f",color:"#93c5fd",border:"none",
+                    borderRadius:8,padding:8,fontWeight:700,fontSize:12}}>🔑 Key যোগ করুন</button>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+      <div style={{background:C.card,borderRadius:10,padding:"12px 14px",
+        border:"1px solid "+C.border,fontSize:11,color:C.sub,lineHeight:1.8}}>
+        <div style={{fontWeight:700,color:C.text,marginBottom:4}}>💡 কীভাবে কাজ করে</div>
+        <div>📸 ছবি → MLKit text বের করে → Active provider parse করে</div>
+        <div>✅ শুধু text যায়, image নয় → load নেই, fast</div>
+        <div>🔄 Key চেঞ্জ করলে rebuild লাগে না</div>
+        <div>🔒 Key device-এ localStorage-এ সংরক্ষিত</div>
+        <div>⚡ Provider active না থাকলে local Java parser ব্যবহার হয়</div>
+      </div>
+    </div>
+  );
+}
 
 /* ══════════ LOGIN SCREEN ══════════ */
 function LoginScreen({onLogin}){
@@ -4996,6 +5209,7 @@ export default function App(){
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push} tick={tick}/></div>
       <div style={{display:page==="uploader" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill("")}/></div>
       <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={txt=>{setBulkPrefill(txt);goPage("uploader");}}/></div>
+      <div style={{display:page==="apisettings"?"block":"none"}}><ApiSettingsPage push={push}/></div>
 
       <nav className="bottom-nav">
         {NAV.map(n=>{
