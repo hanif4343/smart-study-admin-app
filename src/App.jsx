@@ -4701,12 +4701,47 @@ async function callAiProvider(ocrText){
   if(!p) return null; // no active provider = skip silently
   const prompt=OCR_PROMPT+ocrText;
   if(p.id==="gemini"){
-    const res=await fetch(p.url+p.key,{method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({contents:[{parts:[{text:prompt}]}]})});
-    if(!res.ok) throw new Error("Gemini HTTP "+res.status);
-    const d=await res.json();
-    return d?.candidates?.[0]?.content?.parts?.[0]?.text?.trim()||null;
+    // Try multiple endpoints — 403 হলে পরেরটা try করে
+    const models=["gemini-2.0-flash","gemini-1.5-flash","gemini-1.5-flash-latest"];
+    const versions=["v1beta","v1"];
+    let lastErr=null;
+    for(const ver of versions){
+      for(const model of models){
+        try{
+          const url=`https://generativelanguage.googleapis.com/${ver}/models/${model}:generateContent`;
+          const res=await fetch(url,{
+            method:"POST",
+            headers:{
+              "Content-Type":"application/json",
+              "x-goog-api-key":p.key,   // header দিয়েও try
+            },
+            body:JSON.stringify({contents:[{parts:[{text:prompt}]}]}),
+          });
+          if(res.status===403){
+            // API key restriction — user কে specific বলি
+            const errBody=await res.json().catch(()=>({}));
+            const reason=errBody?.error?.message||"";
+            if(reason.includes("API_KEY_HTTP_REFERRER_BLOCKED")||reason.includes("referer")){
+              throw new Error("API Key-এ HTTP Referrer restriction আছে → Google Cloud Console → Credentials → Edit Key → Restrictions → None করুন");
+            }
+            if(reason.includes("API not enabled")||reason.includes("has not been used")){
+              throw new Error("Generative Language API enable নেই → console.cloud.google.com → APIs → Generative Language API → Enable");
+            }
+            lastErr=new Error(`403: ${reason||"Permission denied"}`);
+            continue; // try next model/version
+          }
+          if(!res.ok){lastErr=new Error(`HTTP ${res.status}`);continue;}
+          const d=await res.json();
+          const text=d?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+          if(text) return text;
+          lastErr=new Error("Empty response");
+        }catch(e){
+          if(e.message.includes("Console")||e.message.includes("enable")) throw e; // user action needed
+          lastErr=e;
+        }
+      }
+    }
+    throw lastErr||new Error("Gemini সব endpoint ব্যর্থ");
   }
   const headers={"Content-Type":"application/json","Authorization":"Bearer "+p.key};
   if(p.id==="openrouter") headers["HTTP-Referer"]="https://smartstudy.admin";
