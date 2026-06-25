@@ -1343,12 +1343,14 @@ function SignupsPage({push,tick}){
 function StudentsPage({push,tick,pushLayer}){
   const{data:usersRaw,loading}=useFB("Users",tick);
   const[search,setSrc]=useState("");
-  const[tab,setTab]=useState("signups"); // default: signup দেখাবে
+  const[tab,setTab]=useState("active"); // default: running students
   const[detail,setDetail]=useState(null);
   const[notify,setNotify]=useState(null);
   const[editUser,setEditUser]=useState(null);
   const[busy,setBusy]=useState(null);
   const[activating,setActivating]=useState(null);
+  const[deleteTarget,setDeleteTarget]=useState(null);
+  const[deleting,setDeleting]=useState(false);
   const[signupDone,setSignupDone]=useState(new Set());
   const[rejectTarget,setRejectTarget]=useState(null); // pending signup user to reject/delete
   const[rejecting,setRejecting]=useState(false);
@@ -1416,6 +1418,21 @@ function StudentsPage({push,tick,pushLayer}){
     setBusy(null);
   };
 
+  const confirmDelete=async()=>{
+    if(!deleteTarget)return;
+    const u=deleteTarget;
+    const phone=u.Phone||u.phone||"";
+    const fkey=u._fbKey||phoneKey(phone);
+    setDeleting(true);
+    try{
+      await fbDelete(`Users/${fkey}`);
+      push("success","🗑️ ডিলিট হয়েছে",(u.Name||u.name||phone));
+      invalidate("Users");
+      setDeleteTarget(null);
+    }catch(e){push("error","ব্যর্থ",e.message);}
+    setDeleting(false);
+  };
+
   // StudentDetail খুললে layer push
   const openDetail=useCallback((u)=>{
     setDetail(u);
@@ -1427,13 +1444,13 @@ function StudentsPage({push,tick,pushLayer}){
     <div className="page">
       {/* Main Tabs */}
       <div className="ftabs" style={{marginBottom:10}}>
+        <button className={`ftab${tab==="active"?" on":""}`} onClick={()=>setTab("active")}>🟢 Running</button>
+        <button className={`ftab${tab==="all"?" on":""}`} onClick={()=>setTab("all")}>👥 সবাই</button>
+        <button className={`ftab${tab==="inactive"?" on":""}`} onClick={()=>setTab("inactive")}>🔴 ইনঅ্যাক্টিভ</button>
         <button className={`ftab${tab==="signups"?" on":""}`} onClick={()=>setTab("signups")} style={{position:"relative"}}>
           🆕 সাইনআপ
           {signupRows.length>0&&<span style={{position:"absolute",top:-4,right:-4,background:"#ef4444",color:"#fff",fontSize:9,fontWeight:900,borderRadius:999,minWidth:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px"}}>{signupRows.length}</span>}
         </button>
-        <button className={`ftab${tab==="all"?" on":""}`} onClick={()=>setTab("all")}>👥 সবাই</button>
-        <button className={`ftab${tab==="active"?" on":""}`} onClick={()=>setTab("active")}>✅ অ্যাক্টিভ</button>
-        <button className={`ftab${tab==="inactive"?" on":""}`} onClick={()=>setTab("inactive")}>🔴 ইনঅ্যাক্টিভ</button>
       </div>
 
       {/* ── Signups Tab ── */}
@@ -1524,6 +1541,7 @@ function StudentsPage({push,tick,pushLayer}){
               <button className="btn bg" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setNotify(u)}>📣</button>
               <button className="btn" style={{flex:1,justifyContent:"center",fontSize:11,background:"#f59e0b22",color:C.yellow,border:"1px solid #f59e0b44"}} onClick={()=>setEditUser(u)}>✏️</button>
               <button className="btn bp" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>openDetail(u)}>👁</button>
+              <button className="btn" style={{flex:1,justifyContent:"center",fontSize:11,background:"#ef444422",color:C.red,border:`1px solid ${C.red}44`}} onClick={()=>setDeleteTarget(u)}>🗑️</button>
             </div>
           </div>
         );
@@ -1532,6 +1550,15 @@ function StudentsPage({push,tick,pushLayer}){
         </>
       )}
       {notify&&<NotifyModal user={notify} onClose={()=>setNotify(null)} push={push}/>}
+      {deleteTarget&&(
+        <DeleteWarningModal
+          title="Student ডিলিট করবেন?"
+          description={`"${deleteTarget.Name||deleteTarget.name||deleteTarget.Phone||deleteTarget.phone||"এই student"}" কে Firebase থেকে সম্পূর্ণভাবে ডিলিট করা হবে। এটি পূর্বাবস্থায় ফেরানো যাবে না।`}
+          onConfirm={confirmDelete}
+          onCancel={()=>!deleting&&setDeleteTarget(null)}
+          loading={deleting}
+        />
+      )}
       {editUser&&<UserEditModal user={editUser} onClose={()=>setEditUser(null)} onSaved={updated=>{setEditUser(null);invalidate("Users");}} push={push}/>}
     </div>
   );
