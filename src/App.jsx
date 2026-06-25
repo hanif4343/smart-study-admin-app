@@ -2216,6 +2216,7 @@ function AIImportPage({push,onSendToBulk}){
   const[running,setRunning]=useState(false);
   const[progress,setProgress]=useState({cur:0,total:0});
   const[copied,setCopied]=useState(false);
+  const[showApiSettings,setShowApiSettings]=useState(false);
   const stopRef=useRef(false);
 
   /* ── Capacitor Camera plugin ── */
@@ -2438,10 +2439,26 @@ function AIImportPage({push,onSendToBulk}){
   return(
     <div className="page">
       {/* Header */}
-      <div style={{background:`linear-gradient(135deg,#7c3aed,#4f46e5)`,borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff"}}>
-        <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>📸 AI Import — OCR</div>
-        <div style={{fontSize:11,opacity:.8}}>ছবি → ML Kit OCR → text → Gemini format → Bulk Upload</div>
+      <div style={{background:`linear-gradient(135deg,#7c3aed,#4f46e5)`,borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff",position:"relative"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>📸 AI Import — OCR</div>
+            <div style={{fontSize:11,opacity:.8}}>
+              {getActiveProvider()
+                ? `✅ ${getActiveProvider().name} active`
+                : "⚠️ API provider নেই — ⚙️ দিন"}
+            </div>
+          </div>
+          <button onClick={()=>setShowApiSettings(v=>!v)}
+            style={{background:"rgba(255,255,255,0.15)",border:"1px solid rgba(255,255,255,0.3)",
+              borderRadius:10,color:"#fff",fontSize:20,width:40,height:40,cursor:"pointer",
+              display:"flex",alignItems:"center",justifyContent:"center"}}>
+            {showApiSettings?"✕":"⚙️"}
+          </button>
+        </div>
       </div>
+      {/* Inline API Settings panel */}
+      {showApiSettings&&<ApiSettingsPage push={push} inline={true}/>}
 
       {/* Image Picker Buttons */}
       <div style={{display:"flex",gap:8,marginBottom:12}}>
@@ -4627,7 +4644,6 @@ const NAV=[
       {id:"aiimport", icon:"📸", label:"AI Import"},
     ]
   },
-  {id:"apisettings",icon:"🔑", label:"API Keys"},
 ];
 
 
@@ -4637,8 +4653,8 @@ const NAV=[
    ══════════════════════════════════════════════════════════════════ */
 const DEFAULT_PROVIDERS=[
   {id:"gemini",name:"Google Gemini",icon:"🟢",free:true,
-   model:"gemini-1.5-flash",
-   url:"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=",
+   model:"gemini-2.0-flash",
+   url:"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=",
    keyHint:"aistudio.google.com → Get API Key (Gmail, free, no card)",
    limit:"1500 req/day free"},
   {id:"mistral",name:"Mistral AI",icon:"🔵",free:true,
@@ -4701,7 +4717,7 @@ async function callAiProvider(ocrText){
   return d?.choices?.[0]?.message?.content?.trim()||null;
 }
 
-function ApiSettingsPage({push}){
+function ApiSettingsPage({push,inline=false}){
   const[providers,setProviders]=React.useState(loadProviders);
   const[editing,setEditing]=React.useState(null);
   const[keyInput,setKeyInput]=React.useState("");
@@ -4739,12 +4755,12 @@ function ApiSettingsPage({push}){
   };
 
   return(
-    <div className="page">
-      <div style={{background:"linear-gradient(135deg,#0f172a,#1e3a5f)",borderRadius:14,
+    <div className={inline?"":"page"} style={inline?{marginBottom:14}:{}}>
+      {!inline&&<div style={{background:"linear-gradient(135deg,#0f172a,#1e3a5f)",borderRadius:14,
         padding:"14px 16px",marginBottom:14,color:"#fff"}}>
         <div style={{fontWeight:900,fontSize:16}}>🔑 API Key Settings</div>
         <div style={{fontSize:11,opacity:.8,marginTop:2}}>OCR-এর পর auto parse — একটাই active থাকবে</div>
-      </div>
+      </div>}
       <div style={{background:active?"#052e16":"#450a0a",borderRadius:10,
         padding:"10px 14px",marginBottom:12,
         border:"1px solid "+(active?"#16a34a":"#991b1b")}}>
@@ -5208,7 +5224,6 @@ export default function App(){
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push} tick={tick}/></div>
       <div style={{display:page==="uploader" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill("")}/></div>
       <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={txt=>{setBulkPrefill(txt);goPage("uploader");}}/></div>
-      <div style={{display:page==="apisettings"?"block":"none"}}><ApiSettingsPage push={push}/></div>
 
       <nav className="bottom-nav">
         {NAV.map(n=>{
