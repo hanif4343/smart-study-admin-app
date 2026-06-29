@@ -893,6 +893,180 @@ const uploadImg=async file=>{
   return(await r.json())?.data?.url||"";
 };
 
+/* ══════════ IMAGE CROP PICKER ══════════ */
+function ImageCropPicker({onCropToQuestion,onCropToSolution,onClose,push}){
+  const canvasRef=React.useRef(null);
+  const imgRef=React.useRef(null);
+  const[srcImg,setSrcImg]=React.useState(null); // dataURL of loaded image
+  const[natural,setNatural]=React.useState({w:1,h:1});
+  const[sel,setSel]=React.useState(null);       // {x,y,w,h} in canvas coords
+  const[dragging,setDragging]=React.useState(false);
+  const[startPt,setStartPt]=React.useState(null);
+  const[crops,setCrops]=React.useState([]);     // list of {dataUrl, target:'q'|'s'}
+  const[uploading,setUploading]=React.useState(false);
+
+  /* load image from file input */
+  const handleFile=e=>{
+    const f=e.target.files[0];if(!f)return;
+    const reader=new FileReader();
+    reader.onload=ev=>setSrcImg(ev.target.result);
+    reader.readAsDataURL(f);
+  };
+
+  /* once srcImg set, draw on canvas */
+  React.useEffect(()=>{
+    if(!srcImg||!canvasRef.current)return;
+    const canvas=canvasRef.current;
+    const img=new Image();
+    img.onload=()=>{
+      const maxW=canvas.parentElement.offsetWidth||340;
+      const scale=maxW/img.naturalWidth;
+      canvas.width=maxW;
+      canvas.height=img.naturalHeight*scale;
+      setNatural({w:img.naturalWidth,h:img.naturalHeight,scale});
+      imgRef.current=img;
+      redraw(canvas,img,null);
+    };
+    img.src=srcImg;
+  },[srcImg]);
+
+  const redraw=(canvas,img,s)=>{
+    const ctx=canvas.getContext("2d");
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    ctx.drawImage(img,0,0,canvas.width,canvas.height);
+    if(s&&s.w&&s.h){
+      ctx.fillStyle="rgba(59,130,246,0.18)";
+      ctx.fillRect(s.x,s.y,s.w,s.h);
+      ctx.strokeStyle="#3b82f6";ctx.lineWidth=2;ctx.setLineDash([5,3]);
+      ctx.strokeRect(s.x,s.y,s.w,s.h);
+    }
+  };
+
+  const getPos=(e,canvas)=>{
+    const rect=canvas.getBoundingClientRect();
+    const clientX=e.touches?e.touches[0].clientX:e.clientX;
+    const clientY=e.touches?e.touches[0].clientY:e.clientY;
+    return{x:clientX-rect.left,y:clientY-rect.top};
+  };
+
+  const onDown=e=>{
+    e.preventDefault();
+    if(!imgRef.current)return;
+    const p=getPos(e,canvasRef.current);
+    setStartPt(p);setSel(null);setDragging(true);
+  };
+  const onMove=e=>{
+    e.preventDefault();
+    if(!dragging||!startPt)return;
+    const p=getPos(e,canvasRef.current);
+    const s={x:Math.min(startPt.x,p.x),y:Math.min(startPt.y,p.y),w:Math.abs(p.x-startPt.x),h:Math.abs(p.y-startPt.y)};
+    setSel(s);
+    redraw(canvasRef.current,imgRef.current,s);
+  };
+  const onUp=e=>{e.preventDefault();setDragging(false);};
+
+  /* crop selected region to dataURL */
+  const doCrop=()=>{
+    if(!sel||sel.w<5||sel.h<5){push("warn","একটু বড় করে select করুন","");return null;}
+    const sc=natural.scale;
+    const offscreen=document.createElement("canvas");
+    offscreen.width=sel.w/sc; offscreen.height=sel.h/sc;
+    const ctx=offscreen.getContext("2d");
+    ctx.drawImage(imgRef.current,sel.x/sc,sel.y/sc,sel.w/sc,sel.h/sc,0,0,sel.w/sc,sel.h/sc);
+    return offscreen.toDataURL("image/jpeg",0.92);
+  };
+
+  /* dataURL → File */
+  const dataUrlToFile=dataUrl=>{
+    const arr=dataUrl.split(","),mime=arr[0].match(/:(.*?);/)[1];
+    const bstr=atob(arr[1]);let n=bstr.length;const u=new Uint8Array(n);
+    while(n--)u[n]=bstr.charCodeAt(n);
+    return new File([u],`crop_${Date.now()}.jpg`,{type:mime});
+  };
+
+  const addCrop=async target=>{
+    const dataUrl=doCrop();if(!dataUrl)return;
+    setUploading(true);
+    try{
+      const file=dataUrlToFile(dataUrl);
+      const url=await uploadImg(file);
+      if(target==="q")onCropToQuestion(url);
+      else onCropToSolution(url);
+      setCrops(prev=>[...prev,{dataUrl,target}]);
+      push("success",target==="q"?"প্রশ্নে যোগ হয়েছে":"সমাধানে যোগ হয়েছে","");
+    }catch{push("error","আপলোড ব্যর্থ","");}
+    setUploading(false);
+  };
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:9000,display:"flex",flexDirection:"column",maxWidth:480,margin:"0 auto"}}>
+      {/* topbar */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"12px 14px",background:C.card,borderBottom:`1px solid ${C.border}`}}>
+        <span style={{fontSize:14,fontWeight:700,color:C.text}}>✂️ ছবি Crop করুন</span>
+        <button onClick={onClose} style={{background:"transparent",border:"none",color:C.muted,fontSize:20,cursor:"pointer",padding:"0 4px"}}>✕</button>
+      </div>
+
+      {/* if no image yet — show file picker */}
+      {!srcImg&&(
+        <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:24}}>
+          <div style={{fontSize:48}}>🖼️</div>
+          <div style={{color:C.muted,fontSize:13,textAlign:"center"}}>বইয়ের পাতার ছবি তুলুন বা গ্যালারি থেকে বেছে নিন</div>
+          <label style={{background:C.accent,color:"#fff",borderRadius:10,padding:"11px 28px",fontSize:14,fontWeight:700,cursor:"pointer"}}>
+            📷 ছবি বেছে নিন
+            <input type="file" accept="image/*" style={{display:"none"}} onChange={handleFile} capture="environment"/>
+          </label>
+          <label style={{background:C.panel,border:`1px solid ${C.border}`,color:C.text,borderRadius:10,padding:"9px 24px",fontSize:13,cursor:"pointer"}}>
+            🖼 গ্যালারি
+            <input type="file" accept="image/*" style={{display:"none"}} onChange={handleFile}/>
+          </label>
+        </div>
+      )}
+
+      {/* canvas area */}
+      {srcImg&&(
+        <div style={{flex:1,overflow:"auto",padding:"8px 0"}}>
+          <div style={{padding:"6px 14px 4px",color:C.muted,fontSize:11}}>আঙুল দিয়ে drag করে অংক select করুন</div>
+          <canvas
+            ref={canvasRef}
+            style={{display:"block",width:"100%",touchAction:"none",cursor:"crosshair"}}
+            onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp}
+            onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}
+          />
+        </div>
+      )}
+
+      {/* crops preview */}
+      {crops.length>0&&(
+        <div style={{padding:"6px 14px",display:"flex",gap:6,overflowX:"auto"}}>
+          {crops.map((c,i)=>(
+            <div key={i} style={{position:"relative",flexShrink:0}}>
+              <img src={c.dataUrl} style={{height:48,borderRadius:6,border:`1.5px solid ${c.target==="q"?C.accent:C.green}`}} alt=""/>
+              <div style={{position:"absolute",bottom:1,left:2,fontSize:8,fontWeight:700,color:"#fff",textShadow:"0 0 3px #000"}}>{c.target==="q"?"Q":"S"}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* action buttons */}
+      {srcImg&&(
+        <div style={{padding:"10px 14px 20px",display:"flex",gap:8,borderTop:`1px solid ${C.border}`,background:C.card}}>
+          <button onClick={()=>addCrop("q")} disabled={uploading||!sel} style={{flex:1,background:C.accent,color:"#fff",border:"none",borderRadius:10,padding:"12px 6px",fontSize:13,fontWeight:700,cursor:"pointer",opacity:(!sel||uploading)?0.5:1}}>
+            {uploading?"⏳...":"➕ প্রশ্নে"}
+          </button>
+          <button onClick={()=>addCrop("s")} disabled={uploading||!sel} style={{flex:1,background:C.green,color:"#fff",border:"none",borderRadius:10,padding:"12px 6px",fontSize:13,fontWeight:700,cursor:"pointer",opacity:(!sel||uploading)?0.5:1}}>
+            {uploading?"⏳...":"✅ সমাধানে"}
+          </button>
+          <label style={{flexShrink:0,background:C.panel,border:`1px solid ${C.border}`,color:C.text,borderRadius:10,padding:"12px 10px",fontSize:13,cursor:"pointer",display:"flex",alignItems:"center"}}>
+            🔄
+            <input type="file" accept="image/*" style={{display:"none"}} onChange={handleFile}/>
+          </label>
+          <button onClick={onClose} style={{flexShrink:0,background:"transparent",border:`1px solid ${C.border}`,color:C.muted,borderRadius:10,padding:"12px 10px",fontSize:13,cursor:"pointer"}}>✓ শেষ</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ══════════ MODAL BACK HANDLER ══════════ */
 // যেকোনো modal এ এটা call করলে Android back button এ modal বন্ধ হবে
 function useModalBack(onClose){
@@ -2157,6 +2331,9 @@ function EntryPage({push}){
   const[explanation,setExplanation]=useState("");
   const[technique,setTechnique]=useState("");
   const[imgUrl,setImgUrl]=useState("");
+  const[solImgUrls,setSolImgUrls]=useState([]); // solution/explanation image crops
+  const[qImgUrls,setQImgUrls]=useState([]);     // question image crops
+  const[showCropper,setShowCropper]=useState(false);
   const[subjects,setSubjects]=useState([]);
 
   useEffect(()=>{
@@ -2166,7 +2343,7 @@ function EntryPage({push}){
     }).catch(()=>{});
   },[mode]);
 
-  const reset=()=>{setQuestion("");setOpt1("");setOpt2("");setOpt3("");setOpt4("");setCorrect("");setExplanation("");setTechnique("");setImgUrl("");};
+  const reset=()=>{setQuestion("");setOpt1("");setOpt2("");setOpt3("");setOpt4("");setCorrect("");setExplanation("");setTechnique("");setImgUrl("");setQImgUrls([]);setSolImgUrls([]);};
   const handleImg=async e=>{
     const f=e.target.files[0];if(!f)return;
     setUp(true);
@@ -2175,18 +2352,21 @@ function EntryPage({push}){
     setUp(false);
   };
   const submit=async()=>{
-    if(!question.trim()){push("warn","প্রশ্ন লিখুন","");return;}
+    if(!question.trim()&&qImgUrls.length===0){push("warn","প্রশ্ন লিখুন বা ছবি দিন","");return;}
     if(!subject.trim()){push("warn","বিষয় লিখুন","");return;}
     setSaving(true);
     try{
       const ts=nowTs(),id=Date.now();
+      // combine: single upload imgUrl + crop question imgs
+      const allQImgs=[...qImgUrls,...(imgUrl?[imgUrl]:[])];
+      const finalImg=allQImgs.join(","); // multiple imgs comma separated
+      const finalExpl=explanation+(solImgUrls.length?"\n"+solImgUrls.join("\n"):"");
       let rec={};
-      if(mode==="Quiz")rec={ID:id,Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Subject:subject,Sub_topic:subtopic,Explanation:explanation,Technique:technique,QType:qtype,Timestamp:ts,Image:imgUrl};
-      else if(mode==="QBank")rec={ID:id,Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Subject:subject,Topic:topic,Sub_topic:subtopic,Explanation:explanation,Technique:technique,QType:qtype,Timestamp:ts,Image:imgUrl};
-      else rec={ID:id,Question:question,Correct:correct,Subject:subject,Sub_topic:subtopic,Explanation:explanation,Technique:technique,"Question Type":"Study",Timestamp:ts,Image:imgUrl};
+      if(mode==="Quiz")rec={ID:id,Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Subject:subject,Sub_topic:subtopic,Explanation:finalExpl,Technique:technique,QType:qtype,Timestamp:ts,Image:finalImg};
+      else if(mode==="QBank")rec={ID:id,Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Subject:subject,Topic:topic,Sub_topic:subtopic,Explanation:finalExpl,Technique:technique,QType:qtype,Timestamp:ts,Image:finalImg};
+      else rec={ID:id,Question:question,Correct:correct,Subject:subject,Sub_topic:subtopic,Explanation:finalExpl,Technique:technique,"Question Type":"Study",Timestamp:ts,Image:finalImg};
       await fbPush(mode,rec);
       invalidate(mode);
-      // Sheet sync → GAS standalone handles this
       push("success","✅ সেভ হয়েছে!",`${mode} #${id}`);
       reset();
     }catch(e){push("error","ব্যর্থ",e.message);}
@@ -2223,14 +2403,59 @@ function EntryPage({push}){
       <div className="fld"><label>📖 Explanation</label><textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)} style={{minHeight:80}}/></div>
       <div className="fld"><label>💡 Technique</label><textarea className="ta" value={technique} onChange={e=>setTechnique(e.target.value)} style={{minHeight:60}}/></div>
       <div className="fld">
-        <label>🖼 ছবি</label>
+        <label>🖼 ছবি (প্রশ্ন ও সমাধান)</label>
+        {/* crop button - main entry */}
+        <button type="button" onClick={()=>setShowCropper(true)}
+          style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:C.panel,border:`1.5px dashed ${C.accent}`,borderRadius:10,padding:"11px 12px",cursor:"pointer",fontSize:13,fontWeight:700,color:C.accent,marginBottom:8}}>
+          ✂️ বইয়ের পাতা থেকে Crop করুন
+        </button>
+        {/* old-style single upload still available */}
         <label style={{display:"flex",alignItems:"center",gap:7,background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,padding:"9px 12px",cursor:"pointer",fontSize:12,color:C.muted}}>
-          {uploading?"⏳ আপলোড হচ্ছে...":"📷 ছবি বেছে নিন"}
+          {uploading?"⏳ আপলোড হচ্ছে...":"📷 সরাসরি ছবি আপলোড"}
           <input type="file" accept="image/*" style={{display:"none"}} onChange={handleImg}/>
           {imgUrl&&<a href={imgUrl} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.accent,marginLeft:"auto"}} onClick={e=>e.stopPropagation()}>দেখুন ↗</a>}
         </label>
+        {/* show question crops */}
+        {qImgUrls.length>0&&(
+          <div style={{marginTop:8}}>
+            <div style={{fontSize:11,color:C.accent,marginBottom:4,fontWeight:700}}>📌 প্রশ্নের ছবি ({qImgUrls.length}টি)</div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {qImgUrls.map((u,i)=>(
+                <div key={i} style={{position:"relative"}}>
+                  <img src={u} style={{height:56,borderRadius:7,border:`1.5px solid ${C.accent}`}} alt=""/>
+                  <button onClick={()=>setQImgUrls(p=>p.filter((_,j)=>j!==i))}
+                    style={{position:"absolute",top:-5,right:-5,background:C.red,border:"none",borderRadius:"50%",width:16,height:16,fontSize:9,color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* show solution crops */}
+        {solImgUrls.length>0&&(
+          <div style={{marginTop:8}}>
+            <div style={{fontSize:11,color:C.green,marginBottom:4,fontWeight:700}}>✅ সমাধানের ছবি ({solImgUrls.length}টি)</div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {solImgUrls.map((u,i)=>(
+                <div key={i} style={{position:"relative"}}>
+                  <img src={u} style={{height:56,borderRadius:7,border:`1.5px solid ${C.green}`}} alt=""/>
+                  <button onClick={()=>setSolImgUrls(p=>p.filter((_,j)=>j!==i))}
+                    style={{position:"absolute",top:-5,right:-5,background:C.red,border:"none",borderRadius:"50%",width:16,height:16,fontSize:9,color:"#fff",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {imgUrl&&<img src={imgUrl} style={{width:"100%",borderRadius:9,marginTop:6,border:`1px solid ${C.border}`}} alt="p"/>}
       </div>
+      {/* Crop modal */}
+      {showCropper&&(
+        <ImageCropPicker
+          push={push}
+          onCropToQuestion={url=>setQImgUrls(p=>[...p,url])}
+          onCropToSolution={url=>setSolImgUrls(p=>[...p,url])}
+          onClose={()=>setShowCropper(false)}
+        />
+      )}
       <button className="btn bp bb" style={{marginTop:4}} disabled={saving} onClick={submit}>{saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করুন"}</button>
     </div>
   );
