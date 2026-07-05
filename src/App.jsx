@@ -1832,6 +1832,8 @@ function UserEditModal({user,onClose,onSaved,push}){
   // মূল অ্যাপ (User.kt → fromFirebaseMap) ঠিক এই অর্ডারেই ফিল্ড পড়ে: UserType→userType→Type→type, ClassLevel→classLevel→Class→class
   const[classLevel,setClassLevel]=useState(user.ClassLevel||user.classLevel||user.Class||user.class||"");
   const[userType,setUserType]=useState(user.UserType||user.userType||user.Type||user.type||"Student");
+  // মূল অ্যাপের User.kt → reducedUi ফ্ল্যাগ: true হলে ইউজার নিজের অ্যাপ ছোট (zoom out) করতে পারবে
+  const[reducedUi,setReducedUi]=useState(!!(user.ReducedUi??user.reducedUi??false));
   const[saving,setSaving]=useState(false);
 
   // মূল অ্যাপের AuthScreen.kt / ProfilePage.kt তে ব্যবহৃত আসল ভ্যালুগুলোর সাথে হুবহু মিল রাখা হয়েছে
@@ -1855,6 +1857,8 @@ function UserEditModal({user,onClose,onSaved,push}){
         userType:userType,
         ClassLevel:userType==="Job"?"":classLevel,
         classLevel:userType==="Job"?"":classLevel,
+        ReducedUi:reducedUi,
+        reducedUi:reducedUi,
       };
       await fbPatch(`Users/${fkey}`,patch);
       invalidate("Users");
@@ -1923,6 +1927,19 @@ function UserEditModal({user,onClose,onSaved,push}){
           </select>
         </div>
         )}
+
+        <div style={{...F,marginBottom:14}}>
+          <label style={L}>🔎 অ্যাপ জুম আউট পারমিশন</label>
+          <div onClick={()=>setReducedUi(v=>!v)}
+            style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:C.panel,border:`1px solid ${reducedUi?C.accent+"66":C.border}`,borderRadius:8,padding:"9px 12px",cursor:"pointer"}}>
+            <span style={{fontSize:12,color:reducedUi?C.text:C.muted}}>
+              এই ইউজার নিজের অ্যাপ ছোট (zoom out) করতে পারবে
+            </span>
+            <div style={{width:38,height:22,borderRadius:11,background:reducedUi?C.accent:C.border,position:"relative",transition:"background .15s",flexShrink:0}}>
+              <div style={{width:16,height:16,borderRadius:"50%",background:"#fff",position:"absolute",top:3,left:reducedUi?19:3,transition:"left .15s"}}/>
+            </div>
+          </div>
+        </div>
 
         <button className="btn" style={{width:"100%",justifyContent:"center",background:C.red+"18",color:C.red,border:`1px solid ${C.red}33`,padding:"9px 0",borderRadius:9,fontWeight:600,marginBottom:8,fontSize:13}} onClick={()=>setChangePwOpen(true)}>
           🔐 পাসওয়ার্ড পরিবর্তন করুন
