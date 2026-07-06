@@ -3348,6 +3348,278 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   );
 }
 
+/* ══════════ ব্যাখ্যা জেনারেটর (Gemini) ══════════
+   যেসব প্রশ্নে Explanation ফাঁকা, Gemini দিয়ে বানিয়ে fbPatch দিয়ে সরাসরি সেভ করে।
+   Firebase auth/read/write আগে থেকেই admin app-এ আছে (fbGet/fbPatch/toArr) —
+   এখানে শুধু Gemini API Key/Model/Grounding নতুন যোগ হলো।
+   ═══════════════════════════════════════════════════════════════════════ */
+const EXPLGEN_LS_KEY   = "explGenSettings";
+const EXPLGEN_LS_QUOTA = "explGenQuota";
+const EXPLGEN_SHEETS   = ["Quiz","QBank","Study"];
+
+function loadExplGenSettings(){
+  const d = {geminiKey:"",model:"gemini-2.5-flash-lite",grounding:false,delaySec:5,dailyCap:1400,sheets:[...EXPLGEN_SHEETS]};
+  try{
+    const s = JSON.parse(localStorage.getItem(EXPLGEN_LS_KEY)||"{}");
+    return {
+      geminiKey: s.geminiKey||d.geminiKey,
+      model: s.model||d.model,
+      grounding: !!s.grounding,
+      delaySec: s.delaySec||d.delaySec,
+      dailyCap: s.dailyCap||d.dailyCap,
+      sheets: (Array.isArray(s.sheets)&&s.sheets.length) ? s.sheets : d.sheets,
+    };
+  }catch{ return d; }
+}
+function saveExplGenSettings(s){ try{ localStorage.setItem(EXPLGEN_LS_KEY, JSON.stringify(s)); }catch(_){} }
+function getExplGenQuota(){
+  const today = new Date().toDateString();
+  let q = {};
+  try{ q = JSON.parse(localStorage.getItem(EXPLGEN_LS_QUOTA)||"{}"); }catch(_){}
+  if(q.date !== today) q = {date:today, used:0};
+  return q;
+}
+function bumpExplGenQuota(){
+  const q = getExplGenQuota();
+  q.used = (q.used||0)+1;
+  try{ localStorage.setItem(EXPLGEN_LS_QUOTA, JSON.stringify(q)); }catch(_){}
+  return q.used;
+}
+function explGenSleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+async function callGeminiExplanation(question, correct, {key, model, grounding}){
+  const prompt = `আমি একজন বাংলাদেশের ছাত্র, পরীক্ষার প্রস্তুতি নিচ্ছি।
+নিচের প্রশ্নের উত্তরের ব্যাখ্যা ঠিক ৩ লাইনে, সহজ বাংলায়, সংক্ষেপে দাও। সিরিয়াল/নাম্বারিং ছাড়া, সরাসরি প্যারাগ্রাফের মতো লিখবে।
+
+প্রশ্ন: ${question}${correct?`\nউত্তর: ${correct}`:""}
+
+শুধু ব্যাখ্যাটাই লিখবে, অন্য কিছু বলবে না।`;
+
+  const body = { contents: [{ parts: [{ text: prompt }] }] };
+  if (grounding) body.tools = [{ google_search: {} }];
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  let resp, data;
+  try{
+    resp = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    data = await resp.json();
+  }catch(netErr){
+    throw new Error("নেটওয়ার্ক এরর: "+(netErr?.message||netErr));
+  }
+  if(!resp.ok){
+    const msg = data?.error?.message || `HTTP ${resp.status}`;
+    throw new Error(msg);
+  }
+  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if(!text) throw new Error("খালি উত্তর এসেছে");
+  return text.trim();
+}
+
+function ExplanationGeneratorPage({push}){
+  const[settings,setSettings]=useState(loadExplGenSettings);
+  const[quota,setQuota]=useState(getExplGenQuota);
+  const[scanning,setScanning]=useState(false);
+  const[scanned,setScanned]=useState(false);
+  const[queue,setQueue]=useState([]);
+  const[running,setRunning]=useState(false);
+  const[okCount,setOkCount]=useState(0);
+  const[failCount,setFailCount]=useState(0);
+  const[progress,setProgress]=useState(0);
+  const[log,setLog]=useState([]);
+  const stopRef=useRef(false);
+
+  const patch=(p)=>setSettings(s=>{ const ns={...s,...p}; saveExplGenSettings(ns); return ns; });
+
+  const useOcrKey=()=>{
+    const providers=loadProviders();
+    const g=providers.find(p=>p.id==="gemini"&&p.key);
+    if(g){ patch({geminiKey:g.key}); push("success","✅ Key কপি হয়েছে","API Settings-এর Gemini key এখানে বসানো হলো"); }
+    else push("warn","কোনো OCR Gemini key নেই","API Settings ট্যাবে আগে Gemini key দিন, অথবা এখানে নিজে দিন");
+  };
+
+  const toggleSheet=(sheet)=>{
+    patch({ sheets: settings.sheets.includes(sheet) ? settings.sheets.filter(s=>s!==sheet) : [...settings.sheets, sheet] });
+  };
+
+  const doScan=async()=>{
+    if(!settings.geminiKey.trim()){ push("warn","⚠️ আগে Gemini API Key দিন",""); return; }
+    if(!settings.sheets.length){ push("warn","⚠️ অন্তত একটা শীট বাছাই করুন",""); return; }
+    setScanning(true);
+    const found=[];
+    try{
+      for(const sheet of settings.sheets){
+        const raw=await fbGet(sheet);
+        toArr(raw).forEach(row=>{
+          const q=(row.Question||row.question||"").toString().trim();
+          const exp=(row.Explanation||row.explanation||"").toString().trim();
+          if(q && !exp){
+            found.push({ sheet, fbKey: row._fbKey, question:q, correct:(row.Correct||row.correct||"").toString().trim() });
+          }
+        });
+      }
+      setQueue(found);
+      setScanned(true);
+      setOkCount(0);setFailCount(0);setProgress(0);setLog([]);
+      push("success","🔍 স্ক্যান শেষ",`${found.length} টা প্রশ্নে ব্যাখ্যা নেই`);
+    }catch(e){
+      push("error","স্ক্যান এরর", e?.message||String(e));
+    }
+    setScanning(false);
+  };
+
+  const addLog=(status,item,text)=>{
+    setLog(l=>[{status,item,text,id:Date.now()+Math.random()}, ...l].slice(0,300));
+  };
+
+  const doStart=async()=>{
+    if(!queue.length){ push("warn","আগে স্ক্যান করুন",""); return; }
+    setRunning(true); stopRef.current=false;
+    let ok=0, fail=0;
+    const total=queue.length;
+    const cap=parseInt(settings.dailyCap)||1400;
+    const delayMs=(parseFloat(settings.delaySec)||5)*1000;
+    const key=settings.geminiKey.trim();
+    const model=settings.model.trim()||"gemini-2.5-flash-lite";
+    const grounding=!!settings.grounding;
+
+    for(let i=0;i<queue.length;i++){
+      if(stopRef.current) break;
+      const q=getExplGenQuota();
+      setQuota(q);
+      if(q.used>=cap){
+        addLog("skip", queue[i], `আজকের কোটা (${cap}) শেষ — কাল আবার চালু করুন, বাকি প্রশ্নগুলো ঠিক জায়গায় আছে।`);
+        break;
+      }
+      const item=queue[i];
+      try{
+        const explanation=await callGeminiExplanation(item.question, item.correct, {key, model, grounding});
+        if(!item.fbKey) throw new Error("অজানা Firebase key — স্কিপ করা হলো");
+        await fbPatch(`${item.sheet}/${item.fbKey}`, {Explanation:explanation});
+        invalidate(item.sheet);
+        bumpExplGenQuota();
+        setQuota(getExplGenQuota());
+        ok++; setOkCount(ok);
+        addLog("ok", item, explanation);
+      }catch(e){
+        fail++; setFailCount(fail);
+        addLog("fail", item, e?.message||String(e));
+      }
+      setProgress(Math.round(((i+1)/total)*100));
+      if(i<queue.length-1 && !stopRef.current) await explGenSleep(delayMs);
+    }
+    setRunning(false);
+    if(!stopRef.current) push("success","🎉 এই ব্যাচ শেষ!","আবার স্ক্যান করে বাকিগুলো দেখুন");
+  };
+
+  const doStop=()=>{ stopRef.current=true; };
+
+  return (
+    <div className="page">
+      <div style={{background:"linear-gradient(135deg,#1E1B4B,#4F46E5)",borderRadius:14,padding:"14px 16px",marginBottom:12,color:"#fff"}}>
+        <div style={{fontWeight:900,fontSize:15}}>📖 ব্যাখ্যা জেনারেটর</div>
+        <div style={{fontSize:11,opacity:.85,marginTop:3,lineHeight:1.6}}>যেসব প্রশ্নে ব্যাখ্যা নেই, Gemini দিয়ে বানিয়ে সরাসরি Firebase-এ সেভ করবে। Firebase login আগে থেকেই আছে — শুধু Gemini API Key লাগবে।</div>
+      </div>
+
+      <div className="card">
+        <div className="ct">⚙️ Gemini সেটআপ</div>
+        <div className="fld">
+          <label>Gemini API Key</label>
+          <input type="password" className="inp" placeholder="AI Studio → Get API key"
+            value={settings.geminiKey} onChange={e=>patch({geminiKey:e.target.value})}/>
+        </div>
+        <button type="button" className="btn bg bb" style={{marginBottom:12}} onClick={useOcrKey}>🔁 API Settings-এর Gemini key ব্যবহার করো</button>
+        <div className="fld">
+          <label>মডেল</label>
+          <input className="inp" value={settings.model} onChange={e=>patch({model:e.target.value})}/>
+        </div>
+        <div style={{fontSize:10.5,color:C.muted,marginTop:-4,marginBottom:12,lineHeight:1.6}}>ফ্রি টায়ারে দৈনিক কোটা সবচেয়ে বেশি এই মডেলে। এরর দিলে AI Studio-এ গিয়ে বর্তমান ফ্রি মডেলের নাম চেক করে এখানে বদলে দিন।</div>
+
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+          <div style={{flex:1}}>
+            <div style={{fontSize:12,fontWeight:700}}>🔎 লাইভ Google Search গ্রাউন্ডিং</div>
+            <div style={{fontSize:10.5,color:C.muted,marginTop:2,lineHeight:1.6}}>অন করলে সত্যিকারের সার্চ রেজাল্ট দেখে উত্তর দেবে, কিন্তু বিলিং-এর ঝুঁকি থাকে। বন্ধ থাকলে সম্পূর্ণ ফ্রি।</div>
+          </div>
+          <input type="checkbox" checked={settings.grounding} onChange={e=>patch({grounding:e.target.checked})} style={{width:20,height:20,flexShrink:0,accentColor:C.accent}}/>
+        </div>
+        {settings.grounding && (
+          <div style={{background:"#7c2d1220",border:"1px solid #f59e0b40",borderRadius:10,padding:"9px 11px",fontSize:11,color:"#fbbf24",marginTop:10,lineHeight:1.6}}>
+            ⚠️ গ্রাউন্ডিং অন করলে প্রতি রিকোয়েস্টে সার্চ খরচ হতে পারে (ফ্রি প্রজেক্টেও)। বেশি সংখ্যক প্রশ্নের জন্য এটা রিস্কি — বন্ধ রাখাই নিরাপদ।
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <div className="ct">📚 কোন শীট স্ক্যান করব</div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+          {EXPLGEN_SHEETS.map(sheet=>(
+            <button key={sheet} type="button" className={`cc${settings.sheets.includes(sheet)?" on":""}`} onClick={()=>toggleSheet(sheet)}>{sheet}</button>
+          ))}
+        </div>
+        <div className="fld">
+          <label>প্রতি রিকোয়েস্টের মাঝে বিরতি (সেকেন্ড)</label>
+          <input type="number" className="inp" min={3} max={30} value={settings.delaySec} onChange={e=>patch({delaySec:e.target.value})}/>
+        </div>
+        <div className="fld">
+          <label>দৈনিক সর্বোচ্চ কতগুলো (ফ্রি কোটার মধ্যে থাকতে)</label>
+          <input type="number" className="inp" min={10} max={5000} value={settings.dailyCap} onChange={e=>patch({dailyCap:e.target.value})}/>
+        </div>
+        <button type="button" className="btn bp bb" disabled={scanning} onClick={doScan}>
+          {scanning?"⏳ স্ক্যান হচ্ছে...":"🔍 স্ক্যান করো"}
+        </button>
+        {scanned && (
+          <div style={{display:"flex",justifyContent:"space-between",background:C.panel,borderRadius:10,padding:"9px 12px",fontSize:12,fontWeight:700,marginTop:12}}>
+            <span>ব্যাখ্যা নেই এমন প্রশ্ন</span><span style={{color:C.accent}}>{queue.length.toLocaleString("bn-BD")}</span>
+          </div>
+        )}
+      </div>
+
+      {queue.length>0 && (
+        <div className="card">
+          <div className="ct">▶️ প্রসেসিং</div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,padding:"6px 0"}}>
+            <span>আজকে ব্যবহার হয়েছে</span><span>{quota.used||0} / {parseInt(settings.dailyCap)||1400}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,padding:"6px 0"}}>
+            <span>✅ সফল</span><span style={{color:C.green}}>{okCount}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,padding:"6px 0"}}>
+            <span>❌ ব্যর্থ / স্কিপ</span><span style={{color:C.red}}>{failCount}</span>
+          </div>
+          <div style={{height:8,borderRadius:5,background:C.border,overflow:"hidden",marginTop:8,marginBottom:12}}>
+            <div style={{height:"100%",width:`${progress}%`,background:C.green,transition:"width .3s"}}/>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            {!running ? (
+              <button type="button" className="btn bp bb" style={{flex:1}} onClick={doStart}>শুরু করো</button>
+            ) : (
+              <button type="button" className="btn bb" style={{flex:1,background:"#7f1d1d",color:"#fca5a5",border:"1px solid #991b1b"}} onClick={doStop}>থামাও</button>
+            )}
+          </div>
+          {log.length>0 && (
+            <details style={{marginTop:14}}>
+              <summary style={{cursor:"pointer",fontSize:12,fontWeight:700,color:C.accent,marginBottom:6}}>লাইভ লগ দেখুন ({log.length})</summary>
+              <div style={{maxHeight:280,overflowY:"auto",borderTop:`1px solid ${C.border}`,paddingTop:8}}>
+                {log.map(l=>(
+                  <div key={l.id} style={{fontSize:11.5,padding:"7px 0",borderBottom:`1px dashed ${C.border}`,lineHeight:1.6}}>
+                    <span style={{
+                      display:"inline-block",fontSize:9.5,fontWeight:800,borderRadius:5,padding:"2px 6px",marginRight:5,
+                      background: l.status==="ok"?"#052e16":l.status==="skip"?"#78350f":"#450a0a",
+                      color: l.status==="ok"?"#4ade80":l.status==="skip"?"#fbbf24":"#f87171",
+                    }}>{l.status==="ok"?"✅ সেভ":l.status==="skip"?"⏸ থামানো":"❌ ব্যর্থ"}</span>
+                    <span style={{color:C.muted,fontSize:10}}>{l.item.sheet}/{(l.item.fbKey||"").toString().slice(-8)}</span>
+                    <div style={{fontWeight:700,color:C.text,marginTop:2}}>{l.item.question}</div>
+                    <div style={{color:l.status==="ok"?C.green:C.red,marginTop:2}}>{l.text}</div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /* ══════════ CONTENT MANAGER ══════════ */
 
 /* ══════════ BULK QUESTION TYPE UPDATE TAB ══════════ */
@@ -5185,6 +5457,7 @@ const NAV=[
     children:[
       {id:"uploader", icon:"📝", label:"Bulk Upload"},
       {id:"aiimport", icon:"📸", label:"AI Import"},
+      {id:"explgen",  icon:"📖", label:"ব্যাখ্যা"},
     ]
   },
 ];
@@ -5726,7 +5999,7 @@ export default function App(){
         const pageMap={
           reports:"reports",techniques:"techniques",
           students:"students",dashboard:"dashboard",
-          notify:"notify",content:"content",uploader:"uploader",
+          notify:"notify",content:"content",uploader:"uploader",explgen:"explgen",
           new_report:"reports", // type দিয়েও navigate
         };
         const target=pageMap[url]||pageMap[data.type]||null;
@@ -5802,6 +6075,7 @@ export default function App(){
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push} tick={tick}/></div>
       <div style={{display:page==="uploader" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill("")}/></div>
       <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={txt=>{setBulkPrefill(txt);goPage("uploader");}}/></div>
+      <div style={{display:page==="explgen"?"block":"none"}}><ExplanationGeneratorPage push={push}/></div>
 
       <nav className="bottom-nav">
         {NAV.map(n=>{
