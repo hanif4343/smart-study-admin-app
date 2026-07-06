@@ -1,0 +1,38 @@
+name: Generate Explanations
+
+on:
+  schedule:
+    # প্রতি ৩ ঘন্টায় একবার চলবে (UTC সময়ে)। চাইলে বদলাতে পারো — crontab.guru দেখো।
+    - cron: "0 */3 * * *"
+  workflow_dispatch: {} # GitHub-এর Actions ট্যাব থেকে "Run workflow" চেপে ম্যানুয়ালি চালানোও যাবে
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350 # সর্বোচ্চ ৬ ঘন্টার একটু কম, নিরাপদ বাফার রেখে
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run explanation generator
+        env:
+          FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
+          FIREBASE_SECRET: ${{ secrets.FIREBASE_SECRET }}
+          SHEETS: "Quiz,QBank,Study"
+          GROQ_KEYS: ${{ secrets.GROQ_KEYS }}
+          MISTRAL_KEYS: ${{ secrets.MISTRAL_KEYS }}
+          GEMINI_KEYS: ${{ secrets.GEMINI_KEYS }}
+          OPENROUTER_KEYS: ${{ secrets.OPENROUTER_KEYS }}
+          CEREBRAS_KEYS: ${{ secrets.CEREBRAS_KEYS }}
+          TOGETHER_KEYS: ${{ secrets.TOGETHER_KEYS }}
+          FIREWORKS_KEYS: ${{ secrets.FIREWORKS_KEYS }}
+          DEEPSEEK_KEYS: ${{ secrets.DEEPSEEK_KEYS }}
+          DELAY_MS: "1200"
+          MAX_RUNTIME_MIN: "330"
+        run: node scripts/generate-explanations.mjs
