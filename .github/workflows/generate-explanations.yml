@@ -4,7 +4,20 @@ on:
   schedule:
     # প্রতি ৩ ঘন্টায় একবার চলবে (UTC সময়ে)। চাইলে বদলাতে পারো — crontab.guru দেখো।
     - cron: "0 */3 * * *"
-  workflow_dispatch: {} # GitHub-এর Actions ট্যাব থেকে "Run workflow" চেপে ম্যানুয়ালি চালানোও যাবে
+  workflow_dispatch: # GitHub-এর Actions ট্যাব থেকে "Run workflow" চেপে ম্যানুয়ালি চালানোও যাবে, ফিল্টার বসিয়েও চালানো যাবে
+    inputs:
+      filter_audience:
+        description: "Audience Tag (খালি রাখলে সব)"
+        required: false
+        default: ""
+      filter_subject:
+        description: "Subject (খালি রাখলে সব)"
+        required: false
+        default: ""
+      filter_subtopic:
+        description: "Sub-topic (খালি রাখলে সব)"
+        required: false
+        default: ""
 
 jobs:
   generate:
@@ -35,4 +48,7 @@ jobs:
           DEEPSEEK_KEYS: ${{ secrets.DEEPSEEK_KEYS }}
           DELAY_MS: "1200"
           MAX_RUNTIME_MIN: "330"
+          FILTER_AUDIENCE: ${{ github.event.inputs.filter_audience }}
+          FILTER_SUBJECT: ${{ github.event.inputs.filter_subject }}
+          FILTER_SUBTOPIC: ${{ github.event.inputs.filter_subtopic }}
         run: node scripts/generate-explanations.mjs
