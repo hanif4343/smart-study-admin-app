@@ -3357,17 +3357,43 @@ const EXPLGEN_LS_KEY   = "explGenSettings";
 const EXPLGEN_LS_QUOTA = "explGenQuota";
 const EXPLGEN_SHEETS   = ["Quiz","QBank","Study"];
 
+// ══ একাধিক AI প্রোভাইডার ══
+// একটাতে rate-limit/quota শেষ হলে অ্যাপ নিজে থেকেই পরেরটায় চলে যাবে (round-robin + fallback)।
+// gemini/mistral/openrouter — এই তিনটার id "API Settings" ট্যাবের provider id-র সাথে মিলিয়ে রাখা,
+// যাতে ওখানে key দেওয়া থাকলে এক ক্লিকে এখানে কপি করা যায়।
+const EXPLGEN_PROVIDER_DEFS = [
+  {id:"gemini",     label:"🟢 Google Gemini",  kind:"gemini",  defaultModel:"gemini-2.5-flash-lite",
+   keyHint:"aistudio.google.com → Get API Key (Gmail দিয়ে ফ্রি, কার্ড লাগে না)"},
+  {id:"groq",       label:"⚡ Groq",            kind:"openai",  defaultModel:"llama-3.3-70b-versatile",
+   apiBase:"https://api.groq.com/openai/v1",
+   keyHint:"console.groq.com → API Keys (ফ্রি, খুব ফাস্ট, কার্ড লাগে না)"},
+  {id:"mistral",    label:"🔵 Mistral AI",      kind:"openai",  defaultModel:"mistral-small-latest",
+   apiBase:"https://api.mistral.ai/v1",
+   keyHint:"console.mistral.ai → API Keys (ফ্রি experiment tier)"},
+  {id:"openrouter", label:"🟣 OpenRouter",      kind:"openai",  defaultModel:"mistralai/mistral-7b-instruct:free",
+   apiBase:"https://openrouter.ai/api/v1",
+   keyHint:"openrouter.ai → Keys (ফ্রি মডেল আছে, কার্ড লাগে না)"},
+];
+
 function loadExplGenSettings(){
-  const d = {geminiKey:"",model:"gemini-2.5-flash-lite",grounding:false,delaySec:5,dailyCap:1400,sheets:[...EXPLGEN_SHEETS]};
+  const defaultProviders = EXPLGEN_PROVIDER_DEFS.map(p=>({id:p.id, key:"", model:p.defaultModel, enabled:false}));
+  const d = { delaySec:8, dailyCap:1400, sheets:[...EXPLGEN_SHEETS], grounding:false, providers:defaultProviders };
   try{
     const s = JSON.parse(localStorage.getItem(EXPLGEN_LS_KEY)||"{}");
+    let providers = defaultProviders.map(dp=>{
+      const saved = Array.isArray(s.providers) ? s.providers.find(x=>x.id===dp.id) : null;
+      return saved ? {...dp,...saved} : dp;
+    });
+    // পুরনো ভার্সনে শুধু geminiKey/model ছিল — থাকলে মাইগ্রেট করে দিই
+    if(s.geminiKey && !providers.find(p=>p.id==="gemini").key){
+      providers = providers.map(p=>p.id==="gemini"?{...p,key:s.geminiKey,model:s.model||p.model,enabled:true}:p);
+    }
     return {
-      geminiKey: s.geminiKey||d.geminiKey,
-      model: s.model||d.model,
-      grounding: !!s.grounding,
       delaySec: s.delaySec||d.delaySec,
       dailyCap: s.dailyCap||d.dailyCap,
       sheets: (Array.isArray(s.sheets)&&s.sheets.length) ? s.sheets : d.sheets,
+      grounding: !!s.grounding,
+      providers,
     };
   }catch{ return d; }
 }
@@ -3387,40 +3413,72 @@ function bumpExplGenQuota(){
 }
 function explGenSleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-async function callGeminiExplanation(question, correct, {key, model, grounding}){
-  const prompt = `আমি একজন বাংলাদেশের ছাত্র, পরীক্ষার প্রস্তুতি নিচ্ছি।
+function buildExplanationPrompt(question, correct){
+  return `আমি একজন বাংলাদেশের ছাত্র, পরীক্ষার প্রস্তুতি নিচ্ছি।
 নিচের প্রশ্নের উত্তরের ব্যাখ্যা ঠিক ৩ লাইনে, সহজ বাংলায়, সংক্ষেপে দাও। সিরিয়াল/নাম্বারিং ছাড়া, সরাসরি প্যারাগ্রাফের মতো লিখবে।
 
 প্রশ্ন: ${question}${correct?`\nউত্তর: ${correct}`:""}
 
 শুধু ব্যাখ্যাটাই লিখবে, অন্য কিছু বলবে না।`;
+}
 
-  const body = { contents: [{ parts: [{ text: prompt }] }] };
-  if (grounding) body.tools = [{ google_search: {} }];
-
-  // NOTE: Google Gemini নতুন "Auth key" ফরম্যাট (AQ.Ab...) চালু করেছে ২০২৬ সালে —
-  // এই ফরম্যাটের key শুধু header দিয়েই কাজ করে, ?key= query param দিয়ে না (পুরনো
-  // "Standard key" AIzaSy... ফরম্যাটে ?key= কাজ করতো)। তাই key সবসময় header দিয়ে
-  // পাঠানো হচ্ছে — এতে পুরনো ও নতুন দুই ফরম্যাটের key-ই কাজ করবে।
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+// একটা নির্দিষ্ট প্রোভাইডার দিয়ে কল — ব্যর্থ হলে throw করবে (caller পরের প্রোভাইডারে যাবে)
+async function callOneExplProvider(def, cfg, question, correct, grounding){
+  const prompt = buildExplanationPrompt(question, correct);
+  if(def.kind==="gemini"){
+    const model = cfg.model||def.defaultModel;
+    const body = { contents: [{ parts: [{ text: prompt }] }] };
+    if (grounding) body.tools = [{ google_search: {} }];
+    // NOTE: নতুন "Auth key" ফরম্যাট (AQ.Ab...) header দিয়েই কাজ করে, ?key= দিয়ে না —
+    // তাই key সবসময় header দিয়ে পাঠানো হচ্ছে, এতে পুরনো/নতুন দুই ফরম্যাটই চলবে।
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+    let resp, data;
+    try{
+      resp = await fetch(url, {
+        method:"POST",
+        headers:{"Content-Type":"application/json","x-goog-api-key":cfg.key},
+        body: JSON.stringify(body)
+      });
+      data = await resp.json();
+    }catch(netErr){ throw new Error(`[${def.label}] নেটওয়ার্ক এরর: `+(netErr?.message||netErr)); }
+    if(!resp.ok){ throw new Error(`[${def.label}] `+(data?.error?.message || `HTTP ${resp.status}`)); }
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if(!text) throw new Error(`[${def.label}] খালি উত্তর এসেছে`);
+    return text.trim();
+  }
+  // openai-compatible (Groq / Mistral / OpenRouter)
+  const model = cfg.model||def.defaultModel;
+  const headers = {"Content-Type":"application/json","Authorization":"Bearer "+cfg.key};
+  if(def.id==="openrouter") headers["HTTP-Referer"]="https://smartstudy.admin";
   let resp, data;
   try{
-    resp = await fetch(url, {
-      method:"POST",
-      headers:{"Content-Type":"application/json","x-goog-api-key":key},
-      body: JSON.stringify(body)
+    resp = await fetch(`${def.apiBase}/chat/completions`,{
+      method:"POST", headers,
+      body: JSON.stringify({model, messages:[{role:"user",content:prompt}], max_tokens:400})
     });
     data = await resp.json();
-  }catch(netErr){
-    throw new Error("নেটওয়ার্ক এরর: "+(netErr?.message||netErr));
-  }
-  if(!resp.ok){
-    const msg = data?.error?.message || `HTTP ${resp.status}`;
-    throw new Error(msg);
-  }
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if(!text) throw new Error("খালি উত্তর এসেছে");
+  }catch(netErr){ throw new Error(`[${def.label}] নেটওয়ার্ক এরর: `+(netErr?.message||netErr)); }
+  if(!resp.ok){ throw new Error(`[${def.label}] `+(data?.error?.message || `HTTP ${resp.status}`)); }
+  const text = data?.choices?.[0]?.message?.content;
+  if(!text) throw new Error(`[${def.label}] খালি উত্তর এসেছে`);
   return text.trim();
+}
+
+// রাউন্ড-রবিন + fallback: চালু (enabled+key) প্রোভাইডারগুলোর মধ্যে startIdx থেকে শুরু করে
+// একটা একটা try করবে, একটা ব্যর্থ হলে (rate-limit/quota/network যেকোনো কারণে) পরেরটায় চলে যাবে।
+async function callExplanationRotating(providers, startIdx, question, correct, grounding){
+  const active = providers.filter(cfg=>cfg.enabled && cfg.key.trim());
+  if(!active.length) throw new Error("কোনো প্রোভাইডারে Key/চালু করা নেই");
+  const errors=[];
+  for(let i=0;i<active.length;i++){
+    const cfg = active[(startIdx+i)%active.length];
+    const def = EXPLGEN_PROVIDER_DEFS.find(d=>d.id===cfg.id);
+    try{
+      const text = await callOneExplProvider(def, cfg, question, correct, grounding);
+      return { text, providerLabel: def.label };
+    }catch(e){ errors.push(e?.message||String(e)); }
+  }
+  throw new Error(errors.join(" | "));
 }
 
 function ExplanationGeneratorPage({push}){
@@ -3433,19 +3491,54 @@ function ExplanationGeneratorPage({push}){
   const[filterSubtopic,setFilterSubtopic]=useState("all");
   const[filterAudience,setFilterAudience]=useState("all");
   const[running,setRunning]=useState(false);
+  const[wakeLockOn,setWakeLockOn]=useState(false);
   const[okCount,setOkCount]=useState(0);
   const[failCount,setFailCount]=useState(0);
   const[progress,setProgress]=useState(0);
   const[log,setLog]=useState([]);
   const stopRef=useRef(false);
+  const wakeLockRef=useRef(null);
+  const rotCursorRef=useRef(0); // কোন প্রোভাইডার থেকে শুরু হবে তার ঘুরন্ত ইনডেক্স (round-robin)
+
+  // স্ক্রিন অফ/লক হয়ে গেলে ব্রাউজার JS টাইমার/নেটওয়ার্ক থ্রটল করে দেয় —
+  // তাই চলার সময় Wake Lock নিয়ে স্ক্রিন জ্বলিয়ে রাখার চেষ্টা করা হচ্ছে (সাপোর্ট থাকলে)।
+  const acquireWakeLock=async()=>{
+    try{
+      if("wakeLock" in navigator){
+        wakeLockRef.current = await navigator.wakeLock.request("screen");
+        setWakeLockOn(true);
+        wakeLockRef.current.addEventListener("release", ()=>setWakeLockOn(false));
+      }
+    }catch(_){ setWakeLockOn(false); }
+  };
+  const releaseWakeLock=async()=>{
+    try{ if(wakeLockRef.current){ await wakeLockRef.current.release(); wakeLockRef.current=null; } }catch(_){}
+    setWakeLockOn(false);
+  };
+  // ট্যাব/অ্যাপ আবার visible হলে (কেউ ফিরে এলে) চলমান থাকলে Wake Lock ফিরিয়ে নেয়া
+  useEffect(()=>{
+    const onVis=()=>{ if(document.visibilityState==="visible" && running && !wakeLockRef.current) acquireWakeLock(); };
+    document.addEventListener("visibilitychange", onVis);
+    return ()=>document.removeEventListener("visibilitychange", onVis);
+  },[running]);
 
   const patch=(p)=>setSettings(s=>{ const ns={...s,...p}; saveExplGenSettings(ns); return ns; });
 
-  const useOcrKey=()=>{
-    const providers=loadProviders();
-    const g=providers.find(p=>p.id==="gemini"&&p.key);
-    if(g){ patch({geminiKey:g.key}); push("success","✅ Key কপি হয়েছে","API Settings-এর Gemini key এখানে বসানো হলো"); }
-    else push("warn","কোনো OCR Gemini key নেই","API Settings ট্যাবে আগে Gemini key দিন, অথবা এখানে নিজে দিন");
+  const patchProvider=(id,changes)=>{
+    setSettings(s=>{
+      const providers = s.providers.map(p=>p.id===id?{...p,...changes}:p);
+      const ns={...s,providers};
+      saveExplGenSettings(ns);
+      return ns;
+    });
+  };
+
+  // API Settings (OCR) ট্যাবে আগে থেকে key দেওয়া থাকলে এক ক্লিকে এখানে কপি করা
+  const importProviderKey=(id)=>{
+    const ocrProviders=loadProviders();
+    const g=ocrProviders.find(p=>p.id===id&&p.key);
+    if(g){ patchProvider(id,{key:g.key, enabled:true}); push("success","✅ Key কপি হয়েছে","API Settings থেকে এখানে বসানো হলো"); }
+    else push("warn","কোনো key পাওয়া যায়নি","API Settings ট্যাবে আগে key দিন, অথবা এখানে নিজে দিন");
   };
 
   const toggleSheet=(sheet)=>{
@@ -3453,7 +3546,8 @@ function ExplanationGeneratorPage({push}){
   };
 
   const doScan=async()=>{
-    if(!settings.geminiKey.trim()){ push("warn","⚠️ আগে Gemini API Key দিন",""); return; }
+    const activeProviders=settings.providers.filter(p=>p.enabled&&p.key.trim());
+    if(!activeProviders.length){ push("warn","⚠️ আগে অন্তত একটা প্রোভাইডারে Key দিন",""); return; }
     if(!settings.sheets.length){ push("warn","⚠️ অন্তত একটা শীট বাছাই করুন",""); return; }
     setScanning(true);
     const found=[];
@@ -3519,17 +3613,24 @@ function ExplanationGeneratorPage({push}){
     setLog(l=>[{status,item,text,id:Date.now()+Math.random()}, ...l].slice(0,300));
   };
 
+  // পেজ থেকে সরে গেলে (আনমাউন্ট হলে) Wake Lock ছেড়ে দেয়া — লিক এড়াতে
+  useEffect(()=>{
+    return ()=>{ if(wakeLockRef.current){ wakeLockRef.current.release().catch(()=>{}); wakeLockRef.current=null; } };
+  },[]);
+
   const doStart=async()=>{
     if(!queue.length){ push("warn","আগে স্ক্যান করুন",""); return; }
+    const activeProviders=settings.providers.filter(p=>p.enabled&&p.key.trim());
+    if(!activeProviders.length){ push("warn","⚠️ আগে অন্তত একটা প্রোভাইডারে Key দিন",""); return; }
     setRunning(true); stopRef.current=false;
+    await acquireWakeLock();
     let ok=0, fail=0;
     const total=queue.length;
     const cap=parseInt(settings.dailyCap)||1400;
-    const delayMs=(parseFloat(settings.delaySec)||5)*1000;
-    const key=settings.geminiKey.trim();
-    const model=settings.model.trim()||"gemini-2.5-flash-lite";
+    const delayMs=(parseFloat(settings.delaySec)||8)*1000;
     const grounding=!!settings.grounding;
 
+    try{
     for(let i=0;i<queue.length;i++){
       if(stopRef.current) break;
       const q=getExplGenQuota();
@@ -3540,51 +3641,74 @@ function ExplanationGeneratorPage({push}){
       }
       const item=queue[i];
       try{
-        const explanation=await callGeminiExplanation(item.question, item.correct, {key, model, grounding});
+        const {text:explanation, providerLabel}=await callExplanationRotating(
+          settings.providers, rotCursorRef.current, item.question, item.correct, grounding
+        );
+        rotCursorRef.current++; // পরের প্রশ্নে অন্য প্রোভাইডার থেকে শুরু হবে — লোড ছড়িয়ে যাবে
         if(!item.fbKey) throw new Error("অজানা Firebase key — স্কিপ করা হলো");
         await fbPatch(`${item.sheet}/${item.fbKey}`, {Explanation:explanation});
         invalidate(item.sheet);
         bumpExplGenQuota();
         setQuota(getExplGenQuota());
         ok++; setOkCount(ok);
-        addLog("ok", item, explanation);
+        addLog("ok", item, `[${providerLabel}] ${explanation}`);
       }catch(e){
+        rotCursorRef.current++;
         fail++; setFailCount(fail);
         addLog("fail", item, e?.message||String(e));
       }
       setProgress(Math.round(((i+1)/total)*100));
       if(i<queue.length-1 && !stopRef.current) await explGenSleep(delayMs);
     }
+    }finally{
+      await releaseWakeLock();
+    }
     setRunning(false);
     if(!stopRef.current) push("success","🎉 এই ব্যাচ শেষ!","আবার স্ক্যান করে বাকিগুলো দেখুন");
   };
 
-  const doStop=()=>{ stopRef.current=true; };
+  const doStop=()=>{ stopRef.current=true; releaseWakeLock(); };
 
   return (
     <div className="page">
       <div style={{background:"linear-gradient(135deg,#1E1B4B,#4F46E5)",borderRadius:14,padding:"14px 16px",marginBottom:12,color:"#fff"}}>
         <div style={{fontWeight:900,fontSize:15}}>📖 ব্যাখ্যা জেনারেটর</div>
-        <div style={{fontSize:11,opacity:.85,marginTop:3,lineHeight:1.6}}>যেসব প্রশ্নে ব্যাখ্যা নেই, Gemini দিয়ে বানিয়ে সরাসরি Firebase-এ সেভ করবে। Firebase login আগে থেকেই আছে — শুধু Gemini API Key লাগবে।</div>
+        <div style={{fontSize:11,opacity:.85,marginTop:3,lineHeight:1.6}}>যেসব প্রশ্নে ব্যাখ্যা নেই, AI দিয়ে বানিয়ে সরাসরি Firebase-এ সেভ করবে। একাধিক প্রোভাইডার চালু রাখলে একটায় rate-limit/quota শেষ হলে অ্যাপ নিজেই পরেরটায় চলে যাবে।</div>
       </div>
 
       <div className="card">
-        <div className="ct">⚙️ Gemini সেটআপ</div>
-        <div className="fld">
-          <label>Gemini API Key</label>
-          <input type="password" className="inp" placeholder="AI Studio → Get API key"
-            value={settings.geminiKey} onChange={e=>patch({geminiKey:e.target.value})}/>
+        <div className="ct">🔀 প্রোভাইডার (একাধিক রাখলে ভালো)</div>
+        <div style={{fontSize:10.5,color:C.muted,marginTop:-6,marginBottom:12,lineHeight:1.6}}>
+          যতগুলোতে Key দিয়ে চালু (☑) করবে, সবগুলো ঘুরিয়ে ঘুরিয়ে ব্যবহার হবে — একটা ব্যর্থ/rate-limited হলে অ্যাপ নিজে থেকেই পরেরটা try করবে।
         </div>
-        <button type="button" className="btn bg bb" style={{marginBottom:12}} onClick={useOcrKey}>🔁 API Settings-এর Gemini key ব্যবহার করো</button>
-        <div className="fld">
-          <label>মডেল</label>
-          <input className="inp" value={settings.model} onChange={e=>patch({model:e.target.value})}/>
-        </div>
-        <div style={{fontSize:10.5,color:C.muted,marginTop:-4,marginBottom:12,lineHeight:1.6}}>ফ্রি টায়ারে দৈনিক কোটা সবচেয়ে বেশি এই মডেলে। এরর দিলে AI Studio-এ গিয়ে বর্তমান ফ্রি মডেলের নাম চেক করে এখানে বদলে দিন।</div>
+        {EXPLGEN_PROVIDER_DEFS.map(def=>{
+          const cfg=settings.providers.find(p=>p.id===def.id) || {key:"",model:def.defaultModel,enabled:false};
+          const canImport = def.id==="gemini" || def.id==="mistral" || def.id==="openrouter";
+          return (
+            <div key={def.id} style={{border:`1px solid ${cfg.enabled&&cfg.key.trim()?C.green+"55":C.border}`,borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                <div style={{fontSize:13,fontWeight:800}}>{def.label}</div>
+                <input type="checkbox" checked={!!(cfg.enabled&&cfg.key.trim())}
+                  onChange={e=>patchProvider(def.id,{enabled:e.target.checked})}
+                  disabled={!cfg.key.trim()}
+                  style={{width:20,height:20,flexShrink:0,accentColor:C.green}}/>
+              </div>
+              <input type="password" className="inp" placeholder="API Key পেস্ট করো" style={{marginBottom:6}}
+                value={cfg.key} onChange={e=>patchProvider(def.id,{key:e.target.value, enabled: !!e.target.value.trim()})}/>
+              <div style={{fontSize:10,color:C.muted,marginBottom:6,lineHeight:1.5}}>{def.keyHint}</div>
+              <input className="inp" style={{fontSize:11.5,marginBottom:canImport?6:0}} placeholder="মডেলের নাম"
+                value={cfg.model} onChange={e=>patchProvider(def.id,{model:e.target.value})}/>
+              {canImport && (
+                <button type="button" className="btn bg bb" style={{fontSize:10.5,padding:"6px 10px"}}
+                  onClick={()=>importProviderKey(def.id)}>🔁 API Settings থেকে key আনো</button>
+              )}
+            </div>
+          );
+        })}
 
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginTop:6}}>
           <div style={{flex:1}}>
-            <div style={{fontSize:12,fontWeight:700}}>🔎 লাইভ Google Search গ্রাউন্ডিং</div>
+            <div style={{fontSize:12,fontWeight:700}}>🔎 লাইভ Google Search গ্রাউন্ডিং (শুধু Gemini-তে)</div>
             <div style={{fontSize:10.5,color:C.muted,marginTop:2,lineHeight:1.6}}>অন করলে সত্যিকারের সার্চ রেজাল্ট দেখে উত্তর দেবে, কিন্তু বিলিং-এর ঝুঁকি থাকে। বন্ধ থাকলে সম্পূর্ণ ফ্রি।</div>
           </div>
           <input type="checkbox" checked={settings.grounding} onChange={e=>patch({grounding:e.target.checked})} style={{width:20,height:20,flexShrink:0,accentColor:C.accent}}/>
@@ -3657,6 +3781,13 @@ function ExplanationGeneratorPage({push}){
       {queue.length>0 && (
         <div className="card">
           <div className="ct">▶️ প্রসেসিং</div>
+          {running && (
+            <div style={{background: wakeLockOn?"#052e1620":"#7c2d1220", border:`1px solid ${wakeLockOn?"#10b98140":"#f59e0b40"}`, borderRadius:10, padding:"9px 11px", fontSize:11, color: wakeLockOn?"#4ade80":"#fbbf24", marginBottom:10, lineHeight:1.6}}>
+            {wakeLockOn
+              ? "🔆 স্ক্রিন জ্বলে রাখা হচ্ছে — চলার সময় অ্যাপ থেকে সরবেন না, স্ক্রিন লক করবেন না।"
+              : "⚠️ এই ফোনে স্ক্রিন-অন-রাখার সুবিধা সাপোর্ট করছে না — নিজে হাতে স্ক্রিন জ্বালিয়ে রাখুন ও অ্যাপ থেকে সরবেন না, নাহলে মাঝপথে থেমে যেতে পারে।"}
+            </div>
+          )}
           <div style={{display:"flex",justifyContent:"space-between",fontSize:12,fontWeight:700,padding:"6px 0"}}>
             <span>আজকে ব্যবহার হয়েছে</span><span>{quota.used||0} / {parseInt(settings.dailyCap)||1400}</span>
           </div>
