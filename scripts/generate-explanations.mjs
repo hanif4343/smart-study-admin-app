@@ -29,11 +29,11 @@ const DELAY_MS = parseInt(process.env.DELAY_MS || "1200", 10);
 const MAX_RUNTIME_MS = (parseInt(process.env.MAX_RUNTIME_MIN || "330", 10)) * 60 * 1000;
 const START_TIME = Date.now();
 
-// ঐচ্ছিক ফিল্টার — খালি রাখলে/অনুপস্থিত থাকলে/"all" দিলে ওই ফিল্ড ফিল্টার হবে না
-const FILTER_AUDIENCE = (process.env.FILTER_AUDIENCE || "").trim();
-const FILTER_SUBJECT = (process.env.FILTER_SUBJECT || "").trim();
-const FILTER_SUBTOPIC = (process.env.FILTER_SUBTOPIC || "").trim();
-const isAllOrEmpty = v => !v || v.toLowerCase() === "all";
+// ঐচ্ছিক ফিল্টার — কমা দিয়ে একাধিক মান দেওয়া যায় (OR ম্যাচ), খালি রাখলে সব
+const parseList = v => (v || "").split(",").map(s => s.trim()).filter(Boolean);
+const FILTER_AUDIENCE = parseList(process.env.FILTER_AUDIENCE);
+const FILTER_SUBJECT = parseList(process.env.FILTER_SUBJECT);
+const FILTER_SUBTOPIC = parseList(process.env.FILTER_SUBTOPIC);
 
 if (!FIREBASE_URL || !FIREBASE_SECRET) {
   console.error("❌ FIREBASE_URL / FIREBASE_SECRET সেট করা নেই। GitHub Secrets চেক করো।");
@@ -160,9 +160,9 @@ async function main() {
       const audienceRaw = (row.AudienceTags || row.audienceTags || row.audience_tags || "").toString().trim();
       const audienceList = audienceRaw.split(",").map(a => a.trim()).filter(Boolean);
 
-      if (!isAllOrEmpty(FILTER_SUBJECT) && subject !== FILTER_SUBJECT) return;
-      if (!isAllOrEmpty(FILTER_SUBTOPIC) && subtopic !== FILTER_SUBTOPIC) return;
-      if (!isAllOrEmpty(FILTER_AUDIENCE) && !audienceList.includes(FILTER_AUDIENCE)) return;
+      if (FILTER_SUBJECT.length && !FILTER_SUBJECT.includes(subject)) return;
+      if (FILTER_SUBTOPIC.length && !FILTER_SUBTOPIC.includes(subtopic)) return;
+      if (FILTER_AUDIENCE.length && !FILTER_AUDIENCE.some(tag => audienceList.includes(tag))) return;
 
       queue.push({
         sheet, fbKey: row._fbKey, question: q,
@@ -171,8 +171,8 @@ async function main() {
       });
     });
   }
-  if (FILTER_AUDIENCE || FILTER_SUBJECT || FILTER_SUBTOPIC) {
-    console.log(`🔎 ফিল্টার সক্রিয় — Audience: "${FILTER_AUDIENCE || "সব"}", Subject: "${FILTER_SUBJECT || "সব"}", Sub-topic: "${FILTER_SUBTOPIC || "সব"}"`);
+  if (FILTER_AUDIENCE.length || FILTER_SUBJECT.length || FILTER_SUBTOPIC.length) {
+    console.log(`🔎 ফিল্টার সক্রিয় — Audience: [${FILTER_AUDIENCE.join(", ") || "সব"}], Subject: [${FILTER_SUBJECT.join(", ") || "সব"}], Sub-topic: [${FILTER_SUBTOPIC.join(", ") || "সব"}]`);
   }
   console.log(`📋 মোট ${queue.length} টা প্রশ্নে ব্যাখ্যা নেই (ফিল্টারের পর)।`);
   if (!queue.length) { console.log("✅ সব প্রশ্নে ব্যাখ্যা আছে, কোনো কাজ নেই।"); return; }
