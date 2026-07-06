@@ -3398,10 +3398,18 @@ async function callGeminiExplanation(question, correct, {key, model, grounding})
   const body = { contents: [{ parts: [{ text: prompt }] }] };
   if (grounding) body.tools = [{ google_search: {} }];
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+  // NOTE: Google Gemini নতুন "Auth key" ফরম্যাট (AQ.Ab...) চালু করেছে ২০২৬ সালে —
+  // এই ফরম্যাটের key শুধু header দিয়েই কাজ করে, ?key= query param দিয়ে না (পুরনো
+  // "Standard key" AIzaSy... ফরম্যাটে ?key= কাজ করতো)। তাই key সবসময় header দিয়ে
+  // পাঠানো হচ্ছে — এতে পুরনো ও নতুন দুই ফরম্যাটের key-ই কাজ করবে।
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   let resp, data;
   try{
-    resp = await fetch(url, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(body) });
+    resp = await fetch(url, {
+      method:"POST",
+      headers:{"Content-Type":"application/json","x-goog-api-key":key},
+      body: JSON.stringify(body)
+    });
     data = await resp.json();
   }catch(netErr){
     throw new Error("নেটওয়ার্ক এরর: "+(netErr?.message||netErr));
@@ -5469,8 +5477,8 @@ const NAV=[
    ══════════════════════════════════════════════════════════════════ */
 const DEFAULT_PROVIDERS=[
   {id:"gemini",name:"Google Gemini",icon:"🟢",free:true,
-   model:"gemini-2.0-flash",
-   url:"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=",
+   model:"gemini-2.5-flash",
+   url:"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
    keyHint:"aistudio.google.com → Get API Key (Gmail, free, no card)",
    limit:"1500 req/day free"},
   {id:"mistral",name:"Mistral AI",icon:"🔵",free:true,
@@ -5517,8 +5525,9 @@ async function callAiProvider(ocrText){
   if(!p) return null; // no active provider = skip silently
   const prompt=OCR_PROMPT+ocrText;
   if(p.id==="gemini"){
-    // Try multiple endpoints — 403 হলে পরেরটা try করে
-    const models=["gemini-2.0-flash","gemini-1.5-flash","gemini-1.5-flash-latest"];
+    // Try multiple endpoints — 403/404 হলে পরেরটা try করে
+    // (gemini-2.0-flash ও gemini-1.5-flash Google জুন ২০২৬-এ বন্ধ করে দিয়েছে — 404 আসতো)
+    const models=["gemini-2.5-flash","gemini-2.5-flash-lite","gemini-flash-latest"];
     const versions=["v1beta","v1"];
     let lastErr=null;
     for(const ver of versions){
