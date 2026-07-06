@@ -29,6 +29,12 @@ const DELAY_MS = parseInt(process.env.DELAY_MS || "1200", 10);
 const MAX_RUNTIME_MS = (parseInt(process.env.MAX_RUNTIME_MIN || "330", 10)) * 60 * 1000;
 const START_TIME = Date.now();
 
+// ঐচ্ছিক ফিল্টার — খালি রাখলে/অনুপস্থিত থাকলে/"all" দিলে ওই ফিল্ড ফিল্টার হবে না
+const FILTER_AUDIENCE = (process.env.FILTER_AUDIENCE || "").trim();
+const FILTER_SUBJECT = (process.env.FILTER_SUBJECT || "").trim();
+const FILTER_SUBTOPIC = (process.env.FILTER_SUBTOPIC || "").trim();
+const isAllOrEmpty = v => !v || v.toLowerCase() === "all";
+
 if (!FIREBASE_URL || !FIREBASE_SECRET) {
   console.error("❌ FIREBASE_URL / FIREBASE_SECRET সেট করা নেই। GitHub Secrets চেক করো।");
   process.exit(1);
@@ -140,19 +146,35 @@ async function main() {
   }
   console.log(`🔑 মোট ${pool.length} টা key রেডি (providers: ${[...new Set(pool.map(p => p.id))].join(", ")})`);
 
-  // সব শীট থেকে "Explanation নেই" এমন প্রশ্ন খুঁজে বের করা
+  // সব শীট থেকে "Explanation নেই" এমন প্রশ্ন খুঁজে বের করা (+ঐচ্ছিক ফিল্টার)
   const queue = [];
   for (const sheet of SHEETS) {
     const raw = await fbGet(sheet);
     toArr(raw).forEach(row => {
       const q = (row.Question || row.question || "").toString().trim();
       const exp = (row.Explanation || row.explanation || "").toString().trim();
-      if (q && !exp) {
-        queue.push({ sheet, fbKey: row._fbKey, question: q, correct: (row.Correct || row.correct || "").toString().trim() });
-      }
+      if (!q || exp) return;
+
+      const subject = (row.Subject || row.subject || "").toString().trim();
+      const subtopic = (row.Sub_topic || row.sub_topic || "").toString().trim();
+      const audienceRaw = (row.AudienceTags || row.audienceTags || row.audience_tags || "").toString().trim();
+      const audienceList = audienceRaw.split(",").map(a => a.trim()).filter(Boolean);
+
+      if (!isAllOrEmpty(FILTER_SUBJECT) && subject !== FILTER_SUBJECT) return;
+      if (!isAllOrEmpty(FILTER_SUBTOPIC) && subtopic !== FILTER_SUBTOPIC) return;
+      if (!isAllOrEmpty(FILTER_AUDIENCE) && !audienceList.includes(FILTER_AUDIENCE)) return;
+
+      queue.push({
+        sheet, fbKey: row._fbKey, question: q,
+        correct: (row.Correct || row.correct || "").toString().trim(),
+        subject, subtopic, audience: audienceRaw,
+      });
     });
   }
-  console.log(`📋 মোট ${queue.length} টা প্রশ্নে ব্যাখ্যা নেই।`);
+  if (FILTER_AUDIENCE || FILTER_SUBJECT || FILTER_SUBTOPIC) {
+    console.log(`🔎 ফিল্টার সক্রিয় — Audience: "${FILTER_AUDIENCE || "সব"}", Subject: "${FILTER_SUBJECT || "সব"}", Sub-topic: "${FILTER_SUBTOPIC || "সব"}"`);
+  }
+  console.log(`📋 মোট ${queue.length} টা প্রশ্নে ব্যাখ্যা নেই (ফিল্টারের পর)।`);
   if (!queue.length) { console.log("✅ সব প্রশ্নে ব্যাখ্যা আছে, কোনো কাজ নেই।"); return; }
 
   let ok = 0, fail = 0, cursor = 0;
@@ -162,15 +184,16 @@ async function main() {
       break;
     }
     const item = queue[i];
+    const shortQ = item.question.length > 45 ? item.question.slice(0, 45) + "…" : item.question;
     try {
       const { text, usedIdx, providerId } = await callRotating(pool, cursor, item.question, item.correct);
       cursor = (usedIdx + 1) % pool.length;
       await fbPatch(`${item.sheet}/${item.fbKey}`, { Explanation: text });
       ok++;
-      if (ok % 25 === 0) console.log(`✅ ${ok} টা হয়ে গেছে... (সর্বশেষ: [${providerId}])`);
+      console.log(`✅ [${ok + fail}/${queue.length}] (${item.sheet}) ${item.subject || "-"} / ${item.subtopic || "-"} — "${shortQ}" [${providerId}]`);
     } catch (e) {
       fail++;
-      console.log(`❌ স্কিপ (${item.sheet}/${item.fbKey}): ${e.message}`);
+      console.log(`❌ [${ok + fail}/${queue.length}] স্কিপ (${item.sheet}) ${item.subject || "-"} / ${item.subtopic || "-"} — "${shortQ}": ${e.message}`);
       cursor = (cursor + 1) % pool.length;
     }
     if (i < queue.length - 1) await sleep(DELAY_MS);
@@ -180,4 +203,3 @@ async function main() {
 }
 
 main().catch(e => { console.error("💥 মূল এরর:", e); process.exit(1); });
-
