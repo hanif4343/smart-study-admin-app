@@ -7,15 +7,15 @@ on:
   workflow_dispatch: # GitHub-এর Actions ট্যাব থেকে "Run workflow" চেপে ম্যানুয়ালি চালানোও যাবে, ফিল্টার বসিয়েও চালানো যাবে
     inputs:
       filter_audience:
-        description: "Audience Tag (খালি রাখলে সব)"
+        description: "Audience Tag(s), কমা দিয়ে একাধিক দেওয়া যায় (খালি রাখলে সব)"
         required: false
         default: ""
       filter_subject:
-        description: "Subject (খালি রাখলে সব)"
+        description: "Subject(s), কমা দিয়ে একাধিক দেওয়া যায় (খালি রাখলে সব)"
         required: false
         default: ""
       filter_subtopic:
-        description: "Sub-topic (খালি রাখলে সব)"
+        description: "Sub-topic(s), কমা দিয়ে একাধিক দেওয়া যায় (খালি রাখলে সব)"
         required: false
         default: ""
 
@@ -52,3 +52,4 @@ jobs:
           FILTER_SUBJECT: ${{ github.event.inputs.filter_subject }}
           FILTER_SUBTOPIC: ${{ github.event.inputs.filter_subtopic }}
         run: node scripts/generate-explanations.mjs
+
