@@ -3428,7 +3428,10 @@ function ExplanationGeneratorPage({push}){
   const[quota,setQuota]=useState(getExplGenQuota);
   const[scanning,setScanning]=useState(false);
   const[scanned,setScanned]=useState(false);
-  const[queue,setQueue]=useState([]);
+  const[rawQueue,setRawQueue]=useState([]); // স্ক্যান করা সব (ব্যাখ্যা নেই এমন) প্রশ্ন — ফিল্টার হওয়ার আগে
+  const[filterSubject,setFilterSubject]=useState("all");
+  const[filterSubtopic,setFilterSubtopic]=useState("all");
+  const[filterAudience,setFilterAudience]=useState("all");
   const[running,setRunning]=useState(false);
   const[okCount,setOkCount]=useState(0);
   const[failCount,setFailCount]=useState(0);
@@ -3461,19 +3464,56 @@ function ExplanationGeneratorPage({push}){
           const q=(row.Question||row.question||"").toString().trim();
           const exp=(row.Explanation||row.explanation||"").toString().trim();
           if(q && !exp){
-            found.push({ sheet, fbKey: row._fbKey, question:q, correct:(row.Correct||row.correct||"").toString().trim() });
+            found.push({
+              sheet, fbKey: row._fbKey, question:q,
+              correct:(row.Correct||row.correct||"").toString().trim(),
+              subject:(row.Subject||row.subject||"").toString().trim(),
+              subtopic:(row.Sub_topic||row.sub_topic||"").toString().trim(),
+              audience:(row.AudienceTags||row.audienceTags||row.audience_tags||"").toString().trim(),
+            });
           }
         });
       }
-      setQueue(found);
+      setRawQueue(found);
       setScanned(true);
+      setFilterSubject("all");setFilterSubtopic("all");setFilterAudience("all");
       setOkCount(0);setFailCount(0);setProgress(0);setLog([]);
-      push("success","🔍 স্ক্যান শেষ",`${found.length} টা প্রশ্নে ব্যাখ্যা নেই`);
+      push("success","🔍 স্ক্যান শেষ",`${found.length} টা প্রশ্নে ব্যাখ্যা নেই — এখন চাইলে Subject/Sub-topic/Audience দিয়ে ফিল্টার করে অগ্রাধিকার বাছাই করুন`);
     }catch(e){
       push("error","স্ক্যান এরর", e?.message||String(e));
     }
     setScanning(false);
   };
+
+  // ফিল্টার অপশনগুলো rawQueue থেকে বের করা হচ্ছে (যা স্ক্যান করা হয়েছে তার ভেতর থেকেই)
+  // ক্রম: Audience → Subject (audience অনুযায়ী) → Sub-topic (audience+subject অনুযায়ী)
+  const audienceOptions=useMemo(()=>{
+    const set=new Set();
+    rawQueue.forEach(i=>i.audience.split(",").map(t=>t.trim()).filter(Boolean).forEach(t=>set.add(t)));
+    return ["all",...set];
+  },[rawQueue]);
+  const subjectOptions=useMemo(()=>{
+    const pool = filterAudience==="all" ? rawQueue : rawQueue.filter(i=>i.audience.split(",").map(t=>t.trim()).includes(filterAudience));
+    return ["all",...new Set(pool.map(i=>i.subject).filter(Boolean))];
+  },[rawQueue,filterAudience]);
+  const subtopicOptions=useMemo(()=>{
+    let pool = filterAudience==="all" ? rawQueue : rawQueue.filter(i=>i.audience.split(",").map(t=>t.trim()).includes(filterAudience));
+    pool = filterSubject==="all" ? pool : pool.filter(i=>i.subject===filterSubject);
+    return ["all",...new Set(pool.map(i=>i.subtopic).filter(Boolean))];
+  },[rawQueue,filterAudience,filterSubject]);
+
+  // Audience বদলালে Subject+Sub-topic রিসেট, Subject বদলালে Sub-topic রিসেট
+  useEffect(()=>{ setFilterSubject("all"); },[filterAudience]);
+  useEffect(()=>{ setFilterSubtopic("all"); },[filterSubject]);
+
+  const queue=useMemo(()=>{
+    return rawQueue.filter(i=>{
+      if(filterSubject!=="all" && i.subject!==filterSubject) return false;
+      if(filterSubtopic!=="all" && i.subtopic!==filterSubtopic) return false;
+      if(filterAudience!=="all" && !i.audience.split(",").map(t=>t.trim()).includes(filterAudience)) return false;
+      return true;
+    });
+  },[rawQueue,filterSubject,filterSubtopic,filterAudience]);
 
   const addLog=(status,item,text)=>{
     setLog(l=>[{status,item,text,id:Date.now()+Math.random()}, ...l].slice(0,300));
@@ -3576,10 +3616,43 @@ function ExplanationGeneratorPage({push}){
         </button>
         {scanned && (
           <div style={{display:"flex",justifyContent:"space-between",background:C.panel,borderRadius:10,padding:"9px 12px",fontSize:12,fontWeight:700,marginTop:12}}>
-            <span>ব্যাখ্যা নেই এমন প্রশ্ন</span><span style={{color:C.accent}}>{queue.length.toLocaleString("bn-BD")}</span>
+            <span>ব্যাখ্যা নেই এমন প্রশ্ন (মোট)</span><span style={{color:C.accent}}>{rawQueue.length.toLocaleString("bn-BD")}</span>
           </div>
         )}
       </div>
+
+      {scanned && rawQueue.length>0 && (
+        <div className="card">
+          <div className="ct">🎯 ফিল্টার করে অগ্রাধিকার বাছাই করো</div>
+          <div style={{fontSize:10.5,color:C.muted,marginTop:-6,marginBottom:12,lineHeight:1.6}}>
+            পুরো শীট এলোমেলোভাবে না চালিয়ে, Subject/Sub-topic/Audience দিয়ে বেছে আগে কোনগুলো গুরুত্বপূর্ণ সেগুলোতে ব্যাখ্যা যুক্ত করুন।
+          </div>
+          <div className="fld">
+            <label>Audience Tag</label>
+            <select className="inp" value={filterAudience} onChange={e=>setFilterAudience(e.target.value)}>
+              <option value="all">— সব Audience —</option>
+              {audienceOptions.filter(a=>a!=="all").map(a=><option key={a} value={a}>{a}</option>)}
+            </select>
+          </div>
+          <div className="fld">
+            <label>Subject</label>
+            <select className="inp" value={filterSubject} onChange={e=>setFilterSubject(e.target.value)}>
+              <option value="all">— সব Subject —</option>
+              {subjectOptions.filter(s=>s!=="all").map(s=><option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div className="fld" style={{marginBottom:0}}>
+            <label>Sub-topic</label>
+            <select className="inp" value={filterSubtopic} onChange={e=>setFilterSubtopic(e.target.value)}>
+              <option value="all">— সব Sub-topic —</option>
+              {subtopicOptions.filter(s=>s!=="all").map(s=><option key={s} value={s}>{s}</option>)}
+            </select>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",background:C.panel,borderRadius:10,padding:"9px 12px",fontSize:12,fontWeight:700,marginTop:12}}>
+            <span>এই ফিল্টারে মিলল</span><span style={{color:C.green}}>{queue.length.toLocaleString("bn-BD")} টা</span>
+          </div>
+        </div>
+      )}
 
       {queue.length>0 && (
         <div className="card">
