@@ -30,6 +30,7 @@ const MAX_RUNTIME_MS = (parseInt(process.env.MAX_RUNTIME_MIN || "330", 10)) * 60
 const START_TIME = Date.now();
 
 // ঐচ্ছিক ফিল্টার — কমা দিয়ে একাধিক মান দেওয়া যায় (OR ম্যাচ), খালি রাখলে সব
+const NONE_TAG = "__NONE__"; // job-launcher.html-এর "কোনো Audience Tag নেই" অপশনের সাথে মেলানো
 const parseList = v => (v || "").split(",").map(s => s.trim()).filter(Boolean);
 const FILTER_AUDIENCE = parseList(process.env.FILTER_AUDIENCE);
 const FILTER_SUBJECT = parseList(process.env.FILTER_SUBJECT);
@@ -162,7 +163,10 @@ async function main() {
 
       if (FILTER_SUBJECT.length && !FILTER_SUBJECT.includes(subject)) return;
       if (FILTER_SUBTOPIC.length && !FILTER_SUBTOPIC.includes(subtopic)) return;
-      if (FILTER_AUDIENCE.length && !FILTER_AUDIENCE.some(tag => audienceList.includes(tag))) return;
+      if (FILTER_AUDIENCE.length) {
+        const matches = FILTER_AUDIENCE.some(tag => tag === NONE_TAG ? audienceList.length === 0 : audienceList.includes(tag));
+        if (!matches) return;
+      }
 
       queue.push({
         sheet, fbKey: row._fbKey, question: q,
