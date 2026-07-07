@@ -56,10 +56,10 @@ const PROVIDER_DEFS = [
   { id: "mistral", kind: "openai", envKey: "MISTRAL_KEYS", apiBase: "https://api.mistral.ai/v1", model: "mistral-small-latest" },
   { id: "gemini", kind: "gemini", envKey: "GEMINI_KEYS", model: "gemini-2.5-flash-lite" },
   { id: "openrouter", kind: "openai", envKey: "OPENROUTER_KEYS", apiBase: "https://openrouter.ai/api/v1", model: "mistralai/mistral-7b-instruct:free" },
-  { id: "cerebras", kind: "openai", envKey: "CEREBRAS_KEYS", apiBase: "https://api.cerebras.ai/v1", model: "llama3.1-8b" },
+  { id: "cerebras", kind: "openai", envKey: "CEREBRAS_KEYS", apiBase: "https://api.cerebras.ai/v1", model: "gpt-oss-120b" },
   { id: "together", kind: "openai", envKey: "TOGETHER_KEYS", apiBase: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free" },
-  { id: "fireworks", kind: "openai", envKey: "FIREWORKS_KEYS", apiBase: "https://api.fireworks.ai/inference/v1", model: "accounts/fireworks/models/llama-v3p1-8b-instruct" },
-  { id: "deepseek", kind: "openai", envKey: "DEEPSEEK_KEYS", apiBase: "https://api.deepseek.com/v1", model: "deepseek-chat" },
+  { id: "fireworks", kind: "openai", envKey: "FIREWORKS_KEYS", apiBase: "https://api.fireworks.ai/inference/v1", model: "accounts/fireworks/models/llama-v3p3-70b-instruct" },
+  { id: "deepseek", kind: "openai", envKey: "DEEPSEEK_KEYS", apiBase: "https://api.deepseek.com", model: "deepseek-v4-flash" },
 ];
 
 function buildKeyPool() {
@@ -80,9 +80,9 @@ function buildPrompt(n) {
 
   if (QUESTION_TYPE === "MCQ") {
     return `${header}
-প্রতিটি প্রশ্নে ৪টি অপশন থাকবে, একটাই সঠিক উত্তর। "correct" ফিল্ডের মান অবশ্যই option1/2/3/4-এর একটার সাথে অক্ষরে-অক্ষরে হুবহু মিলবে। "explanation" ৩ লাইনে সংক্ষিপ্ত হবে।
+প্রতিটি প্রশ্নে ৪টি অপশন থাকবে, একটাই সঠিক উত্তর। "correct_index" ফিল্ডে সঠিক অপশনের নম্বর দেবে — option1 হলে 1, option2 হলে 2, option3 হলে 3, option4 হলে 4 (এই ফিল্ডে শুধু একটা সংখ্যা 1/2/3/4, কোনো টেক্সট না)। "explanation" ৩ লাইনে সংক্ষিপ্ত হবে।
 উত্তর অবশ্যই শুধুমাত্র একটা বৈধ JSON array হবে, অন্য কোনো টেক্সট/মার্কডাউন/কোড-ফেন্স ছাড়া, ঠিক এই ফরম্যাটে:
-[{"question":"...","option1":"...","option2":"...","option3":"...","option4":"...","correct":"...","explanation":"..."}]`;
+[{"question":"...","option1":"...","option2":"...","option3":"...","option4":"...","correct_index":2,"explanation":"..."}]`;
   }
   if (QUESTION_TYPE === "Written") {
     return `${header}
@@ -158,13 +158,28 @@ function validateItem(item) {
     const o2 = (item.option2 || "").toString().trim();
     const o3 = (item.option3 || "").toString().trim();
     const o4 = (item.option4 || "").toString().trim();
-    const correct = (item.correct || "").toString().trim();
     if (!o1 || !o2 || !o3 || !o4) return { ok: false, reason: "একটা অপশন খালি" };
-    if (!correct) return { ok: false, reason: "correct খালি" };
     const opts = [o1, o2, o3, o4];
-    const idx = opts.findIndex(o => normFn(o) === normFn(correct));
-    if (idx === -1) return { ok: false, reason: "correct কোনো অপশনের সাথে মেলেনি" };
-    return { ok: true, q, o1, o2, o3, o4, correct: opts[idx], explanation: (item.explanation || "").toString().trim() };
+
+    // ১) correct_index (প্রাইমারি, সবচেয়ে নির্ভরযোগ্য) — ছোট মডেলও এটা মোটামুটি ঠিকঠাক দেয়
+    const rawIdx = item.correct_index;
+    const idxNum = parseInt(rawIdx, 10);
+    if (Number.isInteger(idxNum) && idxNum >= 1 && idxNum <= 4) {
+      return { ok: true, q, o1, o2, o3, o4, correct: opts[idxNum - 1], explanation: (item.explanation || "").toString().trim() };
+    }
+
+    // ২) পুরনো "correct" টেক্সট ফিল্ড — হুবহু মিল
+    const correctText = (item.correct || "").toString().trim();
+    if (correctText) {
+      const exactIdx = opts.findIndex(o => normFn(o) === normFn(correctText));
+      if (exactIdx !== -1) return { ok: true, q, o1, o2, o3, o4, correct: opts[exactIdx], explanation: (item.explanation || "").toString().trim() };
+
+      // ৩) fuzzy fallback — substring মিল (একেবারে শেষ চেষ্টা)
+      const fuzzyIdx = opts.findIndex(o => normFn(o).includes(normFn(correctText)) || normFn(correctText).includes(normFn(o)));
+      if (fuzzyIdx !== -1) return { ok: true, q, o1, o2, o3, o4, correct: opts[fuzzyIdx], explanation: (item.explanation || "").toString().trim() };
+    }
+
+    return { ok: false, reason: "correct_index/correct কোনোটাই বৈধভাবে মেলেনি" };
   }
   // Written / Study
   const ans = (item.answer || item.correct || "").toString().trim();
