@@ -2679,7 +2679,7 @@ function AIImportPage({push,onSendToBulk}){
   const copyPrompt=(qtype)=>{
     if(!ocrAll.trim()){push("warn","আগে OCR চালান","");return;}
     const formats={
-      MCQ:`MCQ format — প্রতি লাইন:\nপ্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;সঠিকউত্তর;ব্যাখ্যা(optional)\nউদাহরণ: বাংলাদেশের রাজধানী?;ঢাকা;চট্টগ্রাম;খুলনা;রাজশাহী;ঢাকা`,
+      MCQ:`MCQ format — প্রতি লাইন:\nপ্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;সঠিকউত্তর;ব্যাখ্যা(optional)\nউদাহরণ: বাংলাদেশের রাজধানী?;ঢাকা;চট্টগ্রাম;খুলনা;রাজশাহী;ঢাকা\nসঠিক উত্তর বের করার নিয়ম: (১) ভরাট/কালো বৃত্ত (●) চিহ্নিত অপশন থাকলে সেটাই সঠিক (২) ক/খ/গ/ঘ বা A/B/C/D পজিশন দেওয়া থাকলে সেই পজিশনের অপশন (৩) সরাসরি টেক্সট দেওয়া থাকলে সেটাই ব্যবহার করো — সবসময় আসল টেক্সট বসাবে, অক্ষর নয়`,
       Written:`Written format — প্রতি entry {} দিয়ে wrap করো:\n{প্রশ্ন;উত্তর}\nউদাহরণ: {সন্ধি বিচ্ছেদ: সঞ্চয়;সম+চয়}`,
       Study:`Study format — প্রতি entry {} দিয়ে wrap করো:\n{প্রশ্ন;উত্তর লাইন১\nউত্তর লাইন২}\nউদাহরণ: {রাষ্ট্রবিজ্ঞানের জনক কে?;এরিস্টটল}`,
     };
@@ -6098,23 +6098,23 @@ const DEFAULT_PROVIDERS=[
    keyHint:"openrouter.ai → Keys (free models, no card needed)",
    limit:"Free models available"},
   {id:"cerebras",name:"Cerebras",icon:"🟠",free:true,
-   model:"llama3.1-8b",
+   model:"gpt-oss-120b",
    url:"https://api.cerebras.ai/v1/chat/completions",
    keyHint:"cloud.cerebras.ai → API Keys (ফ্রি, খুব ফাস্ট)",
    limit:"ফ্রি"},
-  {id:"together",name:"Together AI",icon:"🔷",free:true,
+  {id:"together",name:"Together AI",icon:"🔷",free:false,
    model:"meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
    url:"https://api.together.xyz/v1/chat/completions",
-   keyHint:"api.together.xyz → Keys",
-   limit:"ফ্রি ক্রেডিট"},
+   keyHint:"api.together.xyz → Keys (⚠️ এখন সাধারণত $5 মিনিমাম ক্রেডিট লাগে, সম্পূর্ণ ফ্রি নয়)",
+   limit:"ফ্রি টিয়ার নেই"},
   {id:"fireworks",name:"Fireworks AI",icon:"🎆",free:true,
-   model:"accounts/fireworks/models/llama-v3p1-8b-instruct",
+   model:"accounts/fireworks/models/llama-v3p3-70b-instruct",
    url:"https://api.fireworks.ai/inference/v1/chat/completions",
    keyHint:"fireworks.ai → API Keys",
    limit:"ফ্রি ক্রেডিট"},
   {id:"deepseek",name:"DeepSeek",icon:"🔵",free:true,
-   model:"deepseek-chat",
-   url:"https://api.deepseek.com/v1/chat/completions",
+   model:"deepseek-v4-flash",
+   url:"https://api.deepseek.com/chat/completions",
    keyHint:"platform.deepseek.com → API Keys",
    limit:"সস্তা/ফ্রি টিয়ার"},
 ];
@@ -6148,12 +6148,17 @@ const OCR_PROMPT_FORMATS={
   MCQ:`তুমি একজন বাংলা MCQ প্রশ্নপত্র formatter।
 নিচের OCR text থেকে সব MCQ প্রশ্ন বের করে নিচের format-এ দাও।
 প্রশ্ন;অপশন১;অপশন২;অপশন৩;অপশন৪;সঠিকউত্তর
+সঠিক উত্তর বের করার নিয়ম (এই ক্রম অনুযায়ী চেষ্টা করো):
+১. যদি কোনো অপশনের পাশে/আগে ভরাট বা কালো বৃত্ত/বুলেট চিহ্ন (যেমন ●, ⬤, ⚫, বা কালো রঙে হাইলাইট করা বৃত্ত) থাকে আর বাকিগুলোর পাশে ফাঁকা/সাদা বৃত্ত (○, ◯) থাকে — তাহলে যেটার পাশে ভরাট চিহ্ন সেটাই সঠিক উত্তর।
+২. যদি প্রশ্নের শেষে আলাদা "উ." বা "Ans" বা "Answer" লাইনে ক/খ/গ/ঘ বা A/B/C/D লেখা থাকে — সেই অক্ষরের পজিশন অনুযায়ী অপশন ধরবে (ক বা A = ১ম অপশন, খ বা B = ২য়, গ বা C = ৩য়, ঘ বা D = ৪র্থ)।
+৩. যদি উত্তর হিসেবে সরাসরি কোনো অপশনের হুবহু টেক্সট লেখা থাকে — সেটাই ব্যবহার করো।
+৪. উপরের কোনোটাই না বুঝলে, প্রশ্নের বিষয়বস্তু অনুযায়ী তোমার নিজের জ্ঞান দিয়ে সবচেয়ে সম্ভাব্য সঠিক উত্তরটা অনুমান করো — কখনোই সঠিক উত্তর ফাঁকা রাখবে না।
 RULES:
 - শুধু formatted data দাও, কোনো label বা explanation নয়
 - Serial number বাদ দাও
 - 2-column হলে প্রশ্ন নম্বর অনুযায়ী sort করো
 - পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
-- উ. ক/খ/গ/ঘ দেখে সঠিক option text দাও (letter নয়)
+- সঠিক উত্তর ফিল্ডে সবসময় অপশনের আসল টেক্সট বসাবে (ক/খ/গ/ঘ বা A/B/C/D অক্ষর নয়)
 - field-এ ; থাকলে | দিয়ে replace করো
 - কোনো প্রশ্ন বাদ দিও না`,
   Written:`তুমি একজন বাংলা প্রশ্নপত্র formatter।
