@@ -4035,6 +4035,7 @@ function ContentManagerPage({push,tick,pushLayer}){
           <button className={`atab${tab==="qtype"?" on":""}`} onClick={()=>goTab("qtype")} style={{color:tab==="qtype"?C.green:undefined}}>🏷️ QType</button>
           <button className={`atab${tab==="modeltest"?" on":""}`} onClick={()=>goTab("modeltest")} style={{color:tab==="modeltest"?C.purple:undefined}}>🧪 Model Test</button>
           <button className={`atab${tab==="delete"?" on":""}`} onClick={()=>goTab("delete")}>🗑️ Delete</button>
+          <button className={`atab${tab==="joblauncher"?" on":""}`} onClick={()=>goTab("joblauncher")} style={{color:tab==="joblauncher"?C.green:undefined}}>🚀 AI Job</button>
         </div>
       </div>
       {tab==="browse"&&<BrowseTab push={push} tick={tick}/>}
@@ -4043,6 +4044,208 @@ function ContentManagerPage({push,tick,pushLayer}){
       {tab==="qtype"&&<BulkQTypeTab push={push} tick={tick}/>}
       {tab==="modeltest"&&<ModelTestTab push={push} tick={tick}/>}
       {tab==="delete"&&<DeleteTab push={push} tick={tick}/>}
+      {tab==="joblauncher"&&<JobLauncherTab push={push} tick={tick}/>}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   AI JOB LAUNCHER — Audience/Subject/Sub-topic ফিল্টার করে GitHub
+   Action (generate-explanations.yml) রিমোটলি ট্রিগার করে।
+   GitHub Token localStorage-এ সেভ থাকে, এই ডিভাইসেই।
+   ══════════════════════════════════════════════════════════════════ */
+const LS_GH_CFG = "gh_job_launcher_cfg";
+const JOB_NONE_TAG = "__NONE__";
+function loadGhCfg(){
+  try{
+    const raw = localStorage.getItem(LS_GH_CFG);
+    if(raw) return JSON.parse(raw);
+  }catch{}
+  return {repo:"hanif4343/smart-study-admin-app", workflow:"generate-explanations.yml", token:""};
+}
+function saveGhCfgLS(cfg){
+  try{ localStorage.setItem(LS_GH_CFG, JSON.stringify(cfg)); }catch{}
+}
+
+function JobCheckList({options,selected,onToggle,emptyText}){
+  return(
+    <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,maxHeight:180,overflowY:"auto",padding:4}}>
+      {!options.length && <div style={{padding:"12px 8px",fontSize:12,color:C.muted,textAlign:"center",lineHeight:1.5}}>{emptyText}</div>}
+      {options.map(o=>(
+        <label key={o.value} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 8px",borderRadius:6,fontSize:13,cursor:"pointer"}}>
+          <input type="checkbox" checked={selected.includes(o.value)} onChange={()=>onToggle(o.value)} style={{accentColor:C.accent,width:16,height:16,flexShrink:0}}/>
+          <span style={{fontStyle:o.value===JOB_NONE_TAG?"italic":"normal",color:o.value===JOB_NONE_TAG?C.muted:C.text}}>{o.label}</span>
+          <span style={{marginLeft:"auto",fontSize:10,color:C.muted,background:"#ffffff0a",padding:"2px 7px",borderRadius:20,flexShrink:0}}>{o.count}</span>
+        </label>
+      ))}
+    </div>
+  );
+}
+
+function JobLauncherTab({push,tick}){
+  const{data:quiz}=useFB("Quiz",tick);
+  const{data:qbank}=useFB("QBank",tick);
+  const{data:study}=useFB("Study",tick);
+
+  const allRows=useMemo(()=>{
+    const rows=[];
+    [["Quiz",quiz],["QBank",qbank],["Study",study]].forEach(([sheet,raw])=>{
+      toArr(raw).forEach(row=>{
+        const q=(row.Question||row.question||"").toString().trim();
+        if(!q)return;
+        const exp=(row.Explanation||row.explanation||"").toString().trim();
+        const subject=(row.Subject||row.subject||"").toString().trim();
+        const subtopic=(row.Sub_topic||row.sub_topic||"").toString().trim();
+        const audRaw=(row.AudienceTags||row.audienceTags||row.audience_tags||"").toString().trim();
+        const audienceList=audRaw.split(",").map(a=>a.trim()).filter(Boolean);
+        rows.push({sheet,subject,subtopic,audienceList,hasExp:!!exp});
+      });
+    });
+    return rows;
+  },[quiz,qbank,study]);
+
+  const missing=useMemo(()=>allRows.filter(r=>!r.hasExp),[allRows]);
+
+  const[selAud,setSelAud]=useState([]);
+  const[selSubj,setSelSubj]=useState([]);
+  const[selSubt,setSelSubt]=useState([]);
+
+  const matchAud=useCallback((r,aud)=> !aud.length || aud.some(a=>a===JOB_NONE_TAG? r.audienceList.length===0 : r.audienceList.includes(a)),[]);
+
+  const audienceOptions=useMemo(()=>{
+    const counts={};
+    missing.forEach(r=>{
+      if(!r.audienceList.length){ counts[JOB_NONE_TAG]=(counts[JOB_NONE_TAG]||0)+1; return; }
+      r.audienceList.forEach(a=>{counts[a]=(counts[a]||0)+1;});
+    });
+    const entries=Object.keys(counts).filter(k=>k!==JOB_NONE_TAG).sort().map(a=>({value:a,label:a,count:counts[a]}));
+    if(counts[JOB_NONE_TAG]) entries.push({value:JOB_NONE_TAG,label:"— কোনো Audience Tag নেই (ফাঁকা) —",count:counts[JOB_NONE_TAG]});
+    return entries;
+  },[missing]);
+
+  const rowsByAud=useMemo(()=>missing.filter(r=>matchAud(r,selAud)),[missing,selAud,matchAud]);
+
+  const subjectOptions=useMemo(()=>{
+    const counts={};
+    rowsByAud.forEach(r=>{ const s=r.subject||"(ফাঁকা)"; counts[s]=(counts[s]||0)+1; });
+    return Object.keys(counts).sort().map(s=>({value:s,label:s,count:counts[s]}));
+  },[rowsByAud]);
+
+  const rowsByAudSubj=useMemo(()=>rowsByAud.filter(r=> !selSubj.length || selSubj.includes(r.subject||"(ফাঁকা)")),[rowsByAud,selSubj]);
+
+  const subtopicOptions=useMemo(()=>{
+    const counts={};
+    rowsByAudSubj.forEach(r=>{ const st=r.subtopic||"(ফাঁকা)"; counts[st]=(counts[st]||0)+1; });
+    return Object.keys(counts).sort().map(s=>({value:s,label:s,count:counts[s]}));
+  },[rowsByAudSubj]);
+
+  const finalRows=useMemo(()=>rowsByAudSubj.filter(r=> !selSubt.length || selSubt.includes(r.subtopic||"(ফাঁকা)")),[rowsByAudSubj,selSubt]);
+
+  const audKey=selAud.join(",");
+  const subjKey=selSubj.join(",");
+  useEffect(()=>{ setSelSubj([]); setSelSubt([]); },[audKey]);
+  useEffect(()=>{ setSelSubt([]); },[subjKey]);
+
+  const[cfg,setCfg]=useState(loadGhCfg);
+  const[editingToken,setEditingToken]=useState(()=>!loadGhCfg().token);
+  const[status,setStatus]=useState(null);
+  const[busy,setBusy]=useState(false);
+
+  const toggle=(arr,setArr,val)=>{ setArr(arr.includes(val)? arr.filter(x=>x!==val) : [...arr,val]); };
+
+  const saveCfg=()=>{
+    saveGhCfgLS(cfg);
+    setEditingToken(false);
+    setStatus({type:"ok",msg:"✅ GitHub সেটিংস এই ডিভাইসে সেভ হয়ে গেছে।"});
+  };
+
+  const trigger=async()=>{
+    if(!cfg.token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
+    if(!cfg.repo||!cfg.repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
+    setBusy(true);
+    setStatus({type:"info",msg:"পাঠানো হচ্ছে..."});
+    try{
+      const resp=await fetch(`https://api.github.com/repos/${cfg.repo}/actions/workflows/${cfg.workflow}/dispatches`,{
+        method:"POST",
+        headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+cfg.token,"Content-Type":"application/json"},
+        body:JSON.stringify({ref:"main",inputs:{
+          filter_audience:selAud.join(","),
+          filter_subject:selSubj.join(","),
+          filter_subtopic:selSubt.join(",")
+        }})
+      });
+      if(resp.status===204){ setStatus({type:"ok",msg:"✅ চালু হয়ে গেছে! GitHub-এর Actions ট্যাবে গিয়ে দেখো।"}); }
+      else{
+        const data=await resp.json().catch(()=>({}));
+        throw new Error(data.message||`HTTP ${resp.status}`);
+      }
+    }catch(e){ setStatus({type:"err",msg:"❌ ব্যর্থ: "+e.message}); }
+    setBusy(false);
+  };
+
+  const statusColors = status?.type==="ok" ? {bg:"#052e16",fg:"#4ade80",bd:"#14532d"}
+    : status?.type==="err" ? {bg:"#1f0a0a",fg:"#fca5a5",bd:"#7f1d1d"}
+    : {bg:"#0e1a2e",fg:"#93c5fd",bd:C.border};
+
+  return(
+    <div style={{paddingBottom:24}}>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
+        <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>🎯 ফিল্টার বেছে নাও (একাধিক বাছাই করা যায়)</div>
+
+        <div className="fld"><label>Audience Tag</label>
+          <JobCheckList options={audienceOptions} selected={selAud} onToggle={v=>toggle(selAud,setSelAud,v)} emptyText={missing.length?"লোড হচ্ছে বা কোনো ট্যাগ নেই":"🎉 সব প্রশ্নেই ব্যাখ্যা আছে, কোনো কাজ বাকি নেই!"}/>
+        </div>
+
+        <div className="fld"><label>Subject</label>
+          <JobCheckList options={subjectOptions} selected={selSubj} onToggle={v=>toggle(selSubj,setSelSubj,v)} emptyText="এই ফিল্টারে কিছু নেই"/>
+        </div>
+
+        <div className="fld"><label>Sub-topic</label>
+          <JobCheckList options={subtopicOptions} selected={selSubt} onToggle={v=>toggle(selSubt,setSelSubt,v)} emptyText="এই ফিল্টারে কিছু নেই"/>
+        </div>
+
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginTop:8}}>
+          <span style={{fontSize:12,color:C.muted}}>এই ফিল্টারে ব্যাখ্যা-নেই প্রশ্ন</span>
+          <span style={{fontSize:22,fontWeight:800,color:C.yellow}}>{finalRows.length}</span>
+        </div>
+      </div>
+
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
+        <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>⚙️ GitHub Action সেটিংস</div>
+
+        <div className="fld"><label>Repo (owner/name)</label>
+          <input className="inp" value={cfg.repo} onChange={e=>setCfg({...cfg,repo:e.target.value})}/>
+        </div>
+        <div className="fld"><label>Workflow ফাইলের নাম</label>
+          <input className="inp" value={cfg.workflow} onChange={e=>setCfg({...cfg,workflow:e.target.value})}/>
+        </div>
+        <div className="fld"><label>GitHub Personal Access Token</label>
+          {editingToken ? (
+            <input className="inp" type="password" placeholder="ghp_xxxxxxxxxxxx" value={cfg.token} onChange={e=>setCfg({...cfg,token:e.target.value})}/>
+          ) : (
+            <div style={{display:"flex",alignItems:"center",gap:8,background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 12px"}}>
+              <span style={{color:C.green,fontSize:13}}>●●●●●●●●●●●● সেভ করা আছে</span>
+              <button className="btn" style={{marginLeft:"auto",background:"transparent",color:C.accent,border:`1px solid ${C.border}`}} onClick={()=>setEditingToken(true)}>✏️ পরিবর্তন</button>
+            </div>
+          )}
+        </div>
+        <button className="btn" style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:11,fontSize:13,marginTop:2}} onClick={saveCfg}>💾 সেটিংস সেভ করো</button>
+      </div>
+
+      <button className="btn" disabled={busy} style={{width:"100%",justifyContent:"center",background:C.green,color:"#04180a",padding:13,fontSize:14,fontWeight:700}} onClick={trigger}>
+        {busy?"⏳ পাঠানো হচ্ছে...":"🚀 এই ফিল্টারে Action চালু করো"}
+      </button>
+
+      {status && (
+        <div style={{marginTop:10,padding:"11px 13px",borderRadius:10,fontSize:13,lineHeight:1.5,
+          background:statusColors.bg,color:statusColors.fg,border:`1px solid ${statusColors.bd}`}}>
+          {status.msg}
+        </div>
+      )}
+
+      <div style={{fontSize:11,color:C.muted,marginTop:14,lineHeight:1.6}}>
+        টোকেন এই ডিভাইসেই (localStorage) সেভ থাকে, অন্য কোথাও পাঠানো হয় না। একবারই বানাতে হবে: GitHub → প্রোফাইল ছবি → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token (classic) → শুধু <b>repo</b> স্কোপ টিক দাও → Generate → টোকেন কপি করে উপরে পেস্ট করো।
+      </div>
     </div>
   );
 }
