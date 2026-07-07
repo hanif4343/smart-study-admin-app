@@ -1,0 +1,73 @@
+name: Generate Questions
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_sheet:
+        description: "কোন সিটে যোগ হবে"
+        required: true
+        type: choice
+        options: [Quiz, QBank, Study]
+        default: Quiz
+      question_type:
+        description: "প্রশ্নের ধরন (Study সিটে এটা ইগনোর হয়, সবসময় Study টাইপ হয়)"
+        required: true
+        type: choice
+        options: [MCQ, Written]
+        default: MCQ
+      subject:
+        description: "Subject (বিষয়ের নাম)"
+        required: true
+      subtopic:
+        description: "Sub-topic (খালি রাখলে Subject-ই ব্যবহার হবে)"
+        required: false
+        default: ""
+      audience_tags:
+        description: "Audience Tag(s), কমা দিয়ে একাধিক (যেমন: Masters 1,Job)"
+        required: false
+        default: ""
+      count:
+        description: "মোট কতগুলো প্রশ্ন বানাতে হবে"
+        required: true
+        default: "10"
+      batch_size:
+        description: "প্রতি AI কলে কতগুলো চাইবে (ডিফল্ট 6)"
+        required: false
+        default: "6"
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run question generator
+        env:
+          FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
+          FIREBASE_SECRET: ${{ secrets.FIREBASE_SECRET }}
+          GROQ_KEYS: ${{ secrets.GROQ_KEYS }}
+          MISTRAL_KEYS: ${{ secrets.MISTRAL_KEYS }}
+          GEMINI_KEYS: ${{ secrets.GEMINI_KEYS }}
+          OPENROUTER_KEYS: ${{ secrets.OPENROUTER_KEYS }}
+          CEREBRAS_KEYS: ${{ secrets.CEREBRAS_KEYS }}
+          TOGETHER_KEYS: ${{ secrets.TOGETHER_KEYS }}
+          FIREWORKS_KEYS: ${{ secrets.FIREWORKS_KEYS }}
+          DEEPSEEK_KEYS: ${{ secrets.DEEPSEEK_KEYS }}
+          DELAY_MS: "1500"
+          MAX_RUNTIME_MIN: "330"
+          TARGET_SHEET: ${{ github.event.inputs.target_sheet }}
+          QUESTION_TYPE: ${{ github.event.inputs.question_type }}
+          SUBJECT: ${{ github.event.inputs.subject }}
+          SUBTOPIC: ${{ github.event.inputs.subtopic }}
+          AUDIENCE_TAGS: ${{ github.event.inputs.audience_tags }}
+          COUNT: ${{ github.event.inputs.count }}
+          BATCH_SIZE: ${{ github.event.inputs.batch_size }}
+        run: node scripts/generate-questions.mjs
