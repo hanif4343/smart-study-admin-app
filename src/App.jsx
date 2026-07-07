@@ -5727,13 +5727,17 @@ function TechniquesPage({push,tick}){
 const NAV=[
   {id:"dashboard",  icon:"📊", label:"Dashboard"},
   {id:"students",   icon:"👥", label:"Users",    badge:true},
-  {id:"reports",    icon:"🚨", label:"Reports",  badge:true},
   {id:"content",    icon:"📋", label:"Content"},
-  {id:"techniques", icon:"🧠", label:"Techniques",badge:true},
   {id:"notify",     icon:"📣", label:"Notify"},
-  {id:"uploader",   icon:"📝", label:"Bulk Upload"},
-  {id:"aijob",      icon:"🤖", label:"AI Job",
+  {id:"approval",   icon:"✅", label:"Approval", badge:true,
     children:[
+      {id:"reports",    icon:"🚨", label:"Reports"},
+      {id:"techniques", icon:"🧠", label:"Techniques"},
+    ]
+  },
+  {id:"uploader",   icon:"📤", label:"Uploader",
+    children:[
+      {id:"bulkupload",  icon:"📝", label:"Bulk Upload"},
       {id:"joblauncher", icon:"🚀", label:"AI Job"},
       {id:"questiongen", icon:"🧬", label:"AI প্রশ্ন"},
       {id:"aiimport",    icon:"📸", label:"AI Import"},
@@ -6367,7 +6371,7 @@ export default function App(){
         const pageMap={
           reports:"reports",techniques:"techniques",
           students:"students",dashboard:"dashboard",
-          notify:"notify",content:"content",uploader:"uploader",
+          notify:"notify",content:"content",uploader:"bulkupload",
           new_report:"reports", // type দিয়েও navigate
         };
         const target=pageMap[url]||pageMap[data.type]||null;
@@ -6398,7 +6402,7 @@ export default function App(){
     return arr.filter(t=>!t.approved&&!t.Approved).length;
   },[techRawBadge]);
 
-  const badgeMap={students:signupBadge,reports:reportBadge,techniques:techBadge};
+  const badgeMap={students:signupBadge,reports:reportBadge,techniques:techBadge,approval:reportBadge+techBadge};
   const pageLabel=NAV.find(n=>n.id===page) ||
     NAV.flatMap(n=>n.children||[]).find(c=>c.id===page);
 
@@ -6437,25 +6441,38 @@ export default function App(){
 
       <div style={{display:page==="dashboard"?"block":"none"}}><DashboardPage push={push} tick={tick}/></div>
       <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} tick={tick} pushLayer={pushLayer}/></div>
-      <div style={{display:page==="reports"  ?"block":"none"}}><ReportsPage   push={push} tick={tick}/></div>
       <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick} pushLayer={pushLayer}/></div>
-      <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push} tick={tick}/></div>
-      <div style={{display:page==="uploader" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill(null)}/></div>
 
-      {/* AI Job hub — জব লঞ্চার / প্রশ্ন জেনারেটর / OCR ইমপোর্ট, একটার আন্ডারে, ট্যাব দিয়ে সুইচ (Content পেজের মতো) */}
-      <div style={{display:(page==="joblauncher"||page==="questiongen"||page==="aiimport")?"block":"none"}}>
+      {/* Approval hub — Reports / Techniques, একটার আন্ডারে, ট্যাব দিয়ে সুইচ */}
+      <div style={{display:(page==="reports"||page==="techniques")?"block":"none"}}>
         <div className="page" style={{paddingTop:0}}>
           <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
             <div className="atabs">
+              <button className={`atab${page==="reports"?" on":""}`} onClick={()=>goPage("reports")}>🚨 Reports{reportBadge>0?` (${reportBadge})`:""}</button>
+              <button className={`atab${page==="techniques"?" on":""}`} onClick={()=>goPage("techniques")}>🧠 Techniques{techBadge>0?` (${techBadge})`:""}</button>
+            </div>
+          </div>
+          <div style={{display:page==="reports"   ?"block":"none"}}><ReportsPage   push={push} tick={tick}/></div>
+          <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
+        </div>
+      </div>
+
+      {/* Uploader hub — Bulk Upload / AI Job / AI প্রশ্ন / AI Import, একটার আন্ডারে, ট্যাব দিয়ে সুইচ */}
+      <div style={{display:(page==="bulkupload"||page==="joblauncher"||page==="questiongen"||page==="aiimport")?"block":"none"}}>
+        <div className="page" style={{paddingTop:0}}>
+          <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
+            <div className="atabs">
+              <button className={`atab${page==="bulkupload"?" on":""}`} onClick={()=>goPage("bulkupload")}>📝 Bulk Upload</button>
               <button className={`atab${page==="joblauncher"?" on":""}`} onClick={()=>goPage("joblauncher")} style={{color:page==="joblauncher"?C.green:undefined}}>🚀 AI Job</button>
               <button className={`atab${page==="questiongen"?" on":""}`} onClick={()=>goPage("questiongen")} style={{color:page==="questiongen"?C.purple:undefined}}>🧬 AI প্রশ্ন</button>
               <button className={`atab${page==="aiimport"?" on":""}`} onClick={()=>goPage("aiimport")}>📸 AI Import</button>
             </div>
           </div>
+          <div style={{display:page==="bulkupload" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill(null)}/></div>
           <div style={{display:page==="joblauncher"?"block":"none"}}><JobLauncherTab push={push} tick={tick}/></div>
           <div style={{display:page==="questiongen"?"block":"none"}}><QuestionGenTab push={push} tick={tick}/></div>
-          <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("uploader");}}/></div>
+          <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
         </div>
       </div>
 
