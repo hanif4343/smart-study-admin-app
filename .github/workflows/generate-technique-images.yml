@@ -1,0 +1,50 @@
+name: Generate Technique Images
+
+on:
+  workflow_dispatch: # GitHub Actions ট্যাব থেকে ম্যানুয়ালি চালাও, ফিল্টার বসিয়ে
+    inputs:
+      filter_audience:
+        description: "Audience Tag(s), কমা দিয়ে একাধিক (খালি রাখলে সব)"
+        required: false
+        default: ""
+      filter_subject:
+        description: "Subject(s), কমা দিয়ে একাধিক (খালি রাখলে সব)"
+        required: false
+        default: ""
+      filter_subtopic:
+        description: "Sub-topic(s), কমা দিয়ে একাধিক (খালি রাখলে সব)"
+        required: false
+        default: ""
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run technique image generator
+        env:
+          FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
+          FIREBASE_SECRET: ${{ secrets.FIREBASE_SECRET }}
+          SHEETS: "Quiz,QBank,Study"
+          GROQ_KEYS: ${{ secrets.GROQ_KEYS }}
+          MISTRAL_KEYS: ${{ secrets.MISTRAL_KEYS }}
+          GEMINI_KEYS: ${{ secrets.GEMINI_KEYS }}
+          OPENROUTER_KEYS: ${{ secrets.OPENROUTER_KEYS }}
+          CEREBRAS_KEYS: ${{ secrets.CEREBRAS_KEYS }}
+          DELAY_MS: "2500"
+          MAX_RUNTIME_MIN: "330"
+          IMG_WIDTH: "1024"
+          IMG_HEIGHT: "768"
+          FILTER_AUDIENCE: ${{ github.event.inputs.filter_audience }}
+          FILTER_SUBJECT: ${{ github.event.inputs.filter_subject }}
+          FILTER_SUBTOPIC: ${{ github.event.inputs.filter_subtopic }}
+        run: node scripts/generate-technique-images.mjs
