@@ -2482,6 +2482,7 @@ function EntryPage({push}){
 function AIImportPage({push,onSendToBulk}){
   const[images,setImages]=useState([]);   // [{uri,base64,status,ocrText}]
   const[ocrAll,setOcrAll]=useState("");
+  const[ocrQtype,setOcrQtype]=useState("MCQ"); // MCQ | Written | Study — OCR অটো-পার্সের টার্গেট ফরম্যাট
   const[running,setRunning]=useState(false);
   const[progress,setProgress]=useState({cur:0,total:0});
   const[copied,setCopied]=useState(false);
@@ -2598,7 +2599,7 @@ function AIImportPage({push,onSendToBulk}){
 
   /* ── ML Kit OCR via native plugin ── */
   // Returns {raw, parsed} — raw=full text, parsed=semicolon lines (bulk ready)
-  const runOcrOnBase64=async(b64)=>{
+  const runOcrOnBase64=async(b64,qtype="MCQ")=>{
     const {OcrPlugin}=window.Capacitor?.Plugins||{};
     if(!OcrPlugin){
       const available=Object.keys(window.Capacitor?.Plugins||{}).join(", ")||"(none)";
@@ -2611,12 +2612,12 @@ function AIImportPage({push,onSendToBulk}){
       const raw=res.text||"";
       let parsed=res.parsed||"";  // semicolon format from Kotlin parser
       _LC.log("OcrPlugin",`OCR result: ${raw.length} chars, parsed: ${parsed.split("\n").filter(Boolean).length} questions`);
-      // ── Auto AI parse if provider active ─────────────────────────────────
+      // ── Auto AI parse if any provider active (rotation pool) ─────────────
       try{
-        const aiResult=await callAiProvider(raw);
+        const aiResult=await callAiProviderRotating(raw,qtype);
         if(aiResult&&aiResult.includes(";")){
           parsed=aiResult;  // AI parse replaces local parser output
-          _LC.log("OcrPlugin","AI parse success: "+aiResult.split("\n").filter(Boolean).length+" questions");
+          _LC.log("OcrPlugin",`AI parse success (${qtype}): `+aiResult.split("\n").filter(Boolean).length+" questions");
         }
       }catch(aiErr){
         _LC.warn("OcrPlugin","AI parse skipped ("+aiErr.message+") — using local parser");
@@ -2654,7 +2655,7 @@ function AIImportPage({push,onSendToBulk}){
         const parts=Array.isArray(b64raw)?b64raw:[b64raw];
         let pageRaw="", pageParsed="";
         for(const b64 of parts){
-          const {raw,parsed}=await runOcrOnBase64(b64);
+          const {raw,parsed}=await runOcrOnBase64(b64,ocrQtype);
           if(raw)    pageRaw    +=(pageRaw?"\n":"")+raw;
           if(parsed) pageParsed +=(pageParsed?"\n":"")+parsed;
         }
@@ -2713,9 +2714,9 @@ function AIImportPage({push,onSendToBulk}){
           <div>
             <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>📸 AI Import — OCR</div>
             <div style={{fontSize:11,opacity:.8}}>
-              {getActiveProvider()
-                ? `✅ ${getActiveProvider().name} active`
-                : "⚠️ API provider নেই — ⚙️ দিন"}
+              {buildKeyPool().length
+                ? `✅ ${buildKeyPool().length}টা key রেডি (rotation)`
+                : "⚠️ কোনো API key active নেই — ⚙️ দিন"}
             </div>
           </div>
           <button onClick={()=>setShowApiSettings(v=>!v)}
@@ -2728,6 +2729,16 @@ function AIImportPage({push,onSendToBulk}){
       </div>
       {/* Inline API Settings panel */}
       {showApiSettings&&<ApiSettingsPage push={push} inline={true}/>}
+
+      {/* OCR Format Selector */}
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:11,color:C.muted,marginBottom:6,fontWeight:600}}>এই ছবিগুলো কোন ফরম্যাটে পার্স করবো?</div>
+        <div style={{display:"flex",gap:6}}>
+          {["MCQ","Written","Study"].map(t=>(
+            <button key={t} className={`ftab${ocrQtype===t?" on":""}`} onClick={()=>setOcrQtype(t)} style={{flex:1}} disabled={running}>{t}</button>
+          ))}
+        </div>
+      </div>
 
       {/* Image Picker Buttons */}
       <div style={{display:"flex",gap:8,marginBottom:12}}>
@@ -4036,6 +4047,7 @@ function ContentManagerPage({push,tick,pushLayer}){
           <button className={`atab${tab==="modeltest"?" on":""}`} onClick={()=>goTab("modeltest")} style={{color:tab==="modeltest"?C.purple:undefined}}>🧪 Model Test</button>
           <button className={`atab${tab==="delete"?" on":""}`} onClick={()=>goTab("delete")}>🗑️ Delete</button>
           <button className={`atab${tab==="joblauncher"?" on":""}`} onClick={()=>goTab("joblauncher")} style={{color:tab==="joblauncher"?C.green:undefined}}>🚀 AI Job</button>
+          <button className={`atab${tab==="questiongen"?" on":""}`} onClick={()=>goTab("questiongen")} style={{color:tab==="questiongen"?C.purple:undefined}}>🧬 AI প্রশ্ন</button>
         </div>
       </div>
       {tab==="browse"&&<BrowseTab push={push} tick={tick}/>}
@@ -4045,6 +4057,7 @@ function ContentManagerPage({push,tick,pushLayer}){
       {tab==="modeltest"&&<ModelTestTab push={push} tick={tick}/>}
       {tab==="delete"&&<DeleteTab push={push} tick={tick}/>}
       {tab==="joblauncher"&&<JobLauncherTab push={push} tick={tick}/>}
+      {tab==="questiongen"&&<QuestionGenTab push={push} tick={tick}/>}
     </div>
   );
 }
@@ -4057,11 +4070,12 @@ function ContentManagerPage({push,tick,pushLayer}){
 const LS_GH_CFG = "gh_job_launcher_cfg";
 const JOB_NONE_TAG = "__NONE__";
 function loadGhCfg(){
+  const defaults = {repo:"hanif4343/smart-study-admin-app", token:"", workflowExplain:"generate-explanations.yml", workflowQuestions:"generate-questions.yml"};
   try{
     const raw = localStorage.getItem(LS_GH_CFG);
-    if(raw) return JSON.parse(raw);
+    if(raw) return {...defaults, ...JSON.parse(raw)};
   }catch{}
-  return {repo:"hanif4343/smart-study-admin-app", workflow:"generate-explanations.yml", token:""};
+  return defaults;
 }
 function saveGhCfgLS(cfg){
   try{ localStorage.setItem(LS_GH_CFG, JSON.stringify(cfg)); }catch{}
@@ -4165,7 +4179,7 @@ function JobLauncherTab({push,tick}){
     setBusy(true);
     setStatus({type:"info",msg:"পাঠানো হচ্ছে..."});
     try{
-      const resp=await fetch(`https://api.github.com/repos/${cfg.repo}/actions/workflows/${cfg.workflow}/dispatches`,{
+      const resp=await fetch(`https://api.github.com/repos/${cfg.repo}/actions/workflows/${cfg.workflowExplain}/dispatches`,{
         method:"POST",
         headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+cfg.token,"Content-Type":"application/json"},
         body:JSON.stringify({ref:"main",inputs:{
@@ -4217,7 +4231,7 @@ function JobLauncherTab({push,tick}){
           <input className="inp" value={cfg.repo} onChange={e=>setCfg({...cfg,repo:e.target.value})}/>
         </div>
         <div className="fld"><label>Workflow ফাইলের নাম</label>
-          <input className="inp" value={cfg.workflow} onChange={e=>setCfg({...cfg,workflow:e.target.value})}/>
+          <input className="inp" value={cfg.workflowExplain} onChange={e=>setCfg({...cfg,workflowExplain:e.target.value})}/>
         </div>
         <div className="fld"><label>GitHub Personal Access Token</label>
           {editingToken ? (
@@ -4246,6 +4260,186 @@ function JobLauncherTab({push,tick}){
       <div style={{fontSize:11,color:C.muted,marginTop:14,lineHeight:1.6}}>
         টোকেন এই ডিভাইসেই (localStorage) সেভ থাকে, অন্য কোথাও পাঠানো হয় না। একবারই বানাতে হবে: GitHub → প্রোফাইল ছবি → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token (classic) → শুধু <b>repo</b> স্কোপ টিক দাও → Generate → টোকেন কপি করে উপরে পেস্ট করো।
       </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   AI QUESTION GENERATOR — Subject/Sub-topic দিয়ে AI নতুন প্রশ্ন বানিয়ে
+   সরাসরি Firebase-এ push করে (generate-questions.yml ট্রিগার করে)।
+   ══════════════════════════════════════════════════════════════════ */
+function QuestionGenTab({push,tick}){
+  const[sheet,setSheet]=useState("Quiz");
+  const[qtype,setQtype]=useState("MCQ");
+  const[subject,setSubject]=useState("");
+  const[subtopic,setSubtopic]=useState("");
+  const[subjects,setSubjects]=useState([]);
+  const[audienceTags,setAudienceTags]=useState([]);
+  const[tagInput,setTagInput]=useState("");
+  const[count,setCount]=useState(10);
+  const[batchSize,setBatchSize]=useState(6);
+
+  useEffect(()=>{
+    loadPath(sheet).then(raw=>{
+      const arr=toArr(raw);
+      const subs=[...new Set(arr.map(q=>q.subject||q.Subject||"").filter(Boolean))];
+      setSubjects(subs);
+    }).catch(()=>{});
+  },[sheet]);
+
+  const addTag=()=>{
+    const t=tagInput.trim();
+    if(t&&!audienceTags.includes(t)) setAudienceTags(p=>[...p,t]);
+    setTagInput("");
+  };
+  const removeTag=t=>setAudienceTags(p=>p.filter(x=>x!==t));
+  const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1"];
+
+  const[cfg,setCfg]=useState(loadGhCfg);
+  const[editingToken,setEditingToken]=useState(()=>!loadGhCfg().token);
+  const[status,setStatus]=useState(null);
+  const[busy,setBusy]=useState(false);
+
+  const saveCfg=()=>{
+    saveGhCfgLS(cfg);
+    setEditingToken(false);
+    setStatus({type:"ok",msg:"✅ GitHub সেটিংস এই ডিভাইসে সেভ হয়ে গেছে।"});
+  };
+
+  const trigger=async()=>{
+    if(!cfg.token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
+    if(!cfg.repo||!cfg.repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
+    if(!subject.trim()){ setStatus({type:"err",msg:"❌ Subject লিখো।"}); return; }
+    setBusy(true);
+    setStatus({type:"info",msg:"পাঠানো হচ্ছে..."});
+    try{
+      const resp=await fetch(`https://api.github.com/repos/${cfg.repo}/actions/workflows/${cfg.workflowQuestions}/dispatches`,{
+        method:"POST",
+        headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+cfg.token,"Content-Type":"application/json"},
+        body:JSON.stringify({ref:"main",inputs:{
+          target_sheet:sheet,
+          question_type:qtype,
+          subject:subject.trim(),
+          subtopic:subtopic.trim(),
+          audience_tags:audienceTags.join(","),
+          count:String(count),
+          batch_size:String(batchSize),
+        }})
+      });
+      if(resp.status===204){ setStatus({type:"ok",msg:`✅ চালু হয়ে গেছে! ${count}টা "${subject}" প্রশ্ন তৈরি হচ্ছে — GitHub Actions ট্যাবে দেখো।`}); }
+      else{
+        const data=await resp.json().catch(()=>({}));
+        throw new Error(data.message||`HTTP ${resp.status}`);
+      }
+    }catch(e){ setStatus({type:"err",msg:"❌ ব্যর্থ: "+e.message}); }
+    setBusy(false);
+  };
+
+  const statusColors = status?.type==="ok" ? {bg:"#052e16",fg:"#4ade80",bd:"#14532d"}
+    : status?.type==="err" ? {bg:"#1f0a0a",fg:"#fca5a5",bd:"#7f1d1d"}
+    : {bg:"#0e1a2e",fg:"#93c5fd",bd:C.border};
+
+  return(
+    <div style={{paddingBottom:24}}>
+      <div style={{background:`linear-gradient(135deg,${C.purple},#5b21b6)`,borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff"}}>
+        <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>🧬 AI প্রশ্ন জেনারেটর</div>
+        <div style={{fontSize:11,opacity:.85}}>Subject/Sub-topic দিয়ে AI নতুন প্রশ্ন বানিয়ে সরাসরি Firebase-এ যোগ করবে</div>
+      </div>
+
+      <div style={{background:"#3f1d1d",border:"1px solid #7c2d2d",borderRadius:10,padding:"10px 12px",marginBottom:14,fontSize:11.5,color:"#fca5a5",lineHeight:1.6}}>
+        ⚠️ AI নিজের জ্ঞান থেকে প্রশ্ন বানায় (কোনো বই/সোর্স ছাড়া) — ভুল থাকতে পারে। লাইভ করার আগে Browse ট্যাবে গিয়ে একবার চোখ বুলিয়ে নাও।
+      </div>
+
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
+        <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>📋 কী প্রশ্ন বানাতে হবে</div>
+
+        <div style={{display:"flex",gap:6,marginBottom:12}}>
+          {["Quiz","QBank","Study"].map(m=>(
+            <button key={m} className={`ftab${sheet===m?" on":""}`} onClick={()=>setSheet(m)} style={{flex:1}}>{m}</button>
+          ))}
+        </div>
+
+        {sheet!=="Study"&&(
+          <div style={{display:"flex",gap:6,marginBottom:12}}>
+            {["MCQ","Written"].map(t=>(
+              <button key={t} className={`ftab${qtype===t?" on":""}`} onClick={()=>setQtype(t)} style={{flex:1}}>{t}</button>
+            ))}
+          </div>
+        )}
+
+        <div className="fld"><label>Subject</label>
+          <input className="inp" list="qgen-subjects" value={subject} onChange={e=>setSubject(e.target.value)} placeholder="যেমন: পাশ্চাত্যের রাষ্ট্রচিন্তা"/>
+          <datalist id="qgen-subjects">{subjects.map(s=><option key={s} value={s}/>)}</datalist>
+        </div>
+
+        <div className="fld"><label>Sub-topic (খালি রাখলে Subject-ই হবে)</label>
+          <input className="inp" value={subtopic} onChange={e=>setSubtopic(e.target.value)} placeholder="যেমন: ক বিভাগ"/>
+        </div>
+
+        <div className="fld"><label>Audience Tags</label>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+            {QUICK_TAGS.map(t=>(
+              <button key={t} className="btn" style={{background:audienceTags.includes(t)?C.accent:C.panel,color:audienceTags.includes(t)?"#fff":C.muted,border:`1px solid ${C.border}`,fontSize:11}}
+                onClick={()=>audienceTags.includes(t)?removeTag(t):setAudienceTags(p=>[...p,t])}>{t}</button>
+            ))}
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            <input className="inp" value={tagInput} onChange={e=>setTagInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addTag()} placeholder="কাস্টম ট্যাগ লিখে Enter"/>
+            <button className="btn" style={{background:C.accent,color:"#fff",flexShrink:0}} onClick={addTag}>+ যোগ</button>
+          </div>
+          {audienceTags.length>0&&(
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:8}}>
+              {audienceTags.map(t=>(
+                <span key={t} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:20,padding:"4px 10px",fontSize:11.5,display:"flex",alignItems:"center",gap:6}}>
+                  {t}<span style={{cursor:"pointer",color:C.red}} onClick={()=>removeTag(t)}>✕</span>
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{display:"flex",gap:10}}>
+          <div className="fld" style={{flex:1}}><label>মোট সংখ্যা</label>
+            <input className="inp" type="number" min="1" max="200" value={count} onChange={e=>setCount(Math.max(1,parseInt(e.target.value)||1))}/>
+          </div>
+          <div className="fld" style={{flex:1}}><label>প্রতি ব্যাচে</label>
+            <input className="inp" type="number" min="1" max="10" value={batchSize} onChange={e=>setBatchSize(Math.max(1,Math.min(10,parseInt(e.target.value)||6)))}/>
+          </div>
+        </div>
+      </div>
+
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
+        <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>⚙️ GitHub Action সেটিংস</div>
+
+        <div className="fld"><label>Repo (owner/name)</label>
+          <input className="inp" value={cfg.repo} onChange={e=>setCfg({...cfg,repo:e.target.value})}/>
+        </div>
+        <div className="fld"><label>Workflow ফাইলের নাম</label>
+          <input className="inp" value={cfg.workflowQuestions} onChange={e=>setCfg({...cfg,workflowQuestions:e.target.value})}/>
+        </div>
+        <div className="fld"><label>GitHub Personal Access Token</label>
+          {editingToken ? (
+            <input className="inp" type="password" placeholder="ghp_xxxxxxxxxxxx" value={cfg.token} onChange={e=>setCfg({...cfg,token:e.target.value})}/>
+          ) : (
+            <div style={{display:"flex",alignItems:"center",gap:8,background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 12px"}}>
+              <span style={{color:C.green,fontSize:13}}>●●●●●●●●●●●● সেভ করা আছে (AI Job ট্যাবের সাথে শেয়ার্ড)</span>
+              <button className="btn" style={{marginLeft:"auto",background:"transparent",color:C.accent,border:`1px solid ${C.border}`}} onClick={()=>setEditingToken(true)}>✏️ পরিবর্তন</button>
+            </div>
+          )}
+        </div>
+        <button className="btn" style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:11,fontSize:13,marginTop:2}} onClick={saveCfg}>💾 সেটিংস সেভ করো</button>
+      </div>
+
+      <button className="btn" disabled={busy} style={{width:"100%",justifyContent:"center",background:C.purple,color:"#fff",padding:13,fontSize:14,fontWeight:700}} onClick={trigger}>
+        {busy?"⏳ পাঠানো হচ্ছে...":`🧬 ${count}টা নতুন প্রশ্ন বানাও`}
+      </button>
+
+      {status && (
+        <div style={{marginTop:10,padding:"11px 13px",borderRadius:10,fontSize:13,lineHeight:1.5,
+          background:statusColors.bg,color:statusColors.fg,border:`1px solid ${statusColors.bd}`}}>
+          {status.msg}
+        </div>
+      )}
     </div>
   );
 }
@@ -5883,6 +6077,11 @@ const NAV=[
    localStorage-এ সেভ → rebuild লাগে না, key চেঞ্জ করা যায়
    ══════════════════════════════════════════════════════════════════ */
 const DEFAULT_PROVIDERS=[
+  {id:"groq",name:"Groq",icon:"⚡",free:true,
+   model:"llama-3.3-70b-versatile",
+   url:"https://api.groq.com/openai/v1/chat/completions",
+   keyHint:"console.groq.com → API Keys (ফ্রি, খুব ফাস্ট)",
+   limit:"ফ্রি, ফাস্ট"},
   {id:"gemini",name:"Google Gemini",icon:"🟢",free:true,
    model:"gemini-2.5-flash",
    url:"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
@@ -5898,6 +6097,26 @@ const DEFAULT_PROVIDERS=[
    url:"https://openrouter.ai/api/v1/chat/completions",
    keyHint:"openrouter.ai → Keys (free models, no card needed)",
    limit:"Free models available"},
+  {id:"cerebras",name:"Cerebras",icon:"🟠",free:true,
+   model:"llama3.1-8b",
+   url:"https://api.cerebras.ai/v1/chat/completions",
+   keyHint:"cloud.cerebras.ai → API Keys (ফ্রি, খুব ফাস্ট)",
+   limit:"ফ্রি"},
+  {id:"together",name:"Together AI",icon:"🔷",free:true,
+   model:"meta-llama/Llama-3.3-70B-Instruct-Turbo-Free",
+   url:"https://api.together.xyz/v1/chat/completions",
+   keyHint:"api.together.xyz → Keys",
+   limit:"ফ্রি ক্রেডিট"},
+  {id:"fireworks",name:"Fireworks AI",icon:"🎆",free:true,
+   model:"accounts/fireworks/models/llama-v3p1-8b-instruct",
+   url:"https://api.fireworks.ai/inference/v1/chat/completions",
+   keyHint:"fireworks.ai → API Keys",
+   limit:"ফ্রি ক্রেডিট"},
+  {id:"deepseek",name:"DeepSeek",icon:"🔵",free:true,
+   model:"deepseek-chat",
+   url:"https://api.deepseek.com/v1/chat/completions",
+   keyHint:"platform.deepseek.com → API Keys",
+   limit:"সস্তা/ফ্রি টিয়ার"},
 ];
 const LS_PROV="ocr_api_providers";
 function loadProviders(){
@@ -5911,10 +6130,22 @@ function saveProviders(providers){
   providers.forEach(p=>{o[p.id]={key:p.key,active:p.active};});
   localStorage.setItem(LS_PROV,JSON.stringify(o));
 }
+// একটা provider-এ কমা দিয়ে একাধিক key থাকতে পারে — সব active provider-এর
+// সব key মিলিয়ে একটা flat pool বানায়, rotation-এর জন্য।
+function buildKeyPool(){
+  const pool=[];
+  loadProviders().forEach(p=>{
+    if(!p.active||!p.key)return;
+    p.key.split(",").map(k=>k.trim()).filter(Boolean).forEach(key=>pool.push({...p,key}));
+  });
+  return pool;
+}
 function getActiveProvider(){
+  // ব্যাকওয়ার্ড-কম্প্যাটিবিলিটি জন্য রাখা (UI ব্যানারে ব্যবহার হয়) — প্রথম active provider রিটার্ন করে
   return loadProviders().find(p=>p.active&&p.key)||null;
 }
-const OCR_PROMPT=`তুমি একজন বাংলা MCQ প্রশ্নপত্র formatter।
+const OCR_PROMPT_FORMATS={
+  MCQ:`তুমি একজন বাংলা MCQ প্রশ্নপত্র formatter।
 নিচের OCR text থেকে সব MCQ প্রশ্ন বের করে নিচের format-এ দাও।
 প্রশ্ন;অপশন১;অপশন২;অপশন৩;অপশন৪;সঠিকউত্তর
 RULES:
@@ -5924,16 +6155,35 @@ RULES:
 - পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
 - উ. ক/খ/গ/ঘ দেখে সঠিক option text দাও (letter নয়)
 - field-এ ; থাকলে | দিয়ে replace করো
-- কোনো প্রশ্ন বাদ দিও না
-=== OCR TEXT ===
-`;
-async function callAiProvider(ocrText){
-  const p=getActiveProvider();
-  if(!p) return null; // no active provider = skip silently
-  const prompt=OCR_PROMPT+ocrText;
+- কোনো প্রশ্ন বাদ দিও না`,
+  Written:`তুমি একজন বাংলা প্রশ্নপত্র formatter।
+নিচের OCR text থেকে সব প্রশ্ন-উত্তর বের করে নিচের format-এ দাও, প্রতিটি entry {} দিয়ে wrap করে:
+{প্রশ্ন;উত্তর}
+RULES:
+- শুধু formatted data দাও, কোনো label বা explanation নয়
+- Serial number বাদ দাও
+- পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
+- field-এ ; থাকলে | দিয়ে replace করো
+- কোনো প্রশ্ন বাদ দিও না`,
+  Study:`তুমি একজন বাংলা প্রশ্নপত্র formatter।
+নিচের OCR text থেকে সব প্রশ্ন-উত্তর বের করে নিচের format-এ দাও, প্রতিটি entry {} দিয়ে wrap করে:
+{প্রশ্ন;উত্তর}
+RULES:
+- শুধু formatted data দাও, কোনো label বা explanation নয়
+- Serial number বাদ দাও
+- উত্তর একাধিক লাইনের হলেও একই entry-তে রাখো
+- পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
+- field-এ ; থাকলে | দিয়ে replace করো
+- কোনো প্রশ্ন বাদ দিও না`,
+};
+function buildOcrPrompt(qtype,ocrText){
+  const tmpl=OCR_PROMPT_FORMATS[qtype]||OCR_PROMPT_FORMATS.MCQ;
+  return `${tmpl}\n=== OCR TEXT ===\n${ocrText}`;
+}
+
+// একটামাত্র provider/key দিয়ে একবার কল — ব্যর্থ হলে throw করে (rotation ফাংশন এটাকে wrap করে)
+async function callProviderOnce(p,prompt){
   if(p.id==="gemini"){
-    // Try multiple endpoints — 403/404 হলে পরেরটা try করে
-    // (gemini-2.0-flash ও gemini-1.5-flash Google জুন ২০২৬-এ বন্ধ করে দিয়েছে — 404 আসতো)
     const models=["gemini-2.5-flash","gemini-2.5-flash-lite","gemini-flash-latest"];
     const versions=["v1beta","v1"];
     let lastErr=null;
@@ -5943,24 +6193,20 @@ async function callAiProvider(ocrText){
           const url=`https://generativelanguage.googleapis.com/${ver}/models/${model}:generateContent`;
           const res=await fetch(url,{
             method:"POST",
-            headers:{
-              "Content-Type":"application/json",
-              "x-goog-api-key":p.key,   // header দিয়েও try
-            },
+            headers:{"Content-Type":"application/json","x-goog-api-key":p.key},
             body:JSON.stringify({contents:[{parts:[{text:prompt}]}]}),
           });
           if(res.status===403){
-            // API key restriction — user কে specific বলি
             const errBody=await res.json().catch(()=>({}));
             const reason=errBody?.error?.message||"";
             if(reason.includes("API_KEY_HTTP_REFERRER_BLOCKED")||reason.includes("referer")){
-              throw new Error("API Key-এ HTTP Referrer restriction আছে → Google Cloud Console → Credentials → Edit Key → Restrictions → None করুন");
+              throw new Error("API Key-এ HTTP Referrer restriction আছে → Restrictions → None করুন");
             }
             if(reason.includes("API not enabled")||reason.includes("has not been used")){
-              throw new Error("Generative Language API enable নেই → console.cloud.google.com → APIs → Generative Language API → Enable");
+              throw new Error("Generative Language API enable নেই → console.cloud.google.com-এ Enable করুন");
             }
             lastErr=new Error(`403: ${reason||"Permission denied"}`);
-            continue; // try next model/version
+            continue;
           }
           if(!res.ok){lastErr=new Error(`HTTP ${res.status}`);continue;}
           const d=await res.json();
@@ -5968,7 +6214,7 @@ async function callAiProvider(ocrText){
           if(text) return text;
           lastErr=new Error("Empty response");
         }catch(e){
-          if(e.message.includes("Console")||e.message.includes("enable")) throw e; // user action needed
+          if(e.message.includes("Console")||e.message.includes("Restrictions")) throw e;
           lastErr=e;
         }
       }
@@ -5981,7 +6227,35 @@ async function callAiProvider(ocrText){
     body:JSON.stringify({model:p.model,messages:[{role:"user",content:prompt}],max_tokens:4096})});
   if(!res.ok) throw new Error(p.name+" HTTP "+res.status);
   const d=await res.json();
-  return d?.choices?.[0]?.message?.content?.trim()||null;
+  const text=d?.choices?.[0]?.message?.content?.trim();
+  if(!text) throw new Error(p.name+" খালি response");
+  return text;
+}
+
+// module-level cursor — একই সেশনে বারবার কল করলে key ঘুরতে থাকে, একটার উপর চাপ না পড়ে
+let _ocrPoolCursor=0;
+async function callAiProviderRotating(ocrText,qtype="MCQ"){
+  const pool=buildKeyPool();
+  if(!pool.length) return null; // কোনো key active নেই = skip silently (local parser fallback হবে)
+  const prompt=buildOcrPrompt(qtype,ocrText);
+  const errors=[];
+  for(let i=0;i<pool.length;i++){
+    const p=pool[(_ocrPoolCursor+i)%pool.length];
+    try{
+      const text=await callProviderOnce(p,prompt);
+      _ocrPoolCursor=(_ocrPoolCursor+i+1)%pool.length;
+      return text;
+    }catch(e){
+      if(e.message.includes("Console")||e.message.includes("Restrictions")) throw e; // user action দরকার, থামিয়ে দাও
+      errors.push(`${p.name}: ${e.message}`);
+    }
+  }
+  throw new Error("সব provider ব্যর্থ — "+errors.slice(0,3).join(" | "));
+}
+
+// ব্যাকওয়ার্ড-কম্প্যাটিবিলিটি — পুরনো কলার (doTest ইত্যাদি) এখনো callAiProvider() ব্যবহার করে
+async function callAiProvider(ocrText,qtype="MCQ"){
+  return callAiProviderRotating(ocrText,qtype);
 }
 
 function ApiSettingsPage({push,inline=false}){
@@ -5990,12 +6264,14 @@ function ApiSettingsPage({push,inline=false}){
   const[keyInput,setKeyInput]=React.useState("");
   const[testing,setTesting]=React.useState(null);
   const[showKey,setShowKey]=React.useState({});
-  const active=providers.find(p=>p.active&&p.key);
+  const active=providers.filter(p=>p.active&&p.key);
+  const totalKeys=active.reduce((sum,p)=>sum+p.key.split(",").map(k=>k.trim()).filter(Boolean).length,0);
 
-  const doSetActive=(id)=>{
-    const upd=providers.map(p=>({...p,active:p.id===id&&!!p.key}));
+  const doToggleActive=(id)=>{
+    const upd=providers.map(p=>p.id===id?{...p,active:!p.active&&!!p.key}:p);
     setProviders(upd);saveProviders(upd);
-    push("success","✅ Active করা হয়েছে!","OCR-এর পর auto parse হবে");
+    const p=upd.find(x=>x.id===id);
+    push("success",p.active?"✅ Active করা হয়েছে!":"Inactive করা হয়েছে","OCR-এর পর rotation-এ ব্যবহার হবে");
   };
   const doSaveKey=(id)=>{
     const upd=providers.map(p=>p.id===id?{...p,key:keyInput.trim()}:p);
@@ -6026,13 +6302,13 @@ function ApiSettingsPage({push,inline=false}){
       {!inline&&<div style={{background:"linear-gradient(135deg,#0f172a,#1e3a5f)",borderRadius:14,
         padding:"14px 16px",marginBottom:14,color:"#fff"}}>
         <div style={{fontWeight:900,fontSize:16}}>🔑 API Key Settings</div>
-        <div style={{fontSize:11,opacity:.8,marginTop:2}}>OCR-এর পর auto parse — একটাই active থাকবে</div>
+        <div style={{fontSize:11,opacity:.8,marginTop:2}}>OCR-এর পর auto parse — একাধিক provider active রাখলে rotation+fallback হবে</div>
       </div>}
-      <div style={{background:active?"#052e16":"#450a0a",borderRadius:10,
+      <div style={{background:active.length?"#052e16":"#450a0a",borderRadius:10,
         padding:"10px 14px",marginBottom:12,
-        border:"1px solid "+(active?"#16a34a":"#991b1b")}}>
-        {active
-          ?<span style={{color:"#4ade80",fontWeight:700}}>✅ Active: {active.icon} {active.name} — {active.limit}</span>
+        border:"1px solid "+(active.length?"#16a34a":"#991b1b")}}>
+        {active.length
+          ?<span style={{color:"#4ade80",fontWeight:700}}>✅ {active.length}টা provider active — মোট {totalKeys}টা key (rotation pool)</span>
           :<span style={{color:"#f87171",fontWeight:700}}>⚠️ কোনো provider active নেই — নিচে key দিয়ে Active করুন</span>}
       </div>
       {providers.map(p=>(
@@ -6051,10 +6327,11 @@ function ApiSettingsPage({push,inline=false}){
             {editing===p.id?(
               <div>
                 <div style={{fontSize:11,color:C.sub,marginBottom:4}}>{p.keyHint}</div>
+                <div style={{fontSize:10,color:C.muted,marginBottom:4}}>একাধিক key হলে কমা (,) দিয়ে আলাদা করে দাও — যেমন key1,key2</div>
                 <input style={{width:"100%",background:C.input,border:"1px solid "+C.border,
                   borderRadius:8,padding:"8px 10px",color:C.text,fontSize:12,
                   fontFamily:"monospace",boxSizing:"border-box",marginBottom:6}}
-                  placeholder={p.name+" API Key..."}
+                  placeholder={p.name+" API Key (কমা দিয়ে একাধিক)"}
                   value={keyInput} onChange={e=>setKeyInput(e.target.value)} autoFocus/>
                 <div style={{display:"flex",gap:6}}>
                   <button onClick={()=>doSaveKey(p.id)} style={{flex:1,background:"#4f46e5",
@@ -6076,9 +6353,9 @@ function ApiSettingsPage({push,inline=false}){
                     {showKey[p.id]?"🙈":"👁️"}</button>
                 </div>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                  {!p.active&&<button onClick={()=>doSetActive(p.id)}
-                    style={{flex:1,background:"#4f46e5",color:"#fff",border:"none",
-                      borderRadius:8,padding:7,fontWeight:700,fontSize:12}}>⚡ Active</button>}
+                  <button onClick={()=>doToggleActive(p.id)}
+                    style={{flex:1,background:p.active?"#065f46":"#4f46e5",color:"#fff",border:"none",
+                      borderRadius:8,padding:7,fontWeight:700,fontSize:12}}>{p.active?"✅ Active (চালু আছে)":"⚡ Active করো"}</button>
                   <button onClick={()=>doTest(p)} disabled={!!testing}
                     style={{flex:1,background:"#065f46",color:"#fff",border:"none",
                       borderRadius:8,padding:7,fontWeight:700,fontSize:12}}>
@@ -6103,11 +6380,12 @@ function ApiSettingsPage({push,inline=false}){
       <div style={{background:C.card,borderRadius:10,padding:"12px 14px",
         border:"1px solid "+C.border,fontSize:11,color:C.sub,lineHeight:1.8}}>
         <div style={{fontWeight:700,color:C.text,marginBottom:4}}>💡 কীভাবে কাজ করে</div>
-        <div>📸 ছবি → MLKit text বের করে → Active provider parse করে</div>
+        <div>📸 ছবি → MLKit text বের করে → active provider-গুলোর pool থেকে rotation করে parse করে</div>
         <div>✅ শুধু text যায়, image নয় → load নেই, fast</div>
+        <div>🔄 একটা key/provider ব্যর্থ হলে পরেরটা অটো ট্রাই হয়</div>
         <div>🔄 Key চেঞ্জ করলে rebuild লাগে না</div>
         <div>🔒 Key device-এ localStorage-এ সংরক্ষিত</div>
-        <div>⚡ Provider active না থাকলে local Java parser ব্যবহার হয়</div>
+        <div>⚡ কোনো provider active না থাকলে local Java parser ব্যবহার হয়</div>
       </div>
     </div>
   );
