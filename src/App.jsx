@@ -2691,21 +2691,39 @@ function AIImportPage({push,onSendToBulk}){
 
   const pickGallery=async()=>{
     try{
+      const allowed=await _ensureMediaPermission();
+      if(!allowed) return;
+
+      // ── প্রাধান্য: নিজস্ব GalleryPicker plugin (ACTION_OPEN_DOCUMENT) ──
+      // @capacitor/camera-এর pickImages() কিছু ডিভাইসে (Oppo/Realme/Xiaomi ইত্যাদি)
+      // একসাথে একাধিক ছবি বাছতে দেয় না — GalleryPicker এই সমস্যা এড়াতে বানানো।
+      const {GalleryPicker}=window.Capacitor?.Plugins||{};
+      if(GalleryPicker){
+        _LC.log("gallery","GalleryPicker.pickImages called");
+        const res=await GalleryPicker.pickImages();
+        const imgs=(res.photos||[]).map(p=>({
+          webPath:`data:image/jpeg;base64,${p.base64String}`,base64:"",status:"pending",ocrText:"",id:Date.now()+Math.random()
+        }));
+        _LC.log("gallery",`${imgs.length} image(s) selected (GalleryPicker)`);
+        setImages(p=>[...p,...imgs]);
+        return;
+      }
+
+      // ── Fallback: @capacitor/camera (পুরনো APK বা GalleryPicker সিঙ্ক না হলে) ──
       const Camera=_getCamera();
       if(!Camera){
         push("warn","Camera plugin নেই","Logcat দেখুন — available plugins log করা হয়েছে");
         return;
       }
-      const allowed=await _ensureMediaPermission();
-      if(!allowed) return;
-      _LC.log("gallery","pickImages called");
+      _LC.log("gallery","Camera.pickImages called (fallback)");
       const res=await Camera.pickImages({quality:90,limit:0});
       const imgs=(res.photos||[]).map(p=>({
         webPath:p.webPath,base64:"",status:"pending",ocrText:"",id:Date.now()+Math.random()
       }));
-      _LC.log("gallery",`${imgs.length} image(s) selected`);
+      _LC.log("gallery",`${imgs.length} image(s) selected (Camera fallback)`);
       setImages(p=>[...p,...imgs]);
     }catch(e){
+      if(e.message==="cancelled")return;
       _LC.error("gallery",`Gallery error: ${e.message}`);
       push("error","Gallery error",e.message);
     }
@@ -5818,6 +5836,16 @@ function getActiveProvider(){
   // ব্যাকওয়ার্ড-কম্প্যাটিবিলিটি জন্য রাখা (UI ব্যানারে ব্যবহার হয়) — প্রথম active provider রিটার্ন করে
   return loadProviders().find(p=>p.active&&p.key)||null;
 }
+// সব format-এ কমন — OCR misread ঠিক করার নিয়ম। মোবাইলের ML Kit OCR বাংলা যুক্তাক্ষর/মাত্রা
+// প্রায়ই ভুল পড়ে (যেমন নরসিংহ→রসিংই, বৃহস্পতি→বহস্পত, পরিচ্ছেদ→পরিণে, UNHCR→UNIR)।
+// AI formatting ধাপেই এগুলো context বুঝে ঠিক করে দেওয়ার instruction — কিন্তু হ্যালুসিনেট না করে।
+const OCR_CORRECTION_RULES=`
+বানান/OCR সংশোধন (গুরুত্বপূর্ণ):
+- OCR অনেক সময় বাংলা যুক্তাক্ষর, মাত্রা বা অক্ষর ভুল পড়ে (যেমন "রসিংই"→"নরসিংহ", "বহস্পত"→"বৃহস্পতি", "পরিণে"→"পরিচ্ছেদ", "নীলাশবর"→"নীলাম্বর", "দেশদত্ত"→"দেবদত্ত")। প্রতিটি শব্দ/নাম প্রশ্নের ধরন ও context বুঝে প্রচলিত সঠিক বাংলা বানানে ঠিক করে দাও।
+- সংক্ষিপ্ত রূপ (acronym) ভুল OCR হলে পরিচিত সঠিক রূপে ঠিক করো (যেমন "UNIR"→"UNHCR")।
+- প্রশ্নের শুরুর নির্দেশনা-অংশ (যেমন "ব্যাসবাক্য সহ", "সন্ধি বিচ্ছেদ করুন") OCR-এ বাদ পড়ে থাকলে এবং context থেকে স্পষ্ট বোঝা গেলে সেটা পুনরুদ্ধার করে বসাও; পুরো প্রশ্ন বাদ দিও না।
+- সংখ্যা, চিহ্ন (+/-), সমীকরণ, x/y/z-এর মতো ভেরিয়েবল হুবহু রাখো — নিজে থেকে গাণিতিক মান বদলাবে না। শুধু স্পষ্ট OCR artifact (যেমন "l"↔"1", "O"↔"0", "S"↔"5") সন্দেহাতীতভাবে বোঝা গেলে ঠিক করো।
+- একেবারে নিশ্চিত না হলে বানান বদলে অনুমান করে ভুল কিছু বসিও না — OCR-এ যা আছে কাছাকাছি রেখে সবচেয়ে সম্ভাব্য প্রচলিত শব্দটাই ব্যবহার করো।`;
 const OCR_PROMPT_FORMATS={
   MCQ:`তুমি একজন বাংলা MCQ প্রশ্নপত্র formatter।
 নিচের OCR text থেকে সব MCQ প্রশ্ন বের করে নিচের format-এ দাও।
@@ -5827,6 +5855,7 @@ const OCR_PROMPT_FORMATS={
 ২. যদি প্রশ্নের শেষে আলাদা "উ." বা "Ans" বা "Answer" লাইনে ক/খ/গ/ঘ বা A/B/C/D লেখা থাকে — সেই অক্ষরের পজিশন অনুযায়ী অপশন ধরবে (ক বা A = ১ম অপশন, খ বা B = ২য়, গ বা C = ৩য়, ঘ বা D = ৪র্থ)।
 ৩. যদি উত্তর হিসেবে সরাসরি কোনো অপশনের হুবহু টেক্সট লেখা থাকে — সেটাই ব্যবহার করো।
 ৪. উপরের কোনোটাই না বুঝলে, প্রশ্নের বিষয়বস্তু অনুযায়ী তোমার নিজের জ্ঞান দিয়ে সবচেয়ে সম্ভাব্য সঠিক উত্তরটা অনুমান করো — কখনোই সঠিক উত্তর ফাঁকা রাখবে না।
+${OCR_CORRECTION_RULES}
 RULES:
 - শুধু formatted data দাও, কোনো label বা explanation নয়
 - Serial number বাদ দাও
@@ -5838,6 +5867,7 @@ RULES:
   Written:`তুমি একজন বাংলা প্রশ্নপত্র formatter।
 নিচের OCR text থেকে সব প্রশ্ন-উত্তর বের করে নিচের format-এ দাও, প্রতিটি entry {} দিয়ে wrap করে:
 {প্রশ্ন;উত্তর}
+${OCR_CORRECTION_RULES}
 RULES:
 - শুধু formatted data দাও, কোনো label বা explanation নয়
 - Serial number বাদ দাও
@@ -5847,6 +5877,7 @@ RULES:
   Study:`তুমি একজন বাংলা প্রশ্নপত্র formatter।
 নিচের OCR text থেকে সব প্রশ্ন-উত্তর বের করে নিচের format-এ দাও, প্রতিটি entry {} দিয়ে wrap করে:
 {প্রশ্ন;উত্তর}
+${OCR_CORRECTION_RULES}
 RULES:
 - শুধু formatted data দাও, কোনো label বা explanation নয়
 - Serial number বাদ দাও
