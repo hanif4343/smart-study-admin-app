@@ -32,6 +32,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(BgSyncPlugin.class);
         registerPlugin(FcmTokenPlugin.class);
         registerPlugin(AdminPushPlugin.class);
+        registerPlugin(GalleryPickerPlugin.class);
         super.onCreate(savedInstanceState);
         handleNavIntent(getIntent());
     }
