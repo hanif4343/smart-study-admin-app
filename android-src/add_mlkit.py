@@ -121,6 +121,7 @@ files_to_copy = [
     "AdminMessagingService.java",
     "BackgroundSyncService.java",
     "MainActivity.java",
+    "GalleryPickerPlugin.java",
 ]
 
 for f in files_to_copy:
@@ -151,6 +152,7 @@ custom_plugins = [
     { "pkg": "com.smartstudy.admin", "classpath": "com.smartstudy.admin.BgSyncPlugin"   },
     { "pkg": "com.smartstudy.admin", "classpath": "com.smartstudy.admin.FcmTokenPlugin" },
     { "pkg": "com.smartstudy.admin", "classpath": "com.smartstudy.admin.AdminPushPlugin"},
+    { "pkg": "com.smartstudy.admin", "classpath": "com.smartstudy.admin.GalleryPickerPlugin"},
 ]
 
 if os.path.exists(plugins_json_path):
