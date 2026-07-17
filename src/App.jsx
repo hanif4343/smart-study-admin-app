@@ -3966,6 +3966,7 @@ function JobLauncherTab({push,tick}){
    ══════════════════════════════════════════════════════════════════ */
 const LS_QBC_TAXONOMY   = "qbank_conv_taxonomy_v1";
 const LS_QBC_GAS_SECRET = "qbank_conv_gas_secret_v1";
+const LS_QBC_RESULTS_DRAFT = "qbank_conv_results_draft_v1"; // AI-generated results draft — app বন্ধ/ক্র্যাশ হলেও যেন কাজ না হারায়
 
 // ডিফল্ট canonical taxonomy — AI এই তালিকা থেকেই subject/sub_topic বাছবে।
 // প্রয়োজনে অ্যাডমিন UI থেকেই (নিচের "Taxonomy" এডিটর) এটা বদলানো যাবে, rebuild লাগবে না।
@@ -4079,9 +4080,37 @@ function QBankConverterTab({push,tick}){
   const[batchSize,setBatchSize]=useState(15);
   const[busy,setBusy]=useState(false);
   const[progress,setProgress]=useState({done:0,total:0});
-  const[results,setResults]=useState([]);
+  const[results,setResults]=useState(()=>{
+    try{
+      const saved=localStorage.getItem(LS_QBC_RESULTS_DRAFT);
+      return saved? JSON.parse(saved) : [];
+    }catch{ return []; }
+  });
+  const[draftRestored]=useState(()=>{
+    try{ return !!JSON.parse(localStorage.getItem(LS_QBC_RESULTS_DRAFT)||"[]").length; }catch{ return false; }
+  });
   const[saveLoc,setSaveLoc]=useState("sheet"); // "sheet" | "firebase" (firebase আপাতত বন্ধ)
   const[saving,setSaving]=useState(false);
+
+  // প্রতিবার results বদলালেই (প্রতি ব্যাচের পর, approve/edit করলে, সেভের পর) draft হিসেবে সেভ হয়ে যায় —
+  // app বন্ধ হয়ে গেলে, ক্র্যাশ করলে, বা বেশি সময় লাগলেও কাজ হারায় না।
+  useEffect(()=>{
+    try{
+      if(results.length) localStorage.setItem(LS_QBC_RESULTS_DRAFT,JSON.stringify(results));
+      else localStorage.removeItem(LS_QBC_RESULTS_DRAFT);
+    }catch{}
+  },[results]);
+
+  useEffect(()=>{
+    if(draftRestored) push("success","📋 ড্রাফট পুনরুদ্ধার হয়েছে","আগের সেশনের অসেভ করা প্রশ্নগুলো ফিরে এসেছে — রিভিউ করে সেভ করো");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  const clearDraft=()=>{
+    setResults([]);
+    try{ localStorage.removeItem(LS_QBC_RESULTS_DRAFT); }catch{}
+    push("success","🗑️ ড্রাফট মুছে ফেলা হয়েছে","");
+  };
 
   const buildPrompt=(batch)=>{
     let taxonomy;
@@ -4239,8 +4268,11 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
 
       {results.length>0 && (
         <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
-          <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>
-            ✅ রিভিউ করো ({approvedCount}/{results.length} approved)
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+            <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700}}>
+              ✅ রিভিউ করো ({approvedCount}/{results.length} approved)
+            </div>
+            <button className="btn" style={{fontSize:11,padding:"4px 10px",background:"transparent",color:C.red,border:`1px solid ${C.border}`}} onClick={clearDraft}>🗑️ ড্রাফট মুছো</button>
           </div>
           {results.map(r=>(
             <div key={r._key} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:10,opacity:r.approved?1:.5}}>
