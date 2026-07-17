@@ -3987,9 +3987,41 @@ function normalizeQbankQ(s){
 }
 
 function QBankConverterTab({push,tick}){
-  const{data:qbank,loading:qbankLoading}=useFB("QBank",tick);
+  // Firebase quota বন্ধ থাকলেও কাজ চালু রাখতে QBank ডাটা এখন সরাসরি Google Sheet
+  // থেকে (GAS "getSheetRows" action দিয়ে) পড়া হয় — Firebase-এর উপর নির্ভর করে না।
+  const[qbankSheetRows,setQbankSheetRows]=useState([]);
+  const[qbankLoading,setQbankLoading]=useState(true);
+  useEffect(()=>{
+    let cancelled=false;
+    (async()=>{
+      setQbankLoading(true);
+      try{
+        if(!GAS) throw new Error("GAS URL সেট করা নেই");
+        const secret=(()=>{try{return localStorage.getItem(LS_QBC_GAS_SECRET)||"";}catch{return"";}})();
+        const url=`${GAS}?action=getSheetRows&tab=QBank&secret=${encodeURIComponent(secret)}`;
+        const resp=await fetch(url);
+        const data=await resp.json();
+        if(cancelled)return;
+        if(data?.status==="success"&&Array.isArray(data.rows)){
+          setQbankSheetRows(data.rows);
+        }else{
+          setQbankSheetRows([]);
+          if(data?.message) push("error","❌ Sheet থেকে QBank লোড ব্যর্থ",data.message);
+        }
+      }catch(e){
+        if(!cancelled){
+          setQbankSheetRows([]);
+          push("error","❌ Sheet থেকে QBank লোড ব্যর্থ",e.message);
+        }
+      }finally{
+        if(!cancelled) setQbankLoading(false);
+      }
+    })();
+    return ()=>{cancelled=true;};
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[tick]);
 
-  const allRows=useMemo(()=>toArr(qbank).map(row=>{
+  const allRows=useMemo(()=>qbankSheetRows.map(row=>{
     const audRaw=(row.AudienceTags||row.audienceTags||"").toString().trim();
     return {
       _fbKey: row._fbKey,
@@ -4002,7 +4034,7 @@ function QBankConverterTab({push,tick}){
       qType: (row["Question Type"]||"").toString().trim()||"MCQ",
       audienceList: audRaw.split(",").map(a=>a.trim()).filter(Boolean),
     };
-  }).filter(r=>r.question),[qbank]);
+  }).filter(r=>r.question),[qbankSheetRows]);
 
   const[selAud,setSelAud]=useState([]);
   const[selSubj,setSelSubj]=useState([]);
