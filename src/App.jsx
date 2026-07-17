@@ -301,10 +301,29 @@ async function _checkResp(r){
   try{ return JSON.parse(txt); }catch(_){ return txt; }
 }
 const _tok=()=>refreshTokenIfNeeded();
+
+/* ── ক্ষণস্থায়ী নেটওয়ার্ক/5xx ব্যর্থতার জন্য রিট্রাই — Firebase read/write দুটোতেই ব্যবহার হয় ──
+   auth/4xx এরর-এ রিট্রাই করে না (সেগুলো রিট্রাই করলেও ঠিক হবে না), শুধু network fail বা 5xx-এ। */
+async function _fbFetch(url,opts,retries=2){
+  let lastErr;
+  for(let attempt=0;attempt<=retries;attempt++){
+    try{
+      const r=await fetch(url,opts);
+      if(r.status>=500 && attempt<retries){ await new Promise(res=>setTimeout(res,300*(attempt+1))); continue; }
+      return r;
+    }catch(e){
+      lastErr=e;
+      if(attempt<retries){ await new Promise(res=>setTimeout(res,300*(attempt+1))); continue; }
+      throw e;
+    }
+  }
+  throw lastErr;
+}
+
 const fbGet   = async p=>{
   const t=await _tok();
   try {
-    const r=await fetch(`${FB}/${p}.json${_authQ(t)}`);
+    const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`);
     const data = await r.json();
     if(data?.error) _LC.error("fbGet", `fbGet error at ${p}: ${data.error}`, { path: p });
     return data;
@@ -317,21 +336,21 @@ const fbPatch  = async(p,d)=>{
   const t=await _tok();
   if(!t){ _LC.error("fbPatch","Not authenticated — token missing",{path:p}); throw new Error("Not authenticated — please re-login"); }
   if(!p||p.includes("/undefined")||p.includes("/null")){ _LC.error("fbPatch","Invalid path",{path:p}); throw new Error("Invalid path: "+p); }
-  const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
+  const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
   return _checkResp(r);
 };
 const fbSet   = async(p,d)=>{
   const t=await _tok();
   if(!t){ _LC.error("fbSet","Not authenticated — token missing",{path:p}); throw new Error("Not authenticated — please re-login"); }
-  const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
+  const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
   return _checkResp(r);
 };
-const fbPush  = async(p,d)=>{const t=await _tok();const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbPush  = async(p,d)=>{const t=await _tok();const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
 const fbDelete= async p=>{
   const t=await _tok();
   if(!t){ _LC.error("fbDelete","Not authenticated — token missing",{path:p}); throw new Error("Not authenticated — please re-login"); }
   if(!p||p.includes("/undefined")||p.includes("/null")){ _LC.error("fbDelete","Invalid path",{path:p}); throw new Error("Invalid path: "+p); }
-  const r=await fetch(`${FB}/${p}.json${_authQ(t)}`,{method:"DELETE"});
+  const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`,{method:"DELETE"});
   return _checkResp(r);
 };
 
@@ -782,6 +801,26 @@ async function fcmBroadcast(title, body, users) {
 const _store = {}; // path -> {data, ts, promise}
 const STALE  = 90_000; // 90s
 
+/* ── Google Sheet fallback — Firebase read ব্যর্থ হলে (quota শেষ, নেট সমস্যা, ইত্যাদি)
+   এই তালিকার top-level sheet-গুলোর জন্য GAS "getSheetRows" অ্যাকশন দিয়ে সরাসরি
+   Google Sheet থেকে ডাটা পড়ে — Firebase পুরোপুরি বন্ধ থাকলেও অ্যাপ কাজ চালিয়ে যেতে পারে। ── */
+const SHEET_FALLBACK_TABS = ["Quiz","QBank","Study","Typing"];
+async function fetchSheetFallback(path){
+  const tab=(path||"").split("/")[0];
+  if(!SHEET_FALLBACK_TABS.includes(tab) || !GAS) return null;
+  try{
+    const secret=loadSharedGasSecret();
+    const url=`${GAS}?action=getSheetRows&tab=${encodeURIComponent(tab)}&secret=${encodeURIComponent(secret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json();
+    if(data?.status!=="success"||!Array.isArray(data.rows)) return null;
+    const out={};
+    data.rows.forEach((r,i)=>{ out[r._fbKey||r.id||("row"+i)]=r; });
+    _LC.warn?.("fbFallback",`Firebase read ব্যর্থ — ${tab} Google Sheet থেকে fallback হিসেবে লোড হলো (${data.rows.length} রো)`);
+    return out;
+  }catch(_){ return null; }
+}
+
 async function loadPath(path, force=false){
   const now = Date.now();
   const cached = _store[path];
@@ -790,7 +829,12 @@ async function loadPath(path, force=false){
   const p = fbGet(path).then(data=>{
     _store[path] = {data, ts:Date.now(), promise:null};
     return data;
-  }).catch(e=>{
+  }).catch(async e=>{
+    const fallback = await fetchSheetFallback(path);
+    if(fallback){
+      _store[path] = {data:fallback, ts:Date.now(), promise:null, fromSheetFallback:true};
+      return fallback;
+    }
     if(_store[path]) _store[path].promise = null;
     throw e;
   });
@@ -2577,6 +2621,187 @@ function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id}){
   };
 }
 
+/* Build Google-Sheet row — shared shape used by both direct-submit (OCR page) and BulkUploaderPage
+   when saveLoc==="sheet". Same `item` shape as buildBulkRecord (from parseBulkEntry). */
+function buildSheetRow({item,subject,subtopic,qtype,audienceTags}){
+  const isWritten=qtype==="Written";
+  return{
+    question:item.q,
+    opt1:isWritten?"":item.opt1||"", opt2:isWritten?"":item.opt2||"",
+    opt3:isWritten?"":item.opt3||"", opt4:isWritten?"":item.opt4||"",
+    correct:item.correct||"",
+    subject, sub_topic:subtopic||subject, topic:"",
+    explanation:item.explanation||"",
+    qType:isWritten?"Written":(qtype==="Study"?"Study":"MCQ"),
+    technique:"", prevExam:"", mainQpaper:"",
+    audienceTags:(audienceTags||[]).join(","),
+  };
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   SAVE LOCATION — Google Sheet | Firebase
+   যেখানেই নতুন ডাটা DB-তে যায় (QBank→Quiz কনভার্টার, AI Import/OCR
+   ডাইরেক্ট-সাবমিট, বাল্ক আপলোডার) — সবগুলোতে এই শেয়ার্ড হেল্পার +
+   UI কম্পোনেন্ট ব্যবহার হয়, যাতে Google Sheet অথবা Firebase — যেকোনো
+   একটা বেছে নেওয়া যায়। ব্যর্থ হওয়া রো localStorage ক্যাশে জমা থাকে,
+   পরে "আবার পাঠাও" দিয়ে রিট্রাই করা যায় — নেট সমস্যা/quota শেষ হলেও
+   কাজ হারায় না।
+   ══════════════════════════════════════════════════════════════════ */
+const LS_SAVE_LOCATION = "ss_save_location_v1";      // "sheet" | "firebase" — শেষ পছন্দ মনে রাখে
+const LS_GAS_SECRET    = "ss_shared_gas_secret_v1";  // সব ফিচার শেয়ার করা GAS secret key
+const LS_FAILED_QUEUE  = "ss_failed_save_queue_v1";  // ব্যর্থ রো — retry এর জন্য ক্যাশ
+const LS_OCR_CACHE     = "ss_ocr_cache_v1";          // ছবি → OCR টেক্সট ক্যাশ (একই ছবি দ্বিতীয়বার OCR করতে হয় না)
+const OCR_CACHE_MAX    = 60;                          // সর্বোচ্চ এতগুলো ছবির OCR ফলাফল ক্যাশে রাখা হয়
+
+function loadSaveLocPref(){ try{ return localStorage.getItem(LS_SAVE_LOCATION)||"firebase"; }catch{ return "firebase"; } }
+function saveSaveLocPref(v){ try{ localStorage.setItem(LS_SAVE_LOCATION,v); }catch{} }
+
+// পুরনো QBank কনভার্টার-এর secret key ব্যবহার করা হয়েছিল যদি আগে থেকেই — সেটাও fallback হিসেবে পড়ে
+function loadSharedGasSecret(){
+  try{ return localStorage.getItem(LS_GAS_SECRET) || localStorage.getItem("qbank_conv_gas_secret_v1") || ""; }
+  catch{ return ""; }
+}
+function saveSharedGasSecret(v){ try{ localStorage.setItem(LS_GAS_SECRET,v); }catch{} }
+
+/* ── ব্যর্থ হওয়া সেভ-রো ক্যাশ — retry এর জন্য ── */
+function loadFailedQueue(){ try{ return JSON.parse(localStorage.getItem(LS_FAILED_QUEUE)||"[]"); }catch{ return []; } }
+function saveFailedQueueList(items){
+  try{ if(items.length) localStorage.setItem(LS_FAILED_QUEUE,JSON.stringify(items)); else localStorage.removeItem(LS_FAILED_QUEUE); }catch{}
+}
+function pushFailedItems(source,location,targetTab,rows){
+  if(!rows||!rows.length)return;
+  const existing=loadFailedQueue();
+  const stamped=rows.map(r=>({_key:Math.random().toString(36).slice(2),source,location,targetTab,row:r,ts:Date.now()}));
+  saveFailedQueueList([...existing,...stamped]);
+}
+function removeFailedItems(keys){
+  saveFailedQueueList(loadFailedQueue().filter(f=>!keys.includes(f._key)));
+}
+
+/* ── Google Sheet-এ bulk rows সেভ (GAS backend "bulk_save_rows" endpoint) ── */
+async function saveRowsToSheet({rows,targetTab,gasSecret,push}){
+  if(!rows.length)return{added:0,skipped:0,failedRows:[]};
+  if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{added:0,skipped:0,failedRows:rows}; }
+  if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও"); return{added:0,skipped:0,failedRows:rows}; }
+  const CHUNK=100;
+  let added=0,skipped=0; const failedRows=[];
+  for(let i=0;i<rows.length;i+=CHUNK){
+    const chunk=rows.slice(i,i+CHUNK);
+    try{
+      const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({secret:gasSecret,type:"bulk_save_rows",targetTab,rows:chunk})});
+      const data=await resp.json().catch(()=>({}));
+      if(data.result==="error"){ failedRows.push(...chunk); continue; }
+      added+=(data.added||0); skipped+=(data.skipped||0);
+    }catch(e){ failedRows.push(...chunk); }
+  }
+  return{added,skipped,failedRows};
+}
+
+/* ── Firebase-এ bulk rows সেভ — প্রতিটা row আলাদা push, ব্যর্থগুলো ফেরত দেয় (retry-এর জন্য) ── */
+async function saveRowsToFirebaseBulk({rows,targetTab,concurrency=8}){
+  let added=0; const failedRows=[];
+  for(let i=0;i<rows.length;i+=concurrency){
+    const chunk=rows.slice(i,i+concurrency);
+    await Promise.all(chunk.map(async(row)=>{
+      try{
+        const res=await fbPush(targetTab,row);
+        if(res?.name) await fbSet(`${targetTab}/${res.name}/id`,res.name);
+        added++;
+      }catch(e){ failedRows.push(row); }
+    }));
+  }
+  if(added>0) invalidate(targetTab);
+  return{added,failedRows};
+}
+
+/* ── UI: Save Location টগল (Google Sheet | Firebase) — সব সেভ-ফিচারে reuse হয় ── */
+function SaveLocationPicker({value,onChange,gasSecret,onGasSecretChange}){
+  return(
+    <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:10}}>
+      <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:8}}>💾 Save Location</div>
+      <div style={{display:"flex",gap:8,marginBottom:value==="sheet"?8:0}}>
+        <button type="button" className="btn" style={{flex:1,justifyContent:"center",background:value==="sheet"?C.green:"transparent",color:value==="sheet"?"#04180a":C.text,border:`1px solid ${C.border}`}} onClick={()=>onChange("sheet")}>📄 Google Sheet</button>
+        <button type="button" className="btn" style={{flex:1,justifyContent:"center",background:value==="firebase"?C.accent:"transparent",color:value==="firebase"?"#fff":C.text,border:`1px solid ${C.border}`}} onClick={()=>onChange("firebase")}>🔥 Firebase</button>
+      </div>
+      {value==="sheet" && (
+        <div className="fld" style={{marginBottom:0}}><label>GAS Secret Key</label>
+          <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>onGasSecretChange(e.target.value)}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── UI: ব্যর্থ হওয়া আইটেমগুলো — cache থেকে retry / clear করার প্যানেল ── */
+function FailedQueuePanel({push,sourceFilter}){
+  const[,bump]=useState(0);
+  const forceRerender=()=>bump(x=>x+1);
+  let items=loadFailedQueue();
+  if(sourceFilter) items=items.filter(it=>it.source===sourceFilter);
+  const[retryingKey,setRetryingKey]=useState(null);
+  if(!items.length) return null;
+
+  const bySource={};
+  items.forEach(it=>{ (bySource[it.source]=bySource[it.source]||[]).push(it); });
+
+  const retryGroup=async(groupKey,groupItems)=>{
+    setRetryingKey(groupKey);
+    const{location,targetTab}=groupItems[0];
+    const rows=groupItems.map(g=>g.row);
+    const result = location==="sheet"
+      ? await saveRowsToSheet({rows,targetTab,gasSecret:loadSharedGasSecret(),push})
+      : await saveRowsToFirebaseBulk({rows,targetTab});
+    const failedSet=new Set(result.failedRows||[]);
+    const removeKeys=groupItems.filter(g=>!failedSet.has(g.row)).map(g=>g._key);
+    const succeeded=removeKeys.length, failedCount=groupItems.length-succeeded;
+    removeFailedItems(removeKeys);
+    setRetryingKey(null);
+    forceRerender();
+    if(succeeded>0) push("success",`✅ ${succeeded}টা রিট্রাইতে সফল হয়েছে`,"");
+    if(failedCount>0) push("error",`${failedCount}টা আবারও ব্যর্থ হয়েছে`,"ক্যাশে থেকে গেছে — পরে আবার চেষ্টা করো");
+  };
+  const clearGroup=(groupItems)=>{ removeFailedItems(groupItems.map(g=>g._key)); forceRerender(); };
+
+  return(
+    <div style={{background:C.card,border:`1px solid ${C.red}55`,borderRadius:14,padding:14,marginBottom:12}}>
+      <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.red,fontWeight:700,marginBottom:8}}>⚠️ ব্যর্থ হওয়া আইটেম ক্যাশ ({items.length}টা)</div>
+      {Object.entries(bySource).map(([src,groupItems])=>{
+        const groupKey=src+"|"+groupItems[0].location+"|"+groupItems[0].targetTab;
+        return(
+          <div key={groupKey} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 0",borderTop:`1px solid ${C.border}`}}>
+            <div style={{fontSize:12,color:C.text}}>{src} — {groupItems.length}টা ({groupItems[0].targetTab} → {groupItems[0].location==="sheet"?"Sheet":"Firebase"})</div>
+            <div style={{display:"flex",gap:6}}>
+              <button className="btn" disabled={retryingKey===groupKey} style={{fontSize:11,padding:"4px 10px",background:C.green,color:"#04180a"}} onClick={()=>retryGroup(groupKey,groupItems)}>{retryingKey===groupKey?"⏳":"🔁"} আবার পাঠাও</button>
+              <button className="btn" disabled={retryingKey===groupKey} style={{fontSize:11,padding:"4px 10px",background:"transparent",color:C.red,border:`1px solid ${C.border}`}} onClick={()=>clearGroup(groupItems)}>🗑️</button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* ── OCR ক্যাশ — একই ছবি আবার OCR করতে হলে native call এড়িয়ে সরাসরি আগের ফলাফল দেয় ── */
+function _b64Hash(b64){
+  // দ্রুত non-crypto hash — পুরো base64 string না পড়ে sample নিয়ে যথেষ্ট ইউনিক key বানায়
+  let h=0; const len=b64.length, step=Math.max(1,Math.floor(len/512));
+  for(let i=0;i<len;i+=step){ h=(h*31 + b64.charCodeAt(i))|0; }
+  return `${len}_${h}`;
+}
+function loadOcrCache(){ try{ return JSON.parse(localStorage.getItem(LS_OCR_CACHE)||"{}"); }catch{ return{}; } }
+function getOcrCacheEntry(b64,qtype){ return loadOcrCache()[`${_b64Hash(b64)}_${qtype}`]||null; }
+function setOcrCacheEntry(b64,qtype,result){
+  try{
+    const cache=loadOcrCache();
+    const key=`${_b64Hash(b64)}_${qtype}`;
+    cache[key]=result;
+    const keys=Object.keys(cache);
+    if(keys.length>OCR_CACHE_MAX) keys.slice(0,keys.length-OCR_CACHE_MAX).forEach(k=>delete cache[k]);
+    localStorage.setItem(LS_OCR_CACHE,JSON.stringify(cache));
+  }catch{}
+}
+function clearOcrCache(){ try{ localStorage.removeItem(LS_OCR_CACHE); }catch{} }
+
 function AIImportPage({push,onSendToBulk}){
   const[images,setImages]=useState([]);   // [{uri,base64,status,ocrText}]
   const[ocrAll,setOcrAll]=useState("");
@@ -2597,6 +2822,10 @@ function AIImportPage({push,onSendToBulk}){
   const[directRunning,setDirectRunning]=useState(false);
   const[directProgress,setDirectProgress]=useState({done:0,total:0,sent:0,failed:0});
   const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1"];
+  const[saveLoc,setSaveLoc]=useState(loadSaveLocPref); // "sheet" | "firebase"
+  const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
+  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
   const effMode=ocrQtype==="Study"?"Study":targetMode; // Firebase sheet
   const effQtype=ocrQtype==="Study"?"Study":ocrQtype;  // MCQ | Written | Study
@@ -2617,7 +2846,7 @@ function AIImportPage({push,onSendToBulk}){
   };
   const removeTag=(t)=>setAudienceTags(p=>p.filter(x=>x!==t));
 
-  /* ── Direct submit — Bulk পেজে না গিয়ে এখান থেকেই সরাসরি Firebase-এ পাঠায় ── */
+  /* ── Direct submit — Bulk পেজে না গিয়ে এখান থেকেই সরাসরি Google Sheet অথবা Firebase-এ পাঠায় ── */
   const directSubmit=async()=>{
     const toParse=(parsedAll&&parsedAll.trim())?parsedAll:ocrAll;
     if(!toParse.trim()){push("warn","আগে OCR চালান","");return;}
@@ -2629,7 +2858,19 @@ function AIImportPage({push,onSendToBulk}){
     }
     setDirectRunning(true);
     setDirectProgress({done:0,total:entries.length,sent:0,failed:0});
-    let sent=0,failed=0;
+
+    if(saveLoc==="sheet"){
+      const rows=entries.map(item=>buildSheetRow({item,subject,subtopic,qtype:effQtype,audienceTags}));
+      const result=await saveRowsToSheet({rows,targetTab:effMode,gasSecret,push});
+      setDirectProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
+      setDirectRunning(false);
+      if(result.failedRows.length) pushFailedItems("AI Import (OCR)",saveLoc,effMode,result.failedRows);
+      if(result.added>0) push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${effMode} — ${subject}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
+      if(result.failedRows.length) push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+      return;
+    }
+
+    let sent=0,failed=0; const failedRecs=[];
     const BATCH=8;
     for(let i=0;i<entries.length;i+=BATCH){
       const batch=entries.slice(i,i+BATCH);
@@ -2644,13 +2885,15 @@ function AIImportPage({push,onSendToBulk}){
           sent++;
         }catch(e){
           failed++;
+          failedRecs.push(rec);
         }
         setDirectProgress(p=>({...p,done:p.done+1,sent,failed}));
       }));
     }
     setDirectRunning(false);
+    if(failedRecs.length) pushFailedItems("AI Import (OCR)",saveLoc,effMode,failedRecs);
     if(sent>0)push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${effMode} — ${subject}`);
-    if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"");
+    if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
   };
 
   /* ── Capacitor Camera plugin ── */
@@ -2782,6 +3025,12 @@ function AIImportPage({push,onSendToBulk}){
   /* ── ML Kit OCR via native plugin ── */
   // Returns {raw, parsed} — raw=full text, parsed=semicolon lines (bulk ready)
   const runOcrOnBase64=async(b64,qtype="MCQ")=>{
+    // ── OCR ক্যাশ — একই ছবি (একই qtype) আগে OCR হয়ে থাকলে native call এড়িয়ে সরাসরি আগের ফলাফল দেয় ──
+    const cached=getOcrCacheEntry(b64,qtype);
+    if(cached){
+      _LC.log("OcrPlugin","📦 OCR cache hit — native call এড়ানো হলো");
+      return cached;
+    }
     const {OcrPlugin}=window.Capacitor?.Plugins||{};
     if(!OcrPlugin){
       const available=Object.keys(window.Capacitor?.Plugins||{}).join(", ")||"(none)";
@@ -2805,7 +3054,9 @@ function AIImportPage({push,onSendToBulk}){
         _LC.warn("OcrPlugin","AI parse skipped ("+aiErr.message+") — using local parser");
         // fallback: keep local parsed result
       }
-      return {raw, parsed};
+      const result={raw, parsed};
+      setOcrCacheEntry(b64,qtype,result);
+      return result;
     }catch(e){
       _LC.error("OcrPlugin",`recognizeText failed: ${e.message}`);
       throw e;
@@ -2910,7 +3161,15 @@ function AIImportPage({push,onSendToBulk}){
         </div>
       </div>
       {/* Inline API Settings panel */}
-      {showApiSettings&&<ApiSettingsPage push={push} inline={true}/>}
+      {showApiSettings&&(
+        <>
+          <ApiSettingsPage push={push} inline={true}/>
+          <button className="btn" style={{width:"100%",justifyContent:"center",fontSize:11,background:"transparent",color:C.muted,border:`1px solid ${C.border}`,marginBottom:12}}
+            onClick={()=>{clearOcrCache();push("success","🗑️ OCR ক্যাশ মুছে ফেলা হয়েছে","পরের বার সব ছবি নতুন করে OCR হবে");}}>
+            🗑️ OCR ক্যাশ মুছুন (একই ছবি আবার OCR করার জন্য)
+          </button>
+        </>
+      )}
 
       {/* OCR Format Selector */}
       <div style={{marginBottom:12}}>
@@ -3117,6 +3376,8 @@ function AIImportPage({push,onSendToBulk}){
               </div>
             </div>
 
+            <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={setGasSecretP}/>
+
             {/* Direct submit progress */}
             {directRunning&&(
               <div style={{marginBottom:8}}>
@@ -3132,12 +3393,14 @@ function AIImportPage({push,onSendToBulk}){
 
             <button className="btn" disabled={directRunning} onClick={directSubmit}
               style={{background:"#052e16",color:"#10b981",borderColor:"#10b981",justifyContent:"center",width:"100%"}}>
-              {directRunning?`⏳ Submit হচ্ছে... (${directProgress.done}/${directProgress.total})`:`🚀 ${effMode} সিটে সরাসরি Submit করুন`}
+              {directRunning?`⏳ Submit হচ্ছে... (${directProgress.done}/${directProgress.total})`:`🚀 ${effMode} → ${saveLoc==="sheet"?"Sheet":"Firebase"}-এ সরাসরি Submit করুন`}
             </button>
             <button className="btn" onClick={sendToBulk}
               style={{justifyContent:"center",width:"100%",marginTop:6,fontSize:11,background:"transparent",color:C.muted,borderColor:C.border}}>
               📤 অথবা Bulk পেজে পাঠিয়ে সেখানে review করে Upload করুন
             </button>
+
+            <FailedQueuePanel push={push} sourceFilter="AI Import (OCR)"/>
           </div>
         )}
       </div>
@@ -3165,6 +3428,10 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const[log,setLog]=useState([]);
   const[done,setDone]=useState(false);
   const stopRef=useRef(false);
+  const[saveLoc,setSaveLoc]=useState(loadSaveLocPref); // "sheet" | "firebase"
+  const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
+  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
   /* Load subjects for autocomplete */
   useEffect(()=>{
@@ -3289,7 +3556,19 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     setProgress({done:0,total:entries.length,sent:0,failed:0});
     const addLog=(msg,type)=>setLog(p=>[...p.slice(-99),{msg,type,id:Date.now()+Math.random()}]);
 
-    let sent=0,failed=0;
+    if(saveLoc==="sheet"){
+      const rows=entries.map(item=>buildSheetRow({item,subject,subtopic,qtype:eff,audienceTags}));
+      const result=await saveRowsToSheet({rows,targetTab:mode,gasSecret,push});
+      entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
+      setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
+      setRunning(false);setDone(true);
+      if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার",saveLoc,mode,result.failedRows);
+      if(result.added>0)push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${mode} — ${subject}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
+      if(result.failedRows.length)push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+      return;
+    }
+
+    let sent=0,failed=0; const failedRecs=[];
     const BATCH=8;
     for(let i=0;i<entries.length;i+=BATCH){
       if(stopRef.current){addLog("⛔ বন্ধ করা হয়েছে","err");break;}
@@ -3310,14 +3589,16 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           addLog(`✔ ${(item.q||"").substring(0,55)}...`,"ok");
         }catch(e){
           failed++;
+          failedRecs.push(rec);
           addLog(`✗ ব্যর্থ: ${(item.q||"").substring(0,45)}... [${e.message}]`,"err");
         }
         setProgress(p=>({...p,done:p.done+1,sent,failed}));
       }));
     }
     setRunning(false);setDone(true);
+    if(failedRecs.length) pushFailedItems("বাল্ক আপলোডার",saveLoc,mode,failedRecs);
     if(sent>0)push("success",`✅ ${sent}টি সফলভাবে যোগ হয়েছে!`,`${mode} — ${subject}`);
-    if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"আবার চেষ্টা করুন");
+    if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
   };
 
   const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setSubtopic("");};
@@ -3329,8 +3610,11 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       {/* Header */}
       <div style={{background:`linear-gradient(135deg,${C.accent},#7c3aed)`,borderRadius:14,padding:"14px 16px",marginBottom:16,color:"#fff"}}>
         <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>⚡ বাল্ক প্রশ্ন আপলোড</div>
-        <div style={{fontSize:11,opacity:.8}}>একসাথে একাধিক প্রশ্ন Firebase-এ যোগ করুন</div>
+        <div style={{fontSize:11,opacity:.8}}>একসাথে একাধিক প্রশ্ন Google Sheet অথবা Firebase-এ যোগ করুন</div>
       </div>
+
+      <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={setGasSecretP}/>
+      <FailedQueuePanel push={push} sourceFilter="বাল্ক আপলোডার"/>
 
       {/* Target Sheet */}
       <div style={{display:"flex",gap:6,marginBottom:12}}>
@@ -3987,48 +4271,12 @@ function normalizeQbankQ(s){
 }
 
 function QBankConverterTab({push,tick}){
-  // Firebase quota বন্ধ থাকলেও কাজ চালু রাখতে QBank ডাটা এখন সরাসরি Google Sheet
-  // থেকে (GAS "getSheetRows" action দিয়ে) পড়া হয় — Firebase-এর উপর নির্ভর করে না।
-  const[qbankSheetRows,setQbankSheetRows]=useState([]);
-  const[qbankLoading,setQbankLoading]=useState(true);
-  const[qbankDebug,setQbankDebug]=useState(null); // {ok, msg, count}
-  useEffect(()=>{
-    let cancelled=false;
-    (async()=>{
-      setQbankLoading(true);
-      const secret=(()=>{try{return localStorage.getItem(LS_QBC_GAS_SECRET)||"";}catch{return"";}})();
-      const debugCtx=`GAS=${GAS?"সেট আছে":"❌ খালি/undefined"} | secret=${secret?`দেওয়া আছে (${secret.length} char)`:"❌ খালি"}`;
-      try{
-        if(!GAS) throw new Error("VITE_GAS_URL বিল্ডে সেট নেই — "+debugCtx);
-        const url=`${GAS}?action=getSheetRows&tab=QBank&secret=${encodeURIComponent(secret)}`;
-        const resp=await fetch(url);
-        const rawText=await resp.text();
-        let data; try{ data=JSON.parse(rawText); }catch{ throw new Error("HTTP "+resp.status+" — JSON parse ব্যর্থ, response শুরু: "+rawText.slice(0,120)); }
-        if(cancelled)return;
-        if(data?.status==="success"&&Array.isArray(data.rows)){
-          setQbankSheetRows(data.rows);
-          setQbankDebug({ok:true,msg:`✅ ${data.rows.length}টা row Sheet থেকে লোড হয়েছে (tab: ${data.tab})`,count:data.rows.length});
-        }else{
-          setQbankSheetRows([]);
-          const msg=data?.message||JSON.stringify(data);
-          setQbankDebug({ok:false,msg:`❌ GAS রেসপন্স: ${msg} | ${debugCtx}`,count:0});
-          push("error","❌ Sheet থেকে QBank লোড ব্যর্থ",msg);
-        }
-      }catch(e){
-        if(!cancelled){
-          setQbankSheetRows([]);
-          setQbankDebug({ok:false,msg:`❌ ${e.message} | ${debugCtx}`,count:0});
-          push("error","❌ Sheet থেকে QBank লোড ব্যর্থ",e.message);
-        }
-      }finally{
-        if(!cancelled) setQbankLoading(false);
-      }
-    })();
-    return ()=>{cancelled=true;};
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[tick]);
+  // ⚡ Firebase quota বন্ধ থাকলেও কাজ চালু থাকে — useFB()-এর ভেতরের loadPath() এখন
+  // Firebase read ব্যর্থ হলে নিজে থেকেই Google Sheet fallback (GAS "getSheetRows")
+  // ব্যবহার করে। Firebase চালু থাকলে স্বাভাবিকভাবেই Firebase থেকেই পড়বে।
+  const{data:qbank,loading:qbankLoading}=useFB("QBank",tick);
 
-  const allRows=useMemo(()=>qbankSheetRows.map(row=>{
+  const allRows=useMemo(()=>toArr(qbank).map(row=>{
     const audRaw=(row.AudienceTags||row.audienceTags||"").toString().trim();
     return {
       _fbKey: row._fbKey,
@@ -4041,7 +4289,7 @@ function QBankConverterTab({push,tick}){
       qType: (row["Question Type"]||"").toString().trim()||"MCQ",
       audienceList: audRaw.split(",").map(a=>a.trim()).filter(Boolean),
     };
-  }).filter(r=>r.question),[qbankSheetRows]);
+  }).filter(r=>r.question),[qbank]);
 
   const[selAud,setSelAud]=useState([]);
   const[selSubj,setSelSubj]=useState([]);
@@ -4112,9 +4360,11 @@ function QBankConverterTab({push,tick}){
     catch{ push("error","❌ ভুল JSON ফরম্যাট","ঠিক করে আবার চেষ্টা করো"); }
   };
 
-  // ── GAS Secret Key (Google Sheet-এ সেভ করার জন্য দরকার) ──
-  const[gasSecret,setGasSecret]=useState(()=>{try{return localStorage.getItem(LS_QBC_GAS_SECRET)||"";}catch{return"";}});
-  const saveGasSecret=(v)=>{ setGasSecret(v); try{localStorage.setItem(LS_QBC_GAS_SECRET,v);}catch{} };
+  // ── GAS Secret Key + Save Location — শেয়ার্ড (সব ফিচারে একই key/পছন্দ ব্যবহার হয়) ──
+  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const saveGasSecret=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
+  const[saveLoc,setSaveLoc]=useState(loadSaveLocPref); // "sheet" | "firebase"
+  const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
 
   const[batchSize,setBatchSize]=useState(15);
   const[busy,setBusy]=useState(false);
@@ -4128,7 +4378,6 @@ function QBankConverterTab({push,tick}){
   const[draftRestored]=useState(()=>{
     try{ return !!JSON.parse(localStorage.getItem(LS_QBC_RESULTS_DRAFT)||"[]").length; }catch{ return false; }
   });
-  const[saveLoc,setSaveLoc]=useState("sheet"); // "sheet" | "firebase" (firebase আপাতত বন্ধ)
   const[saving,setSaving]=useState(false);
 
   // প্রতিবার results বদলালেই (প্রতি ব্যাচের পর, approve/edit করলে, সেভের পর) draft হিসেবে সেভ হয়ে যায় —
@@ -4211,39 +4460,43 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
   const saveApproved=async()=>{
     const approved=results.filter(r=>r.approved);
     if(!approved.length){ push("warn","কিছুই approve করা নেই",""); return; }
-    if(saveLoc!=="sheet"){
-      push("warn","⚠️ Firebase অপশন এখন বন্ধ","কোটা রিসেট না হওয়া পর্যন্ত শুধু Google Sheet-এ সেভ করা যাবে");
-      return;
-    }
-    if(!GAS){ push("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return; }
-    if(!gasSecret){ push("error","❌ GAS Secret Key দাও","নিচে ফিল্ডে বসাও"); return; }
     setSaving(true);
+    const audienceTags=selAud.filter(a=>a!==JOB_NONE_TAG).join(",")||"Job";
+    const rows=approved.map(r=>({
+      question:r.question, opt1:r.opt1, opt2:r.opt2, opt3:r.opt3, opt4:r.opt4,
+      correct:r.correct, subject:r.subject, sub_topic:r.sub_topic,
+      explanation:r.explanation, technique:"", prevExam:r.prevExam||"",
+      qType:"MCQ", audienceTags,
+    }));
     try{
-      const CHUNK=100;
-      let savedTotal=0, skippedTotal=0;
-      for(let i=0;i<approved.length;i+=CHUNK){
-        const chunk=approved.slice(i,i+CHUNK);
-        const resp=await fetch(GAS,{
-          method:"POST",
-          headers:{"Content-Type":"text/plain"}, // GAS doPost-এ CORS-preflight এড়াতে text/plain (GAS নিজে JSON.parse করে)
-          body:JSON.stringify({
-            secret: gasSecret,
-            type:"qbank_to_quiz_bulk",
-            targetSheet:"Quiz",
-            rows: chunk.map(r=>({
-              question:r.question, opt1:r.opt1, opt2:r.opt2, opt3:r.opt3, opt4:r.opt4,
-              correct:r.correct, subject:r.subject, sub_topic:r.sub_topic,
-              explanation:r.explanation, technique:"", prevExam:r.prevExam||"",
-              qType:"MCQ", audienceTags: selAud.filter(a=>a!==JOB_NONE_TAG).join(",")||"Job",
-            })),
-          }),
-        });
-        const data=await resp.json().catch(()=>({}));
-        savedTotal += (data.added||0);
-        skippedTotal += (data.skipped||0);
+      let result;
+      if(saveLoc==="sheet"){
+        result=await saveRowsToSheet({rows,targetTab:"Quiz",gasSecret,push});
+      }else{
+        const ts=nowTs();
+        const fbRows=rows.map(r=>({
+          question:r.question, option1:r.opt1,option2:r.opt2,option3:r.opt3,option4:r.opt4,
+          correct:r.correct, subject:r.subject, sub_topic:r.sub_topic, explanation:r.explanation,
+          "Question Type":r.qType, AudienceTags:r.audienceTags, Timestamp:ts, technique:"", Previous_Exam:r.prevExam||"",
+        }));
+        const fbResult=await saveRowsToFirebaseBulk({rows:fbRows,targetTab:"Quiz"});
+        // failedRows থেকে ফেরত আসা fbRows-কে rows-এর সাথে মিলিয়ে দাও (index অনুযায়ী — একই ক্রমে পাঠানো হয়েছিল)
+        const failedIdx=new Set(fbResult.failedRows.map(fr=>fbRows.indexOf(fr)));
+        result={added:fbResult.added,skipped:0,failedRows:rows.filter((_,i)=>failedIdx.has(i))};
       }
-      push("success","✅ Google Sheet-এ জমা হয়েছে",savedTotal+"টা নতুন প্রশ্ন যোগ হয়েছে"+(skippedTotal?`, ${skippedTotal}টা duplicate হিসেবে বাদ পড়েছে`:""));
-      setResults(rs=>rs.filter(r=>!r.approved));
+      const failedCount=result.failedRows.length;
+      if(failedCount) pushFailedItems("QBank→Quiz",saveLoc,"Quiz",result.failedRows);
+      push("success","✅ সেভ সম্পন্ন",
+        `${result.added||0}টা নতুন প্রশ্ন যোগ হয়েছে`+
+        (result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:"")+
+        (failedCount?`, ${failedCount}টা ব্যর্থ (নিচে ক্যাশ থেকে আবার পাঠানো যাবে)`:"")
+      );
+      if(failedCount){
+        const failedQs=new Set(result.failedRows.map(r=>r.question));
+        setResults(rs=>rs.filter(r=>!r.approved||failedQs.has(r.question)));
+      }else{
+        setResults(rs=>rs.filter(r=>!r.approved));
+      }
     }catch(e){
       push("error","❌ সেভ ব্যর্থ",e.message);
     }
@@ -4252,15 +4505,6 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
 
   return(
     <div style={{paddingBottom:24}}>
-      {qbankLoading? (
-        <div style={{background:`${C.accent}15`,border:`1px solid ${C.accent}50`,borderRadius:10,padding:"10px 12px",marginBottom:12,fontSize:12.5,color:C.text}}>
-          ⏳ Sheet থেকে QBank ডেটা লোড হচ্ছে...
-        </div>
-      ) : qbankDebug ? (
-        <div style={{background:qbankDebug.ok?`${C.green}15`:`${C.red||"#f43f5e"}15`,border:`1px solid ${qbankDebug.ok?C.green:(C.red||"#f43f5e")}50`,borderRadius:10,padding:"10px 12px",marginBottom:12,fontSize:12.5,color:C.text,wordBreak:"break-word"}}>
-          {qbankDebug.msg}
-        </div>
-      ) : null}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
         <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>🎯 QBank ফিল্টার (একাধিক বাছাই করা যায়)</div>
 
@@ -4345,24 +4589,19 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
             </div>
           ))}
 
-          <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginTop:4}}>
-            <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:8}}>💾 Save to</div>
-            <div style={{display:"flex",gap:8,marginBottom:8}}>
-              <button className="btn" style={{flex:1,justifyContent:"center",background:saveLoc==="sheet"?C.green:"transparent",color:saveLoc==="sheet"?"#04180a":C.text,border:`1px solid ${C.border}`}} onClick={()=>setSaveLoc("sheet")}>📄 Google Sheet</button>
-              <button className="btn" disabled style={{flex:1,justifyContent:"center",background:"transparent",color:C.muted,border:`1px solid ${C.border}`,opacity:.5}} title="কোটা রিসেট না হওয়া পর্যন্ত বন্ধ">🔥 Firebase (বন্ধ)</button>
-            </div>
-            <div className="fld"><label>GAS Secret Key</label>
-              <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>saveGasSecret(e.target.value)}/>
-            </div>
-            <button className="btn" disabled={saving||!approvedCount} style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:12,fontSize:14,fontWeight:700,marginTop:4}} onClick={saveApproved}>
-              {saving?"⏳ সেভ হচ্ছে...":`💾 ${approvedCount}টা প্রশ্ন Sheet-এ সেভ করো`}
+          <div style={{marginTop:4}}>
+            <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={saveGasSecret}/>
+            <button className="btn" disabled={saving||!approvedCount} style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:12,fontSize:14,fontWeight:700}} onClick={saveApproved}>
+              {saving?"⏳ সেভ হচ্ছে...":`💾 ${approvedCount}টা প্রশ্ন ${saveLoc==="sheet"?"Sheet":"Firebase"}-এ সেভ করো`}
             </button>
           </div>
         </div>
       )}
 
+      <FailedQueuePanel push={push} sourceFilter="QBank→Quiz"/>
+
       <div style={{fontSize:11,color:C.muted,lineHeight:1.6}}>
-        এই ফিচার এখন সরাসরি Firebase-এ কিছু লেখে না — সবকিছু Google Sheet-এর Quiz ট্যাবে জমা হয়। Firebase quota রিসেট হওয়ার পর, Sheet-এ জমে থাকা নতুন রোগুলো হাতে করে (বা GAS ফাংশন দিয়ে) Firebase-এ push করতে হবে।
+        Save Location দিয়ে Google Sheet অথবা Firebase — যেকোনো একটাতে সরাসরি সেভ করা যায়। কোনো রো সেভ করতে ব্যর্থ হলে সেটা ক্যাশে জমা থাকে — উপরে "ব্যর্থ হওয়া আইটেম ক্যাশ" থেকে পরে আবার পাঠানো যাবে।
       </div>
     </div>
   );
