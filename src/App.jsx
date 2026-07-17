@@ -3991,26 +3991,33 @@ function QBankConverterTab({push,tick}){
   // থেকে (GAS "getSheetRows" action দিয়ে) পড়া হয় — Firebase-এর উপর নির্ভর করে না।
   const[qbankSheetRows,setQbankSheetRows]=useState([]);
   const[qbankLoading,setQbankLoading]=useState(true);
+  const[qbankDebug,setQbankDebug]=useState(null); // {ok, msg, count}
   useEffect(()=>{
     let cancelled=false;
     (async()=>{
       setQbankLoading(true);
+      const secret=(()=>{try{return localStorage.getItem(LS_QBC_GAS_SECRET)||"";}catch{return"";}})();
+      const debugCtx=`GAS=${GAS?"সেট আছে":"❌ খালি/undefined"} | secret=${secret?`দেওয়া আছে (${secret.length} char)`:"❌ খালি"}`;
       try{
-        if(!GAS) throw new Error("GAS URL সেট করা নেই");
-        const secret=(()=>{try{return localStorage.getItem(LS_QBC_GAS_SECRET)||"";}catch{return"";}})();
+        if(!GAS) throw new Error("VITE_GAS_URL বিল্ডে সেট নেই — "+debugCtx);
         const url=`${GAS}?action=getSheetRows&tab=QBank&secret=${encodeURIComponent(secret)}`;
         const resp=await fetch(url);
-        const data=await resp.json();
+        const rawText=await resp.text();
+        let data; try{ data=JSON.parse(rawText); }catch{ throw new Error("HTTP "+resp.status+" — JSON parse ব্যর্থ, response শুরু: "+rawText.slice(0,120)); }
         if(cancelled)return;
         if(data?.status==="success"&&Array.isArray(data.rows)){
           setQbankSheetRows(data.rows);
+          setQbankDebug({ok:true,msg:`✅ ${data.rows.length}টা row Sheet থেকে লোড হয়েছে (tab: ${data.tab})`,count:data.rows.length});
         }else{
           setQbankSheetRows([]);
-          if(data?.message) push("error","❌ Sheet থেকে QBank লোড ব্যর্থ",data.message);
+          const msg=data?.message||JSON.stringify(data);
+          setQbankDebug({ok:false,msg:`❌ GAS রেসপন্স: ${msg} | ${debugCtx}`,count:0});
+          push("error","❌ Sheet থেকে QBank লোড ব্যর্থ",msg);
         }
       }catch(e){
         if(!cancelled){
           setQbankSheetRows([]);
+          setQbankDebug({ok:false,msg:`❌ ${e.message} | ${debugCtx}`,count:0});
           push("error","❌ Sheet থেকে QBank লোড ব্যর্থ",e.message);
         }
       }finally{
@@ -4245,6 +4252,15 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
 
   return(
     <div style={{paddingBottom:24}}>
+      {qbankLoading? (
+        <div style={{background:`${C.accent}15`,border:`1px solid ${C.accent}50`,borderRadius:10,padding:"10px 12px",marginBottom:12,fontSize:12.5,color:C.text}}>
+          ⏳ Sheet থেকে QBank ডেটা লোড হচ্ছে...
+        </div>
+      ) : qbankDebug ? (
+        <div style={{background:qbankDebug.ok?`${C.green}15`:`${C.red||"#f43f5e"}15`,border:`1px solid ${qbankDebug.ok?C.green:(C.red||"#f43f5e")}50`,borderRadius:10,padding:"10px 12px",marginBottom:12,fontSize:12.5,color:C.text,wordBreak:"break-word"}}>
+          {qbankDebug.msg}
+        </div>
+      ) : null}
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
         <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>🎯 QBank ফিল্টার (একাধিক বাছাই করা যায়)</div>
 
