@@ -32,6 +32,7 @@ jobs:
           VITE_IMGBB_API_KEY:      ${{ secrets.VITE_IMGBB_API_KEY }}
           VITE_FCM_CLIENT_EMAIL:   ${{ secrets.VITE_FCM_CLIENT_EMAIL }}
           VITE_FCM_PRIVATE_KEY:    ${{ secrets.VITE_FCM_PRIVATE_KEY }}
+          VITE_GAS_URL:            ${{ secrets.VITE_GAS_URL }}
         run: npm run build
 
       - name: Initialize Capacitor
