@@ -3952,6 +3952,343 @@ function JobLauncherTab({push,tick}){
 }
 
 /* ══════════════════════════════════════════════════════════════════
+   QBANK → QUIZ CONVERTER
+   QBank-এর (চাকরির পরীক্ষার প্রশ্নব্যাংক) প্রশ্নগুলো বেছে বেছে (Audience/
+   Subject/Exam-paper ফিল্টার দিয়ে) নিয়ে, প্রথমে ক্লায়েন্ট-সাইডে (কোনো AI
+   ছাড়াই) ডুপ্লিকেট বাদ দিয়ে, তারপর AI দিয়ে batch-এ canonical taxonomy
+   অনুযায়ী subject/sub_topic classify + প্রয়োজনে MCQ অপশন বানিয়ে —
+   Quiz ফরম্যাটে রূপান্তর করে।
+
+   ফলাফল "Save to" সিলেক্টর অনুযায়ী জমা হয়:
+     - Google Sheet (ডিফল্ট) → GAS doPost("qbank_to_quiz_bulk") এন্ডপয়েন্টে,
+       Sheet-এই থাকে যতক্ষণ না Firebase quota রিসেট হয়ে হাতে করে sync করা হয়।
+     - Firebase (এখন disabled) → quota ফিরে এলে চালু করার জন্য রাখা আছে।
+   ══════════════════════════════════════════════════════════════════ */
+const LS_QBC_TAXONOMY   = "qbank_conv_taxonomy_v1";
+const LS_QBC_GAS_SECRET = "qbank_conv_gas_secret_v1";
+
+// ডিফল্ট canonical taxonomy — AI এই তালিকা থেকেই subject/sub_topic বাছবে।
+// প্রয়োজনে অ্যাডমিন UI থেকেই (নিচের "Taxonomy" এডিটর) এটা বদলানো যাবে, rebuild লাগবে না।
+const QBANK_CONV_TAXONOMY_DEFAULT = {
+  "✍️ বাংলা ব্যাকরণ": ["কারক","সমাস","সন্ধি","উপসর্গ","বাগধারা","এক কথায় প্রকাশ","প্রকৃতি ও প্রত্যয়","ধ্বনি পরিবর্তন","বাক্যের ধরণ","বানান শুদ্ধিকরণ","যতিচিহ্ন","বিপরীত শব্দ","সমার্থক শব্দ","পরিভাষা","বাক্য","ধ্বনি"],
+  "📖 English Grammar": ["Verb","Article","Preposition","Tense","Voice","Narration","Number & Gender","Synonym-Antonym","Sentence Correction","Translation"],
+  "🇧🇩 বাংলাদেশ বিষয়াবলি": ["মুক্তিযুদ্ধ","সংবিধান","ভূগোল ও পরিবেশ","অর্থনীতি","ইতিহাস ও ঐতিহ্য","প্রশাসনিক কাঠামো","সাধারণ জ্ঞান"],
+  "🌍 আন্তর্জাতিক": ["আন্তর্জাতিক সংস্থা","বিশ্ব ইতিহাস","বিশ্ব ভূগোল","চুক্তি ও সম্মেলন"],
+  "\u200b📚 বাংলা সাহিত্য": ["কাজী নজরুল ইসলাম","রবীন্দ্রনাথ ঠাকুর","অন্যান্য সাহিত্যিক","সাহিত্যকর্ম"],
+  "📟 পাটিগণিত": ["গড়","শতকরা","সুদকষা","লাভ-ক্ষতি","অনুপাত-সমানুপাত","ঐকিক নিয়ম","সংখ্যা পদ্ধতি"],
+  "📐জ্যামিতি": ["ক্ষেত্রফল","পরিসীমা","কোণ","ত্রিভুজ","বৃত্ত"],
+  "💻 কম্পিউটার": ["হার্ডওয়্যার","সফটওয়্যার","ইন্টারনেট","MS Office","শর্টকাট"],
+};
+
+// প্রশ্নের টেক্সট normalize করে — whitespace/যতিচিহ্ন বাদ দিয়ে ডুপ্লিকেট মেলানোর জন্য
+function normalizeQbankQ(s){
+  return (s||"").toString().replace(/[\s.,;:।?!—–\-()'"]/g,"").trim();
+}
+
+function QBankConverterTab({push,tick}){
+  const{data:qbank,loading:qbankLoading}=useFB("QBank",tick);
+
+  const allRows=useMemo(()=>toArr(qbank).map(row=>{
+    const audRaw=(row.AudienceTags||row.audienceTags||"").toString().trim();
+    return {
+      _fbKey: row._fbKey,
+      question: (row.question||row.Question||"").toString().trim(),
+      opt1: row.option1||"", opt2: row.option2||"", opt3: row.option3||"", opt4: row.option4||"",
+      correct: row.correct||"",
+      subject: (row.subject||"").toString().trim(),     // QBank পোস্ট নাম
+      examPaper: (row.sub_topic||"").toString().trim(),  // QBank exam paper নাম
+      explanation: row.explanation||row.Explanation||"",
+      qType: (row["Question Type"]||"").toString().trim()||"MCQ",
+      audienceList: audRaw.split(",").map(a=>a.trim()).filter(Boolean),
+    };
+  }).filter(r=>r.question),[qbank]);
+
+  const[selAud,setSelAud]=useState([]);
+  const[selSubj,setSelSubj]=useState([]);
+  const[selExam,setSelExam]=useState([]);
+
+  const matchAud=useCallback((r,aud)=> !aud.length || aud.some(a=>a===JOB_NONE_TAG? r.audienceList.length===0 : r.audienceList.includes(a)),[]);
+
+  const audienceOptions=useMemo(()=>{
+    const counts={};
+    allRows.forEach(r=>{
+      if(!r.audienceList.length){ counts[JOB_NONE_TAG]=(counts[JOB_NONE_TAG]||0)+1; return; }
+      r.audienceList.forEach(a=>{counts[a]=(counts[a]||0)+1;});
+    });
+    const entries=Object.keys(counts).filter(k=>k!==JOB_NONE_TAG).sort().map(a=>({value:a,label:a,count:counts[a]}));
+    if(counts[JOB_NONE_TAG]) entries.push({value:JOB_NONE_TAG,label:"— কোনো Audience Tag নেই —",count:counts[JOB_NONE_TAG]});
+    return entries;
+  },[allRows]);
+
+  const rowsByAud=useMemo(()=>allRows.filter(r=>matchAud(r,selAud)),[allRows,selAud,matchAud]);
+
+  const subjectOptions=useMemo(()=>{
+    const counts={};
+    rowsByAud.forEach(r=>{ const s=r.subject||"(ফাঁকা)"; counts[s]=(counts[s]||0)+1; });
+    return Object.keys(counts).sort().map(s=>({value:s,label:s,count:counts[s]}));
+  },[rowsByAud]);
+
+  const rowsByAudSubj=useMemo(()=>rowsByAud.filter(r=> !selSubj.length || selSubj.includes(r.subject||"(ফাঁকা)")),[rowsByAud,selSubj]);
+
+  const examOptions=useMemo(()=>{
+    const counts={};
+    rowsByAudSubj.forEach(r=>{ const e=r.examPaper||"(ফাঁকা)"; counts[e]=(counts[e]||0)+1; });
+    return Object.keys(counts).sort().map(e=>({value:e,label:e,count:counts[e]}));
+  },[rowsByAudSubj]);
+
+  const scopedRows=useMemo(()=>rowsByAudSubj.filter(r=> !selExam.length || selExam.includes(r.examPaper||"(ফাঁকা)")),[rowsByAudSubj,selExam]);
+
+  const audKey=selAud.join(","), subjKey=selSubj.join(",");
+  useEffect(()=>{ setSelSubj([]); setSelExam([]); },[audKey]);
+  useEffect(()=>{ setSelExam([]); },[subjKey]);
+
+  const toggle=(arr,setArr,val)=>{ setArr(arr.includes(val)? arr.filter(x=>x!==val) : [...arr,val]); };
+
+  // ── ডিডুপ্লিকেশন — কোনো AI কল ছাড়াই, শুধু টেক্সট মিলিয়ে ──
+  const dedupedPool=useMemo(()=>{
+    const seen=new Map();
+    scopedRows.forEach(r=>{
+      const key=normalizeQbankQ(r.question);
+      if(!key)return;
+      if(seen.has(key)){
+        const ex=seen.get(key);
+        if(r.examPaper && !ex.examPapers.includes(r.examPaper)) ex.examPapers.push(r.examPaper);
+        ex.dupCount++;
+      }else{
+        seen.set(key,{...r,examPapers:r.examPaper?[r.examPaper]:[],dupCount:1});
+      }
+    });
+    return Array.from(seen.values());
+  },[scopedRows]);
+
+  // ── Taxonomy এডিটর ──
+  const[taxonomyText,setTaxonomyText]=useState(()=>{
+    try{ return localStorage.getItem(LS_QBC_TAXONOMY) || JSON.stringify(QBANK_CONV_TAXONOMY_DEFAULT,null,2); }
+    catch{ return JSON.stringify(QBANK_CONV_TAXONOMY_DEFAULT,null,2); }
+  });
+  const[showTaxEdit,setShowTaxEdit]=useState(false);
+  const saveTaxonomy=()=>{
+    try{ JSON.parse(taxonomyText); localStorage.setItem(LS_QBC_TAXONOMY,taxonomyText); push("success","✅ Taxonomy সেভ হয়েছে","পরের ব্যাচ থেকেই এটা ব্যবহার হবে"); }
+    catch{ push("error","❌ ভুল JSON ফরম্যাট","ঠিক করে আবার চেষ্টা করো"); }
+  };
+
+  // ── GAS Secret Key (Google Sheet-এ সেভ করার জন্য দরকার) ──
+  const[gasSecret,setGasSecret]=useState(()=>{try{return localStorage.getItem(LS_QBC_GAS_SECRET)||"";}catch{return"";}});
+  const saveGasSecret=(v)=>{ setGasSecret(v); try{localStorage.setItem(LS_QBC_GAS_SECRET,v);}catch{} };
+
+  const[batchSize,setBatchSize]=useState(15);
+  const[busy,setBusy]=useState(false);
+  const[progress,setProgress]=useState({done:0,total:0});
+  const[results,setResults]=useState([]);
+  const[saveLoc,setSaveLoc]=useState("sheet"); // "sheet" | "firebase" (firebase আপাতত বন্ধ)
+  const[saving,setSaving]=useState(false);
+
+  const buildPrompt=(batch)=>{
+    let taxonomy;
+    try{ taxonomy=JSON.parse(taxonomyText); }catch{ taxonomy=QBANK_CONV_TAXONOMY_DEFAULT; }
+    return `তুমি একজন বাংলা প্রশ্নব্যাংক এডিটর। নিচে চাকরির পরীক্ষার প্রশ্নব্যাংক (QBank) থেকে কিছু প্রশ্ন দেওয়া হলো। প্রতিটা প্রশ্নকে Quiz ফরম্যাটে রূপান্তর করো।
+
+CANONICAL SUBJECT/SUB-TOPIC তালিকা (এই তালিকা থেকেই সঠিক subject আর sub_topic বেছে নেবে, নতুন নাম বানাবে না, একদম হুবহু বানান/স্পেসিং কপি করবে):
+${JSON.stringify(taxonomy,null,2)}
+
+নিয়মাবলী:
+1. প্রতিটা ইনপুট প্রশ্নের বিষয়বস্তু বিচার করে উপরের তালিকা থেকে সবচেয়ে সঠিক subject আর sub_topic বেছে নাও। তালিকার কোনোটার সাথেই না মিললে subject="অজানা", sub_topic="অজানা" দাও — নতুন category বানিয়ে দিও না।
+2. একটা ইনপুট প্রশ্নে যদি আসলে একাধিক sub-question থাকে (ক)/খ)/গ) দিয়ে ভাগ করা), সেটাকে আলাদা আলাদা atomic প্রশ্নে ভেঙে আউটপুটে একাধিক entry হিসেবে দাও।
+3. ইনপুটে option1-4 আগে থেকেই থাকলে (MCQ টাইপ) সেগুলো হুবহু রাখো, শুধু correct অপশনটা ঠিক আছে কিনা যাচাই করো।
+4. ইনপুটে option না থাকলে (Written টাইপ — শুধু question+correct answer আছে), সেই বিষয়ের সাথে সম্পর্কিত কিন্তু ভুল, প্লজিবল আরও ৩টা option বানাও — মূল সঠিক উত্তরটাই correct থাকবে।
+5. explanation ফিল্ডে ১-২ লাইনে সংক্ষিপ্ত ব্যাখ্যা দাও।
+6. শুধু নিচের JSON array ফরম্যাটে উত্তর দাও, কোনো markdown code fence, কোনো preamble ছাড়া, শুধু raw JSON:
+[{"question":"...","opt1":"...","opt2":"...","opt3":"...","opt4":"...","correct":"...","subject":"...","sub_topic":"...","explanation":"..."}]
+
+ইনপুট প্রশ্নসমূহ (JSON):
+${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3:b.opt3,opt4:b.opt4,correct:b.correct,explanation:b.explanation})),null,2)}`;
+  };
+
+  const runConvert=async()=>{
+    if(!dedupedPool.length){ push("warn","কোনো প্রশ্ন নেই","আগে ফিল্টার বেছে নাও"); return; }
+    setBusy(true);
+    setResults([]);
+    setProgress({done:0,total:dedupedPool.length});
+    const out=[];
+    for(let i=0;i<dedupedPool.length;i+=batchSize){
+      const batch=dedupedPool.slice(i,i+batchSize);
+      try{
+        const raw=await callAiProviderRotatingRaw(buildPrompt(batch));
+        const cleaned=raw.replace(/```json|```/g,"").trim();
+        const parsed=JSON.parse(cleaned);
+        if(Array.isArray(parsed)){
+          parsed.forEach(p=>{
+            const src=batch.find(b=>normalizeQbankQ(b.question)===normalizeQbankQ(p.question));
+            out.push({...p,
+              prevExam:(src?.examPapers||[]).join(", "),
+              approved:true,
+              _key:Math.random().toString(36).slice(2),
+            });
+          });
+        }
+      }catch(e){
+        push("error","❌ ব্যাচ #"+(Math.floor(i/batchSize)+1)+" ব্যর্থ",e.message);
+      }
+      setProgress({done:Math.min(i+batchSize,dedupedPool.length),total:dedupedPool.length});
+      setResults([...out]);
+    }
+    setBusy(false);
+    push("success","✅ কনভার্সন শেষ","মোট "+out.length+"টা প্রশ্ন — এবার নিচে রিভিউ করে সেভ করো");
+  };
+
+  const updateResult=(key,field,val)=>{ setResults(rs=>rs.map(r=>r._key===key?{...r,[field]:val}:r)); };
+  const toggleApprove=(key)=>{ setResults(rs=>rs.map(r=>r._key===key?{...r,approved:!r.approved}:r)); };
+  const approvedCount=results.filter(r=>r.approved).length;
+
+  const saveApproved=async()=>{
+    const approved=results.filter(r=>r.approved);
+    if(!approved.length){ push("warn","কিছুই approve করা নেই",""); return; }
+    if(saveLoc!=="sheet"){
+      push("warn","⚠️ Firebase অপশন এখন বন্ধ","কোটা রিসেট না হওয়া পর্যন্ত শুধু Google Sheet-এ সেভ করা যাবে");
+      return;
+    }
+    if(!GAS){ push("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return; }
+    if(!gasSecret){ push("error","❌ GAS Secret Key দাও","নিচে ফিল্ডে বসাও"); return; }
+    setSaving(true);
+    try{
+      const CHUNK=100;
+      let savedTotal=0, skippedTotal=0;
+      for(let i=0;i<approved.length;i+=CHUNK){
+        const chunk=approved.slice(i,i+CHUNK);
+        const resp=await fetch(GAS,{
+          method:"POST",
+          headers:{"Content-Type":"text/plain"}, // GAS doPost-এ CORS-preflight এড়াতে text/plain (GAS নিজে JSON.parse করে)
+          body:JSON.stringify({
+            secret: gasSecret,
+            type:"qbank_to_quiz_bulk",
+            targetSheet:"Quiz",
+            rows: chunk.map(r=>({
+              question:r.question, opt1:r.opt1, opt2:r.opt2, opt3:r.opt3, opt4:r.opt4,
+              correct:r.correct, subject:r.subject, sub_topic:r.sub_topic,
+              explanation:r.explanation, technique:"", prevExam:r.prevExam||"",
+              qType:"MCQ", audienceTags: selAud.filter(a=>a!==JOB_NONE_TAG).join(",")||"Job",
+            })),
+          }),
+        });
+        const data=await resp.json().catch(()=>({}));
+        savedTotal += (data.added||0);
+        skippedTotal += (data.skipped||0);
+      }
+      push("success","✅ Google Sheet-এ জমা হয়েছে",savedTotal+"টা নতুন প্রশ্ন যোগ হয়েছে"+(skippedTotal?`, ${skippedTotal}টা duplicate হিসেবে বাদ পড়েছে`:""));
+      setResults(rs=>rs.filter(r=>!r.approved));
+    }catch(e){
+      push("error","❌ সেভ ব্যর্থ",e.message);
+    }
+    setSaving(false);
+  };
+
+  return(
+    <div style={{paddingBottom:24}}>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
+        <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>🎯 QBank ফিল্টার (একাধিক বাছাই করা যায়)</div>
+
+        <div className="fld"><label>Audience Tag</label>
+          <JobCheckList options={audienceOptions} selected={selAud} onToggle={v=>toggle(selAud,setSelAud,v)} emptyText={qbankLoading?"লোড হচ্ছে...":"কোনো ট্যাগ নেই"}/>
+        </div>
+        <div className="fld"><label>Subject (QBank পোস্ট)</label>
+          <JobCheckList options={subjectOptions} selected={selSubj} onToggle={v=>toggle(selSubj,setSelSubj,v)} emptyText="এই ফিল্টারে কিছু নেই"/>
+        </div>
+        <div className="fld"><label>Exam Paper (sub_topic)</label>
+          <JobCheckList options={examOptions} selected={selExam} onToggle={v=>toggle(selExam,setSelExam,v)} emptyText="এই ফিল্টারে কিছু নেই"/>
+        </div>
+
+        <div style={{display:"flex",gap:8,marginTop:8}}>
+          <div style={{flex:1,background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}}>
+            <div style={{fontSize:11,color:C.muted}}>ফিল্টারে মোট প্রশ্ন</div>
+            <div style={{fontSize:20,fontWeight:800,color:C.text}}>{scopedRows.length}</div>
+          </div>
+          <div style={{flex:1,background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}}>
+            <div style={{fontSize:11,color:C.muted}}>ডুপ্লিকেট বাদে ইউনিক</div>
+            <div style={{fontSize:20,fontWeight:800,color:C.green}}>{dedupedPool.length}</div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer"}} onClick={()=>setShowTaxEdit(s=>!s)}>
+          <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700}}>📚 Canonical Taxonomy {showTaxEdit?"▲":"▼"}</div>
+        </div>
+        {showTaxEdit && (
+          <div style={{marginTop:10}}>
+            <textarea className="inp" style={{minHeight:220,fontFamily:"monospace",fontSize:12}} value={taxonomyText} onChange={e=>setTaxonomyText(e.target.value)}/>
+            <button className="btn" style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:10,fontSize:13,marginTop:8}} onClick={saveTaxonomy}>💾 Taxonomy সেভ করো</button>
+            <div style={{fontSize:11,color:C.muted,marginTop:8,lineHeight:1.6}}>AI এই তালিকা থেকেই subject/sub_topic বেছে নেবে — নতুন নাম নিজে বানাবে না। JSON ফরম্যাট: {"{"}"subject": ["subtopic1","subtopic2"...]{"}"}</div>
+          </div>
+        )}
+      </div>
+
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
+        <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>🤖 AI দিয়ে কনভার্ট করো</div>
+        <div className="fld"><label>ব্যাচ সাইজ (একবারে কতগুলো প্রশ্ন AI-কে পাঠানো হবে)</label>
+          <input className="inp" type="number" min={5} max={40} value={batchSize} onChange={e=>setBatchSize(Math.max(5,Math.min(40,+e.target.value||15)))}/>
+        </div>
+        <button className="btn" disabled={busy||!dedupedPool.length} style={{width:"100%",justifyContent:"center",background:C.green,color:"#04180a",padding:13,fontSize:14,fontWeight:700}} onClick={runConvert}>
+          {busy?`⏳ কনভার্ট হচ্ছে... (${progress.done}/${progress.total})`:`🚀 ${dedupedPool.length}টা প্রশ্ন কনভার্ট করো`}
+        </button>
+        {busy && (
+          <div style={{marginTop:10,height:6,background:C.panel,borderRadius:6,overflow:"hidden"}}>
+            <div style={{height:"100%",background:C.green,width:`${progress.total?Math.round(progress.done/progress.total*100):0}%`,transition:"width .3s"}}/>
+          </div>
+        )}
+      </div>
+
+      {results.length>0 && (
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
+          <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>
+            ✅ রিভিউ করো ({approvedCount}/{results.length} approved)
+          </div>
+          {results.map(r=>(
+            <div key={r._key} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:10,opacity:r.approved?1:.5}}>
+              <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                <input type="checkbox" checked={r.approved} onChange={()=>toggleApprove(r._key)} style={{accentColor:C.green,width:16,height:16}}/>
+                <span style={{fontSize:12,color:C.muted}}>Approve করে সেভ করো</span>
+              </label>
+              <textarea className="inp" style={{marginBottom:6,fontSize:13}} value={r.question} onChange={e=>updateResult(r._key,"question",e.target.value)}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+                <input className="inp" placeholder="Option 1" value={r.opt1||""} onChange={e=>updateResult(r._key,"opt1",e.target.value)}/>
+                <input className="inp" placeholder="Option 2" value={r.opt2||""} onChange={e=>updateResult(r._key,"opt2",e.target.value)}/>
+                <input className="inp" placeholder="Option 3" value={r.opt3||""} onChange={e=>updateResult(r._key,"opt3",e.target.value)}/>
+                <input className="inp" placeholder="Option 4" value={r.opt4||""} onChange={e=>updateResult(r._key,"opt4",e.target.value)}/>
+              </div>
+              <input className="inp" style={{marginBottom:6,borderColor:C.green}} placeholder="সঠিক উত্তর" value={r.correct||""} onChange={e=>updateResult(r._key,"correct",e.target.value)}/>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+                <input className="inp" placeholder="Subject" value={r.subject||""} onChange={e=>updateResult(r._key,"subject",e.target.value)}/>
+                <input className="inp" placeholder="Sub-topic" value={r.sub_topic||""} onChange={e=>updateResult(r._key,"sub_topic",e.target.value)}/>
+              </div>
+              <textarea className="inp" placeholder="Explanation" style={{fontSize:12}} value={r.explanation||""} onChange={e=>updateResult(r._key,"explanation",e.target.value)}/>
+              {r.prevExam && <div style={{fontSize:10,color:C.muted,marginTop:6}}>📄 উৎস exam paper: {r.prevExam}</div>}
+            </div>
+          ))}
+
+          <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginTop:4}}>
+            <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:8}}>💾 Save to</div>
+            <div style={{display:"flex",gap:8,marginBottom:8}}>
+              <button className="btn" style={{flex:1,justifyContent:"center",background:saveLoc==="sheet"?C.green:"transparent",color:saveLoc==="sheet"?"#04180a":C.text,border:`1px solid ${C.border}`}} onClick={()=>setSaveLoc("sheet")}>📄 Google Sheet</button>
+              <button className="btn" disabled style={{flex:1,justifyContent:"center",background:"transparent",color:C.muted,border:`1px solid ${C.border}`,opacity:.5}} title="কোটা রিসেট না হওয়া পর্যন্ত বন্ধ">🔥 Firebase (বন্ধ)</button>
+            </div>
+            <div className="fld"><label>GAS Secret Key</label>
+              <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>saveGasSecret(e.target.value)}/>
+            </div>
+            <button className="btn" disabled={saving||!approvedCount} style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:12,fontSize:14,fontWeight:700,marginTop:4}} onClick={saveApproved}>
+              {saving?"⏳ সেভ হচ্ছে...":`💾 ${approvedCount}টা প্রশ্ন Sheet-এ সেভ করো`}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div style={{fontSize:11,color:C.muted,lineHeight:1.6}}>
+        এই ফিচার এখন সরাসরি Firebase-এ কিছু লেখে না — সবকিছু Google Sheet-এর Quiz ট্যাবে জমা হয়। Firebase quota রিসেট হওয়ার পর, Sheet-এ জমে থাকা নতুন রোগুলো হাতে করে (বা GAS ফাংশন দিয়ে) Firebase-এ push করতে হবে।
+      </div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════════════════
    AI QUESTION GENERATOR — Subject/Sub-topic দিয়ে AI নতুন প্রশ্ন বানিয়ে
    সরাসরি Firebase-এ push করে (generate-questions.yml ট্রিগার করে)।
    ══════════════════════════════════════════════════════════════════ */
@@ -5757,6 +6094,7 @@ const NAV=[
     children:[
       {id:"bulkupload",  icon:"📝", label:"Bulk Upload"},
       {id:"joblauncher", icon:"🚀", label:"AI Job"},
+      {id:"qbankconv",   icon:"🔁", label:"QBank→Quiz"},
       {id:"questiongen", icon:"🧬", label:"AI প্রশ্ন"},
       {id:"aiimport",    icon:"📸", label:"AI Import"},
     ]
@@ -5966,6 +6304,27 @@ async function callAiProviderRotating(ocrText,qtype="MCQ"){
 // ব্যাকওয়ার্ড-কম্প্যাটিবিলিটি — পুরনো কলার (doTest ইত্যাদি) এখনো callAiProvider() ব্যবহার করে
 async function callAiProvider(ocrText,qtype="MCQ"){
   return callAiProviderRotating(ocrText,qtype);
+}
+
+// ── raw prompt caller — buildOcrPrompt/OCR_PROMPT_FORMATS ব্যবহার করে না,
+//    সরাসরি custom prompt দিয়ে কল করে, একই key-rotation pool/লজিক reuse করে।
+//    QBank→Quiz Converter (QBankConverterTab) এখান থেকে কল করে।
+async function callAiProviderRotatingRaw(prompt){
+  const pool=buildKeyPool();
+  if(!pool.length) throw new Error("কোনো AI provider active নেই — API Settings-এ গিয়ে অন্তত একটা key active করো।");
+  const errors=[];
+  for(let i=0;i<pool.length;i++){
+    const p=pool[(_ocrPoolCursor+i)%pool.length];
+    try{
+      const text=await callProviderOnce(p,prompt);
+      _ocrPoolCursor=(_ocrPoolCursor+i+1)%pool.length;
+      return text;
+    }catch(e){
+      if(e.message.includes("Console")||e.message.includes("Restrictions")) throw e;
+      errors.push(`${p.name}: ${e.message}`);
+    }
+  }
+  throw new Error("সব provider ব্যর্থ — "+errors.slice(0,3).join(" | "));
 }
 
 function ApiSettingsPage({push,inline=false}){
@@ -6490,18 +6849,20 @@ export default function App(){
       </div>
 
       {/* Uploader hub — Bulk Upload / AI Job / AI প্রশ্ন / AI Import, একটার আন্ডারে, ট্যাব দিয়ে সুইচ */}
-      <div style={{display:(page==="bulkupload"||page==="joblauncher"||page==="questiongen"||page==="aiimport")?"block":"none"}}>
+      <div style={{display:(page==="bulkupload"||page==="joblauncher"||page==="qbankconv"||page==="questiongen"||page==="aiimport")?"block":"none"}}>
         <div className="page" style={{paddingTop:0}}>
           <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
             <div className="atabs">
               <button className={`atab${page==="bulkupload"?" on":""}`} onClick={()=>goPage("bulkupload")}>📝 Bulk Upload</button>
               <button className={`atab${page==="joblauncher"?" on":""}`} onClick={()=>goPage("joblauncher")} style={{color:page==="joblauncher"?C.green:undefined}}>🚀 AI Job</button>
+              <button className={`atab${page==="qbankconv"?" on":""}`} onClick={()=>goPage("qbankconv")} style={{color:page==="qbankconv"?C.green:undefined}}>🔁 QBank→Quiz</button>
               <button className={`atab${page==="questiongen"?" on":""}`} onClick={()=>goPage("questiongen")} style={{color:page==="questiongen"?C.purple:undefined}}>🧬 AI প্রশ্ন</button>
               <button className={`atab${page==="aiimport"?" on":""}`} onClick={()=>goPage("aiimport")}>📸 AI Import</button>
             </div>
           </div>
           <div style={{display:page==="bulkupload" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill(null)}/></div>
           <div style={{display:page==="joblauncher"?"block":"none"}}><JobLauncherTab push={push} tick={tick}/></div>
+          <div style={{display:page==="qbankconv"?"block":"none"}}><QBankConverterTab push={push} tick={tick}/></div>
           <div style={{display:page==="questiongen"?"block":"none"}}><QuestionGenTab push={push} tick={tick}/></div>
           <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
         </div>
