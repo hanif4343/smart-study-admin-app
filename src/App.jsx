@@ -2678,12 +2678,15 @@ function removeFailedItems(keys){
   saveFailedQueueList(loadFailedQueue().filter(f=>!keys.includes(f._key)));
 }
 
-/* ── Google Sheet-এ bulk rows সেভ (GAS backend "bulk_save_rows" endpoint) ── */
-async function saveRowsToSheet({rows,targetTab,gasSecret,push}){
+/* ── Google Sheet-এ bulk rows সেভ (GAS backend "bulk_save_rows" endpoint) ──
+   onProgress (ঐচ্ছিক) — প্রতিটা chunk শেষ হলে {done,total,chunkIndex,totalChunks} দিয়ে কল হয়,
+   caller চাইলে progress bar/timer দেখাতে পারে। না দিলে আগের মতোই কাজ করবে। */
+async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress}){
   if(!rows.length)return{added:0,skipped:0,failedRows:[]};
   if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{added:0,skipped:0,failedRows:rows}; }
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও"); return{added:0,skipped:0,failedRows:rows}; }
   const CHUNK=100;
+  const totalChunks=Math.ceil(rows.length/CHUNK);
   let added=0,skipped=0; const failedRows=[];
   for(let i=0;i<rows.length;i+=CHUNK){
     const chunk=rows.slice(i,i+CHUNK);
@@ -2693,12 +2696,14 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push}){
       if(data.result==="error"){ failedRows.push(...chunk); continue; }
       added+=(data.added||0); skipped+=(data.skipped||0);
     }catch(e){ failedRows.push(...chunk); }
+    onProgress?.({done:Math.min(i+CHUNK,rows.length),total:rows.length,chunkIndex:Math.floor(i/CHUNK)+1,totalChunks});
   }
   return{added,skipped,failedRows};
 }
 
-/* ── Firebase-এ bulk rows সেভ — প্রতিটা row আলাদা push, ব্যর্থগুলো ফেরত দেয় (retry-এর জন্য) ── */
-async function saveRowsToFirebaseBulk({rows,targetTab,concurrency=8}){
+/* ── Firebase-এ bulk rows সেভ — প্রতিটা row আলাদা push, ব্যর্থগুলো ফেরত দেয় (retry-এর জন্য) ──
+   onProgress (ঐচ্ছিক) — প্রতিটা concurrency-ব্যাচ শেষ হলে {done,total} দিয়ে কল হয়। */
+async function saveRowsToFirebaseBulk({rows,targetTab,concurrency=8,onProgress}){
   let added=0; const failedRows=[];
   for(let i=0;i<rows.length;i+=concurrency){
     const chunk=rows.slice(i,i+concurrency);
@@ -2709,6 +2714,7 @@ async function saveRowsToFirebaseBulk({rows,targetTab,concurrency=8}){
         added++;
       }catch(e){ failedRows.push(row); }
     }));
+    onProgress?.({done:Math.min(i+concurrency,rows.length),total:rows.length});
   }
   if(added>0) invalidate(targetTab);
   return{added,failedRows};
@@ -4379,6 +4385,17 @@ function QBankConverterTab({push,tick}){
     try{ return !!JSON.parse(localStorage.getItem(LS_QBC_RESULTS_DRAFT)||"[]").length; }catch{ return false; }
   });
   const[saving,setSaving]=useState(false);
+  const[saveProgress,setSaveProgress]=useState({done:0,total:0});
+  const[saveElapsedSec,setSaveElapsedSec]=useState(0);
+
+  // saving চলাকালীন প্রতি সেকেন্ডে টাইমার আপডেট হয় — চোখে দেখা যায় কতক্ষণ ধরে সেভ হচ্ছে
+  useEffect(()=>{
+    if(!saving) return;
+    setSaveElapsedSec(0);
+    const startTs=Date.now();
+    const iv=setInterval(()=>setSaveElapsedSec(Math.floor((Date.now()-startTs)/1000)),1000);
+    return ()=>clearInterval(iv);
+  },[saving]);
 
   // প্রতিবার results বদলালেই (প্রতি ব্যাচের পর, approve/edit করলে, সেভের পর) draft হিসেবে সেভ হয়ে যায় —
   // app বন্ধ হয়ে গেলে, ক্র্যাশ করলে, বা বেশি সময় লাগলেও কাজ হারায় না।
@@ -4461,6 +4478,8 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
     const approved=results.filter(r=>r.approved);
     if(!approved.length){ push("warn","কিছুই approve করা নেই",""); return; }
     setSaving(true);
+    setSaveProgress({done:0,total:approved.length});
+    const saveStartedAt=Date.now();
     const audienceTags=selAud.filter(a=>a!==JOB_NONE_TAG).join(",")||"Job";
     const rows=approved.map(r=>({
       question:r.question, opt1:r.opt1, opt2:r.opt2, opt3:r.opt3, opt4:r.opt4,
@@ -4471,7 +4490,7 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
     try{
       let result;
       if(saveLoc==="sheet"){
-        result=await saveRowsToSheet({rows,targetTab:"Quiz",gasSecret,push});
+        result=await saveRowsToSheet({rows,targetTab:"Quiz",gasSecret,push,onProgress:setSaveProgress});
       }else{
         const ts=nowTs();
         const fbRows=rows.map(r=>({
@@ -4479,17 +4498,19 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
           correct:r.correct, subject:r.subject, sub_topic:r.sub_topic, explanation:r.explanation,
           "Question Type":r.qType, AudienceTags:r.audienceTags, Timestamp:ts, technique:"", Previous_Exam:r.prevExam||"",
         }));
-        const fbResult=await saveRowsToFirebaseBulk({rows:fbRows,targetTab:"Quiz"});
+        const fbResult=await saveRowsToFirebaseBulk({rows:fbRows,targetTab:"Quiz",onProgress:setSaveProgress});
         // failedRows থেকে ফেরত আসা fbRows-কে rows-এর সাথে মিলিয়ে দাও (index অনুযায়ী — একই ক্রমে পাঠানো হয়েছিল)
         const failedIdx=new Set(fbResult.failedRows.map(fr=>fbRows.indexOf(fr)));
         result={added:fbResult.added,skipped:0,failedRows:rows.filter((_,i)=>failedIdx.has(i))};
       }
       const failedCount=result.failedRows.length;
       if(failedCount) pushFailedItems("QBank→Quiz",saveLoc,"Quiz",result.failedRows);
+      const tookSec=Math.max(1,Math.round((Date.now()-saveStartedAt)/1000));
       push("success","✅ সেভ সম্পন্ন",
         `${result.added||0}টা নতুন প্রশ্ন যোগ হয়েছে`+
         (result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:"")+
-        (failedCount?`, ${failedCount}টা ব্যর্থ (নিচে ক্যাশ থেকে আবার পাঠানো যাবে)`:"")
+        (failedCount?`, ${failedCount}টা ব্যর্থ (নিচে ক্যাশ থেকে আবার পাঠানো যাবে)`:"")+
+        ` • ${tookSec} সেকেন্ড লাগলো`
       );
       if(failedCount){
         const failedQs=new Set(result.failedRows.map(r=>r.question));
@@ -4592,8 +4613,19 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
           <div style={{marginTop:4}}>
             <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={saveGasSecret}/>
             <button className="btn" disabled={saving||!approvedCount} style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:12,fontSize:14,fontWeight:700}} onClick={saveApproved}>
-              {saving?"⏳ সেভ হচ্ছে...":`💾 ${approvedCount}টা প্রশ্ন ${saveLoc==="sheet"?"Sheet":"Firebase"}-এ সেভ করো`}
+              {saving?`⏳ সেভ হচ্ছে... (${saveProgress.done}/${saveProgress.total}) • ${saveElapsedSec}s`:`💾 ${approvedCount}টা প্রশ্ন ${saveLoc==="sheet"?"Sheet":"Firebase"}-এ সেভ করো`}
             </button>
+            {saving && (
+              <div style={{marginTop:8}}>
+                <div style={{height:6,background:C.panel,borderRadius:6,overflow:"hidden"}}>
+                  <div style={{height:"100%",background:C.accent,width:`${saveProgress.total?Math.round(saveProgress.done/saveProgress.total*100):0}%`,transition:"width .3s"}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",marginTop:4,fontSize:11,color:C.muted}}>
+                  <span>{saveProgress.total?Math.round(saveProgress.done/saveProgress.total*100):0}% সম্পন্ন</span>
+                  <span>⏱️ {saveElapsedSec} সেকেন্ড</span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
