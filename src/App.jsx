@@ -2681,11 +2681,11 @@ function removeFailedItems(keys){
 /* ── Google Sheet-এ bulk rows সেভ (GAS backend "bulk_save_rows" endpoint) ──
    onProgress (ঐচ্ছিক) — প্রতিটা chunk শেষ হলে {done,total,chunkIndex,totalChunks} দিয়ে কল হয়,
    caller চাইলে progress bar/timer দেখাতে পারে। না দিলে আগের মতোই কাজ করবে। */
-async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress}){
+async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSize}){
   if(!rows.length)return{added:0,skipped:0,failedRows:[]};
   if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{added:0,skipped:0,failedRows:rows}; }
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও"); return{added:0,skipped:0,failedRows:rows}; }
-  const CHUNK=100;
+  const CHUNK=Math.max(1,chunkSize||100); // চাইলে ছোট চাংক (৫-১০, এমনকি ১) দিয়ে বেশি live প্রোগ্রেস আপডেট পাওয়া যায় — trade-off: ছোট চাংক = বেশি রিকোয়েস্ট = মোট সময় একটু বেশি
   const totalChunks=Math.ceil(rows.length/CHUNK);
   let added=0,skipped=0; const failedRows=[];
   for(let i=0;i<rows.length;i+=CHUNK){
@@ -4276,11 +4276,61 @@ function normalizeQbankQ(s){
   return (s||"").toString().replace(/[\s.,;:।?!—–\-()'"]/g,"").trim();
 }
 
+/* ── ↑↓ জাম্প বাটন — স্ক্রিনের মাঝে-নিচে ফিক্সড, স্ক্রল করলেও স্থির থাকে।
+   একটাই বাটন দেখায় (একই জায়গায়): উপরে বা মাঝে থাকলে ↓ (একদম নিচে যাও),
+   একদম নিচে পৌঁছালে ↑ (একদম উপরে যাও) — স্ক্রল পজিশন অনুযায়ী আইকন বদলায়। ── */
+function JumpButton(){
+  const[dir,setDir]=useState("down");
+  useEffect(()=>{
+    const onScroll=()=>{
+      const doc=document.documentElement;
+      const atBottom = window.innerHeight + window.scrollY >= doc.scrollHeight - 24;
+      setDir(atBottom ? "up" : "down");
+    };
+    onScroll();
+    window.addEventListener("scroll",onScroll,{passive:true});
+    window.addEventListener("resize",onScroll);
+    return()=>{ window.removeEventListener("scroll",onScroll); window.removeEventListener("resize",onScroll); };
+  },[]);
+  const jump=()=>{
+    if(dir==="up") window.scrollTo({top:0,behavior:"smooth"});
+    else window.scrollTo({top:document.documentElement.scrollHeight,behavior:"smooth"});
+  };
+  return(
+    <button onClick={jump} aria-label={dir==="up"?"একদম উপরে যাও":"একদম নিচে যাও"}
+      style={{
+        position:"fixed", bottom:"calc(72px + env(safe-area-inset-bottom,0px))",
+        left:"50%", transform:"translateX(-50%)",
+        width:42, height:42, borderRadius:"50%",
+        background:C.accent, color:"#fff", border:"none",
+        fontSize:18, fontWeight:700, display:"flex", alignItems:"center", justifyContent:"center",
+        boxShadow:"0 6px 18px #00000070", zIndex:120, cursor:"pointer",
+      }}>
+      {dir==="up"?"↑":"↓"}
+    </button>
+  );
+}
+
 function QBankConverterTab({push,tick}){
   // ⚡ Firebase quota বন্ধ থাকলেও কাজ চালু থাকে — useFB()-এর ভেতরের loadPath() এখন
   // Firebase read ব্যর্থ হলে নিজে থেকেই Google Sheet fallback (GAS "getSheetRows")
   // ব্যবহার করে। Firebase চালু থাকলে স্বাভাবিকভাবেই Firebase থেকেই পড়বে।
   const{data:qbank,loading:qbankLoading}=useFB("QBank",tick);
+
+  // ⚡ Quiz sheet-এ ইতিমধ্যে যেসব প্রশ্ন যোগ হয়ে গেছে সেগুলো ফেচ করা — যাতে dedup ধাপে
+  // বাদ দেওয়া যায় (device/session independent — Quiz sheet-ই সত্যিকারের সোর্স, লোকাল ক্যাশ না)।
+  // QBank ফেচের মতোই useFB ব্যবহার করা হয়েছে, যেটা Firebase read ব্যর্থ হলে GAS-এর
+  // getSheetRows অ্যাকশন (tab=Quiz) দিয়ে fallback করে। tick বদলালে (🔄 রিফ্রেশ) বা সেভের
+  // পরে invalidate("Quiz") কল হলে এটা নিজে থেকেই রিফ্রেশ হয়।
+  const{data:quizExisting,loading:quizLoading}=useFB("Quiz",tick);
+  const existingQuizKeys=useMemo(()=>{
+    const set=new Set();
+    toArr(quizExisting).forEach(row=>{
+      const key=normalizeQbankQ(row.question||row.Question||"");
+      if(key) set.add(key);
+    });
+    return set;
+  },[quizExisting]);
 
   const allRows=useMemo(()=>toArr(qbank).map(row=>{
     const audRaw=(row.AudienceTags||row.audienceTags||"").toString().trim();
@@ -4339,11 +4389,16 @@ function QBankConverterTab({push,tick}){
   const toggle=(arr,setArr,val)=>{ setArr(arr.includes(val)? arr.filter(x=>x!==val) : [...arr,val]); };
 
   // ── ডিডুপ্লিকেশন — কোনো AI কল ছাড়াই, শুধু টেক্সট মিলিয়ে ──
-  const dedupedPool=useMemo(()=>{
+  // ধাপ ১: QBank-এর ভেতরেই ডুপ্লিকেট (একই প্রশ্ন একাধিক exam paper-এ) মার্জ করা।
+  // ধাপ ২: যেগুলো Quiz sheet-এ ইতিমধ্যে যোগ হয়ে গেছে (existingQuizKeys) সেগুলো পুরোপুরি বাদ —
+  //         "ফিল্টারে ইউনিক" সংখ্যাতেও ওগুলো গণনা হয় না, তাই আবার AI-কে পাঠানো হয় না।
+  const{dedupedPool:dedupedPoolBase,alreadyInQuizCount}=useMemo(()=>{
     const seen=new Map();
+    const alreadySeen=new Set();
     scopedRows.forEach(r=>{
       const key=normalizeQbankQ(r.question);
       if(!key)return;
+      if(existingQuizKeys.has(key)){ alreadySeen.add(key); return; }
       if(seen.has(key)){
         const ex=seen.get(key);
         if(r.examPaper && !ex.examPapers.includes(r.examPaper)) ex.examPapers.push(r.examPaper);
@@ -4352,8 +4407,8 @@ function QBankConverterTab({push,tick}){
         seen.set(key,{...r,examPapers:r.examPaper?[r.examPaper]:[],dupCount:1});
       }
     });
-    return Array.from(seen.values());
-  },[scopedRows]);
+    return {dedupedPool:Array.from(seen.values()), alreadyInQuizCount:alreadySeen.size};
+  },[scopedRows,existingQuizKeys]);
 
   // ── Taxonomy এডিটর ──
   const[taxonomyText,setTaxonomyText]=useState(()=>{
@@ -4373,6 +4428,9 @@ function QBankConverterTab({push,tick}){
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
 
   const[batchSize,setBatchSize]=useState(15);
+  // ⚡ সেভের সময় কয়টা করে একসাথে পাঠানো হবে — ছোট মান (৫-১০, চাইলে ১ পর্যন্ত) দিলে
+  // প্রোগ্রেস বার প্রতি ব্যাচে আপডেট হয়ে "লাইভ" মনে হয়, কিন্তু বেশি রিকোয়েস্ট লাগায় মোট সময় একটু বাড়ে।
+  const[saveChunkSize,setSaveChunkSize]=useState(5);
   const[busy,setBusy]=useState(false);
   const[progress,setProgress]=useState({done:0,total:0});
   const[results,setResults]=useState(()=>{
@@ -4411,6 +4469,21 @@ function QBankConverterTab({push,tick}){
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
+  // ⚡ যেসব QBank প্রশ্ন ইতিমধ্যে এই সেশনে কনভার্ট করে results-এ যোগ হয়ে গেছে (Completed বা এখনো
+  // পেন্ডিং রিভিউ — দুটোই) সেগুলো বাদ দেওয়া হয়, যাতে runConvert আবার চাপলে ডুপ্লিকেট এন্ট্রি তৈরি না হয়।
+  // (আগে runConvert প্রতিবার পুরো results খালি করে দিতো বলে এই সমস্যাটা চোখে পড়েনি — এখন results
+  // ধরে রাখা হয় বলেই এই এক্সট্রা এক্সক্লুশনটা দরকার।)
+  const queuedSourceKeys=useMemo(()=>new Set(results.map(r=>r._srcKey).filter(Boolean)),[results]);
+  const{dedupedPool,alreadyQueuedCount}=useMemo(()=>{
+    const already=new Set();
+    const pool=dedupedPoolBase.filter(r=>{
+      const key=normalizeQbankQ(r.question);
+      if(queuedSourceKeys.has(key)){ already.add(key); return false; }
+      return true;
+    });
+    return {dedupedPool:pool, alreadyQueuedCount:already.size};
+  },[dedupedPoolBase,queuedSourceKeys]);
+
   const clearDraft=()=>{
     setResults([]);
     try{ localStorage.removeItem(LS_QBC_RESULTS_DRAFT); }catch{}
@@ -4439,11 +4512,16 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
   };
 
   const runConvert=async()=>{
-    if(!dedupedPool.length){ push("warn","কোনো প্রশ্ন নেই","আগে ফিল্টার বেছে নাও"); return; }
+    if(!dedupedPool.length){
+      push("warn","কোনো প্রশ্ন নেই",
+        scopedRows.length&&(alreadyInQuizCount||alreadyQueuedCount)? "এই ফিল্টারের সবগুলো প্রশ্নই হয় Quiz-এ আছে, নয়তো ইতিমধ্যে কনভার্ট করা হয়েছে" : "আগে ফিল্টার বেছে নাও");
+      return;
+    }
     setBusy(true);
-    setResults([]);
+    // ⚡ আগের results খালি করা হয় না — এতে আগের "✅ Completed" বাজ (সেভ হয়ে যাওয়া প্রশ্ন) এবং
+    // এখনো রিভিউ-বাকি আইটেমগুলো অক্ষত থাকে। নতুন কনভার্ট করা প্রশ্নগুলো লিস্টের শেষে যোগ হয়।
     setProgress({done:0,total:dedupedPool.length});
-    const out=[];
+    let totalNew=0;
     for(let i=0;i<dedupedPool.length;i+=batchSize){
       const batch=dedupedPool.slice(i,i+batchSize);
       try{
@@ -4451,28 +4529,33 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
         const cleaned=raw.replace(/```json|```/g,"").trim();
         const parsed=JSON.parse(cleaned);
         if(Array.isArray(parsed)){
-          parsed.forEach(p=>{
+          const newItems=parsed.map(p=>{
             const src=batch.find(b=>normalizeQbankQ(b.question)===normalizeQbankQ(p.question));
-            out.push({...p,
+            return {...p,
               prevExam:(src?.examPapers||[]).join(", "),
               approved:true,
+              completed:false,
+              _srcKey: src?normalizeQbankQ(src.question):null, // ⚡ কোন QBank সোর্স প্রশ্ন থেকে এসেছে — পরের কনভার্টে ডুপ্লিকেট এড়াতে ব্যবহার হয়
               _key:Math.random().toString(36).slice(2),
-            });
+            };
           });
+          totalNew+=newItems.length;
+          setResults(rs=>[...rs,...newItems]);
         }
       }catch(e){
         push("error","❌ ব্যাচ #"+(Math.floor(i/batchSize)+1)+" ব্যর্থ",e.message);
       }
       setProgress({done:Math.min(i+batchSize,dedupedPool.length),total:dedupedPool.length});
-      setResults([...out]);
     }
     setBusy(false);
-    push("success","✅ কনভার্সন শেষ","মোট "+out.length+"টা প্রশ্ন — এবার নিচে রিভিউ করে সেভ করো");
+    push("success","✅ কনভার্সন শেষ","মোট "+totalNew+"টা প্রশ্ন — এবার নিচে রিভিউ করে সেভ করো");
   };
 
   const updateResult=(key,field,val)=>{ setResults(rs=>rs.map(r=>r._key===key?{...r,[field]:val}:r)); };
   const toggleApprove=(key)=>{ setResults(rs=>rs.map(r=>r._key===key?{...r,approved:!r.approved}:r)); };
+  const removeResult=(key)=>{ setResults(rs=>rs.filter(r=>r._key!==key)); };
   const approvedCount=results.filter(r=>r.approved).length;
+  const completedCount=results.filter(r=>r.completed).length;
 
   const saveApproved=async()=>{
     const approved=results.filter(r=>r.approved);
@@ -4490,7 +4573,7 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
     try{
       let result;
       if(saveLoc==="sheet"){
-        result=await saveRowsToSheet({rows,targetTab:"Quiz",gasSecret,push,onProgress:setSaveProgress});
+        result=await saveRowsToSheet({rows,targetTab:"Quiz",gasSecret,push,onProgress:setSaveProgress,chunkSize:saveChunkSize});
       }else{
         const ts=nowTs();
         const fbRows=rows.map(r=>({
@@ -4498,11 +4581,15 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
           correct:r.correct, subject:r.subject, sub_topic:r.sub_topic, explanation:r.explanation,
           "Question Type":r.qType, AudienceTags:r.audienceTags, Timestamp:ts, technique:"", Previous_Exam:r.prevExam||"",
         }));
-        const fbResult=await saveRowsToFirebaseBulk({rows:fbRows,targetTab:"Quiz",onProgress:setSaveProgress});
+        const fbResult=await saveRowsToFirebaseBulk({rows:fbRows,targetTab:"Quiz",concurrency:saveChunkSize,onProgress:setSaveProgress});
         // failedRows থেকে ফেরত আসা fbRows-কে rows-এর সাথে মিলিয়ে দাও (index অনুযায়ী — একই ক্রমে পাঠানো হয়েছিল)
         const failedIdx=new Set(fbResult.failedRows.map(fr=>fbRows.indexOf(fr)));
         result={added:fbResult.added,skipped:0,failedRows:rows.filter((_,i)=>failedIdx.has(i))};
       }
+      // ⚡ Quiz sheet-এ নতুন প্রশ্ন যোগ হলো — কাশ করা Quiz ডাটা invalidate করা হলো যাতে
+      // dedup-এর "ইতিমধ্যে Quiz-এ আছে" চেক সাথে সাথেই এই নতুন প্রশ্নগুলো ধরে ফেলে
+      // (saveRowsToFirebaseBulk নিজেই invalidate করে, sheet-save পাথের জন্যও এখানে নিশ্চিত করা হলো)।
+      if(result.added>0) invalidate("Quiz");
       const failedCount=result.failedRows.length;
       if(failedCount) pushFailedItems("QBank→Quiz",saveLoc,"Quiz",result.failedRows);
       const tookSec=Math.max(1,Math.round((Date.now()-saveStartedAt)/1000));
@@ -4512,12 +4599,16 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
         (failedCount?`, ${failedCount}টা ব্যর্থ (নিচে ক্যাশ থেকে আবার পাঠানো যাবে)`:"")+
         ` • ${tookSec} সেকেন্ড লাগলো`
       );
-      if(failedCount){
-        const failedQs=new Set(result.failedRows.map(r=>r.question));
-        setResults(rs=>rs.filter(r=>!r.approved||failedQs.has(r.question)));
-      }else{
-        setResults(rs=>rs.filter(r=>!r.approved));
-      }
+      // ⚡ আগে এখানে সেভ-হওয়া আইটেমগুলো results থেকে পুরোপুরি মুছে ফেলা হতো — তাই "✅ Completed"
+      // badge দেখানোর কোনো সুযোগই ছিল না। এখন সফলভাবে সেভ হওয়া (approved && ব্যর্থ না হওয়া)
+      // আইটেমগুলো completed:true করে লিস্টেই রাখা হয় (approved:false করে, যাতে আবার সেভ-এ না যায়)।
+      // শুধু ব্যর্থ (failed) আইটেমগুলো approved অবস্থায় থেকে যায়, retry-এর জন্য।
+      const failedQs=new Set(result.failedRows.map(r=>r.question));
+      setResults(rs=>rs.map(r=>{
+        if(!r.approved) return r;
+        if(failedQs.has(r.question)) return r;
+        return {...r, completed:true, approved:false};
+      }));
     }catch(e){
       push("error","❌ সেভ ব্যর্থ",e.message);
     }
@@ -4549,6 +4640,18 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
             <div style={{fontSize:20,fontWeight:800,color:C.green}}>{dedupedPool.length}</div>
           </div>
         </div>
+        <div style={{marginTop:8,background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",textAlign:"center"}}>
+          <div style={{fontSize:11,color:C.muted}}>
+            {quizLoading?"⏳ Quiz sheet চেক হচ্ছে...":"🔁 Quiz-এ ইতিমধ্যে আছে (তালিকা থেকে বাদ পড়েছে)"}
+          </div>
+          <div style={{fontSize:18,fontWeight:800,color:C.yellow}}>{quizLoading?"...":alreadyInQuizCount}</div>
+        </div>
+        {alreadyQueuedCount>0 && (
+          <div style={{marginTop:8,background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",textAlign:"center"}}>
+            <div style={{fontSize:11,color:C.muted}}>⏳ এই সেশনে ইতিমধ্যে কনভার্ট করা হয়েছে (নিচে রিভিউ/Completed-এ আছে)</div>
+            <div style={{fontSize:18,fontWeight:800,color:C.yellow}}>{alreadyQueuedCount}</div>
+          </div>
+        )}
       </div>
 
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
@@ -4581,13 +4684,20 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
 
       {results.length>0 && (
         <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
+          <JumpButton/>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
             <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700}}>
-              ✅ রিভিউ করো ({approvedCount}/{results.length} approved)
+              ✅ রিভিউ করো ({approvedCount}/{results.length-completedCount} approved{completedCount?` • ${completedCount}টা সেভ হয়ে গেছে`:""})
             </div>
             <button className="btn" style={{fontSize:11,padding:"4px 10px",background:"transparent",color:C.red,border:`1px solid ${C.border}`}} onClick={clearDraft}>🗑️ ড্রাফট মুছো</button>
           </div>
-          {results.map(r=>(
+          {results.map(r=>r.completed?(
+            <div key={r._key} style={{background:"#22c55e12",border:`1px solid #22c55e40`,borderRadius:10,padding:"9px 12px",marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
+              <span className="pill pa" style={{flexShrink:0}}>✅ Completed</span>
+              <span style={{fontSize:12,color:C.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.question}</span>
+              <button onClick={()=>removeResult(r._key)} title="তালিকা থেকে সরাও" style={{background:"transparent",border:"none",color:C.muted,fontSize:14,cursor:"pointer",flexShrink:0}}>✕</button>
+            </div>
+          ):(
             <div key={r._key} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:10,opacity:r.approved?1:.5}}>
               <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                 <input type="checkbox" checked={r.approved} onChange={()=>toggleApprove(r._key)} style={{accentColor:C.green,width:16,height:16}}/>
@@ -4612,6 +4722,11 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
 
           <div style={{marginTop:4}}>
             <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={saveGasSecret}/>
+            <div className="fld">
+              <label>সেভ চাংক সাইজ (কয়টা করে একসাথে পাঠানো হবে — ছোট মানে প্রোগ্রেস বার বেশি "লাইভ" দেখাবে, কিন্তু একটু ধীর হবে)</label>
+              <input className="inp" type="number" min={1} max={100} value={saveChunkSize} disabled={saving}
+                onChange={e=>setSaveChunkSize(Math.max(1,Math.min(100,+e.target.value||5)))}/>
+            </div>
             <button className="btn" disabled={saving||!approvedCount} style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:12,fontSize:14,fontWeight:700}} onClick={saveApproved}>
               {saving?`⏳ সেভ হচ্ছে... (${saveProgress.done}/${saveProgress.total}) • ${saveElapsedSec}s`:`💾 ${approvedCount}টা প্রশ্ন ${saveLoc==="sheet"?"Sheet":"Firebase"}-এ সেভ করো`}
             </button>
