@@ -7185,9 +7185,34 @@ export default function App(){
   },[]);
 
   const[loggedIn,setLoggedIn]=useState(()=>{
-    // Check if we have saved credentials — will auto-login in LoginScreen
-    return false;
+    // ⚡ ফিক্স: আগে এখানে সবসময় false দিয়ে শুরু হতো — মানে অ্যাপ ব্যাকগ্রাউন্ডে গিয়ে Android
+    //    প্রসেস/WebView রিস্টার্ট করলেই (যা কম RAM ফোনে ১ মিনিট পরেও হতে পারে) React state
+    //    পুরো হারিয়ে যেতো, আর সাথে সাথে লগইন স্ক্রিন ফ্ল্যাশ করতো — ব্যবহারকারীর কাছে মনে হতো
+    //    "লগআউট হয়ে গেছে"। এখন সেভ করা ইমেইল/পাসওয়ার্ড থাকলে optimistic-ভাবে সাথে সাথেই
+    //    লগইন ধরে নেওয়া হয় (নিচের effect ব্যাকগ্রাউন্ডে token refresh/re-login করে; সেটা
+    //    সত্যিই ব্যর্থ হলে তখনই আসল লগআউট হবে) — ফলে আর ফ্ল্যাশ হবে না।
+    const savedEmail=localStorage.getItem("fb_email");
+    const savedPass=localStorage.getItem("fb_pass_enc");
+    return !!(savedEmail&&savedPass);
   });
+
+  // ⚡ Optimistic লগইনের পর ব্যাকগ্রাউন্ডে token সচল আছে কিনা যাচাই — সত্যিই ব্যর্থ হলেই
+  //    (refresh token + সেভ করা পাসওয়ার্ড দিয়ে re-login দুটোই ব্যর্থ) লগআউট দেখানো হয়।
+  useEffect(()=>{
+    if(!loggedIn) return;
+    let cancelled=false;
+    refreshTokenIfNeeded().then(t=>{
+      if(cancelled) return;
+      if(!t){
+        _LC.warn("autoLogin","Background token refresh failed on resume — logging out");
+        localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");localStorage.removeItem("fb_refresh_token");
+        window.__adminIdToken=null;
+        setLoggedIn(false);
+      }
+    });
+    return ()=>{ cancelled=true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
   const[page,setPage]=useState("dashboard");
   const[toasts,push]=useToasts();
   const[tick,setTick]=useState(0);
