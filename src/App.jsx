@@ -305,19 +305,23 @@ const _tok=()=>refreshTokenIfNeeded();
 /* ── ক্ষণস্থায়ী নেটওয়ার্ক/5xx ব্যর্থতার জন্য রিট্রাই — Firebase read/write দুটোতেই ব্যবহার হয় ──
    auth/4xx এরর-এ রিট্রাই করে না (সেগুলো রিট্রাই করলেও ঠিক হবে না), শুধু network fail বা 5xx-এ। */
 async function _fbFetch(url,opts,retries=2){
-  let lastErr;
-  for(let attempt=0;attempt<=retries;attempt++){
-    try{
-      const r=await fetch(url,opts);
-      if(r.status>=500 && attempt<retries){ await new Promise(res=>setTimeout(res,300*(attempt+1))); continue; }
-      return r;
-    }catch(e){
-      lastErr=e;
-      if(attempt<retries){ await new Promise(res=>setTimeout(res,300*(attempt+1))); continue; }
-      throw e;
+  const method = (opts && opts.method) || "GET";
+  const label  = method + " " + String(url).split("?")[0].split("/").slice(-2).join("/");
+  return _BGM.guard(async () => {
+    let lastErr;
+    for(let attempt=0;attempt<=retries;attempt++){
+      try{
+        const r=await fetch(url,opts);
+        if(r.status>=500 && attempt<retries){ await new Promise(res=>setTimeout(res,300*(attempt+1))); continue; }
+        return r;
+      }catch(e){
+        lastErr=e;
+        if(attempt<retries){ await new Promise(res=>setTimeout(res,300*(attempt+1))); continue; }
+        throw e;
+      }
     }
-  }
-  throw lastErr;
+    throw lastErr;
+  }, label);
 }
 
 const fbGet   = async p=>{
@@ -484,6 +488,43 @@ const _BGM = (() => {
     }
   }
 
+  /* ── guard(): যেকোনো Firebase read/write call এর চারপাশে wrap হয় ──
+     - প্রথম কলেই WakeLock + native Foreground Service চালু হয়
+     - শেষ কলটা শেষ হওয়ার পর ৪ সেকেন্ড অপেক্ষা করে বন্ধ হয় (পরপর অনেক ছোট
+       save/read আসলে বারবার toggle না হওয়ার জন্য)
+     - এর ফলে স্ক্রিন লক হলেও বা অ্যাপ minimize করলেও লম্বা সেভ/সিংক
+       Android কর্তৃক বন্ধ/kill হয় না, এবং ইউজারকে অযথা লগআউট দেখায় না */
+  let _guardCount = 0;
+  let _guardReleaseTimer = null;
+  async function guardStart(label) {
+    _guardCount++;
+    if (_guardReleaseTimer) { clearTimeout(_guardReleaseTimer); _guardReleaseTimer = null; }
+    if (_guardCount === 1) {
+      await _acquireWake();
+      _nativeStart(label || "সেভ হচ্ছে…");
+    } else {
+      _nativeUpdate(label ? label : ("চলমান কাজ: " + _guardCount + "টি"));
+    }
+  }
+  function guardEnd() {
+    _guardCount = Math.max(0, _guardCount - 1);
+    if (_guardCount === 0) {
+      if (_guardReleaseTimer) clearTimeout(_guardReleaseTimer);
+      _guardReleaseTimer = setTimeout(() => {
+        _guardReleaseTimer = null;
+        if (_guardCount === 0) { _releaseWake(); _nativeStop(); }
+      }, 4000);
+    }
+  }
+  async function guard(fn, label) {
+    await guardStart(label);
+    try {
+      return await fn();
+    } finally {
+      guardEnd();
+    }
+  }
+
   document.addEventListener("visibilitychange", async () => {
     if (!document.hidden && _queue.length > 0) {
       _LC.lifecycle("BGM", "App foregrounded — flushing " + _queue.length + " pending tasks");
@@ -581,6 +622,7 @@ const _BGM = (() => {
 
   return {
     enqueue: enqueueWithNative,
+    guard,
     getState: () => ({ pending:_queue.length, active:_activeCount, done:_doneCount, failed:_failCount, running:_running }),
     subscribe: fn => { _listeners.push(fn); return () => { _listeners = _listeners.filter(x=>x!==fn); }; },
   };
