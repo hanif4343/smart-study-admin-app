@@ -2721,7 +2721,11 @@ async function saveRowsToFirebaseBulk({rows,targetTab,concurrency=8,onProgress})
 }
 
 /* ── UI: Save Location টগল (Google Sheet | Firebase) — সব সেভ-ফিচারে reuse হয় ── */
-function SaveLocationPicker({value,onChange,gasSecret,onGasSecretChange}){
+function SaveLocationPicker({value,onChange,gasSecret,onGasSecretChange,compact=false}){
+  // compact=true হলে GAS Secret Key ডিফল্টে লুকানো থাকে (QBank→Quiz-এর মতো জায়গায়, যেখানে
+  // Save Location কার্ডটা বারবার চোখে পড়ে) — বাকি ট্যাবগুলোতে (compact না দেওয়া) আগের মতোই
+  // সবসময় দেখা যাবে, কোনো আচরণ বদলায়নি।
+  const[showKey,setShowKey]=useState(!compact);
   return(
     <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:10}}>
       <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:8}}>💾 Save Location</div>
@@ -2730,9 +2734,17 @@ function SaveLocationPicker({value,onChange,gasSecret,onGasSecretChange}){
         <button type="button" className="btn" style={{flex:1,justifyContent:"center",background:value==="firebase"?C.accent:"transparent",color:value==="firebase"?"#fff":C.text,border:`1px solid ${C.border}`}} onClick={()=>onChange("firebase")}>🔥 Firebase</button>
       </div>
       {value==="sheet" && (
-        <div className="fld" style={{marginBottom:0}}><label>GAS Secret Key</label>
-          <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>onGasSecretChange(e.target.value)}/>
-        </div>
+        showKey ? (
+          <div className="fld" style={{marginBottom:0}}>
+            <label style={{display:"flex",justifyContent:"space-between"}}>
+              <span>GAS Secret Key</span>
+              {compact && <span onClick={()=>setShowKey(false)} style={{color:C.accent,cursor:"pointer",fontWeight:600}}>লুকাও</span>}
+            </label>
+            <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>onGasSecretChange(e.target.value)}/>
+          </div>
+        ) : (
+          <div style={{fontSize:11,color:C.accent,cursor:"pointer",fontWeight:600}} onClick={()=>setShowKey(true)}>🔑 GAS Secret Key পরিবর্তন করো</div>
+        )
       )}
     </div>
   );
@@ -4458,6 +4470,10 @@ function QBankConverterTab({push,tick}){
   const[saving,setSaving]=useState(false);
   const[saveProgress,setSaveProgress]=useState({done:0,total:0});
   const[saveElapsedSec,setSaveElapsedSec]=useState(0);
+  // ⚡ রিডিজাইন: রিভিউ লিস্ট এখন ফিল্টার-চিপ দিয়ে ভাগ করা (সব/Pending/সেভ হয়েছে/ব্যর্থ) আর
+  // প্রতিটা প্রশ্ন ডিফল্টে কোলাপ্সড — ট্যাপ করলেই এডিট ফর্ম খোলে। এতে ৪০০+ প্রশ্নেও স্ক্রল ছোট থাকে।
+  const[reviewFilter,setReviewFilter]=useState("all"); // "all" | "pending" | "completed" | "failed"
+  const[expandedKey,setExpandedKey]=useState(null);
 
   // saving চলাকালীন প্রতি সেকেন্ডে টাইমার আপডেট হয় — চোখে দেখা যায় কতক্ষণ ধরে সেভ হচ্ছে
   useEffect(()=>{
@@ -4581,7 +4597,11 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
   const completedCount=results.filter(r=>r.completed).length;
 
   const saveApproved=async(overrideItems)=>{
-    const approved=overrideItems||results.filter(r=>r.approved);
+    // 🐛 ফিক্স: onClick={saveApproved} লিখলে React ক্লিক ইভেন্ট অবজেক্টটাই overrideItems হিসেবে
+    // পাঠিয়ে দেয় (যেহেতু এখন saveApproved একটা প্যারামিটার নেয়) — ইভেন্ট অবজেক্টে .length না
+    // থাকায় সাথে সাথে "কিছুই approve করা নেই" দেখাতো, results-এ আসলে approved আইটেম থাকলেও।
+    // তাই এখানে Array.isArray চেক করে নেওয়া হলো, আর বাটনের onClick-ও ()=>saveApproved() করা হয়েছে।
+    const approved=Array.isArray(overrideItems)?overrideItems:results.filter(r=>r.approved);
     if(!approved.length){ push("warn","কিছুই approve করা নেই",""); return; }
     setSaving(true);
     setSaveProgress({done:0,total:approved.length});
@@ -4626,11 +4646,18 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
       // badge দেখানোর কোনো সুযোগই ছিল না। এখন সফলভাবে সেভ হওয়া (approved && ব্যর্থ না হওয়া)
       // আইটেমগুলো completed:true করে লিস্টেই রাখা হয় (approved:false করে, যাতে আবার সেভ-এ না যায়)।
       // শুধু ব্যর্থ (failed) আইটেমগুলো approved অবস্থায় থেকে যায়, retry-এর জন্য।
+      // 🐛 ফিক্স: আগে এখানে "if(!r.approved) return r" দিয়ে state-এর সব approved রো ধরে
+      // completed করে দিতো — কিন্তু auto-save যখন শুধু নতুন ব্যাচ (overrideItems) সেভ করে,
+      // তখন state-এ আরও অন্য approved-কিন্তু-এখনো-সেভ-না-হওয়া রো থাকতে পারে (আগের ড্রাফট/অন্য
+      // ব্যাচ) — সেগুলোকেও ভুল করে completed:true, approved:false বানিয়ে দিতো, ফলে পরে ম্যানুয়াল
+      // "সেভ করো" চাপলে "কিছুই approve করা নেই" দেখাতো। এখন শুধু এই রাউন্ডে যেগুলো আসলে পাঠানো
+      // হয়েছিল (approved অ্যারের _key দিয়ে) সেগুলোই আপডেট হয়।
+      const processedKeys=new Set(approved.map(r=>r._key).filter(Boolean));
       const failedQs=new Set(result.failedRows.map(r=>r.question));
       setResults(rs=>rs.map(r=>{
-        if(!r.approved) return r;
-        if(failedQs.has(r.question)) return r;
-        return {...r, completed:true, approved:false};
+        if(!processedKeys.has(r._key)) return r;
+        if(failedQs.has(r.question)) return {...r, failed:true};
+        return {...r, completed:true, approved:false, failed:false};
       }));
     }catch(e){
       push("error","❌ সেভ ব্যর্থ",e.message);
@@ -4653,28 +4680,26 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
           <JobCheckList options={examOptions} selected={selExam} onToggle={v=>toggle(selExam,setSelExam,v)} emptyText="এই ফিল্টারে কিছু নেই"/>
         </div>
 
-        <div style={{display:"flex",gap:8,marginTop:8}}>
-          <div style={{flex:1,background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}}>
-            <div style={{fontSize:11,color:C.muted}}>ফিল্টারে মোট প্রশ্ন</div>
-            <div style={{fontSize:20,fontWeight:800,color:C.text}}>{scopedRows.length}</div>
+        <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
+          <div style={{flex:"1 1 72px",background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 6px",textAlign:"center"}}>
+            <div style={{fontSize:16,fontWeight:800,color:C.text,lineHeight:1.1}}>{scopedRows.length}</div>
+            <div style={{fontSize:9.5,color:C.muted,marginTop:2}}>ফিল্টারে মোট</div>
           </div>
-          <div style={{flex:1,background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",textAlign:"center"}}>
-            <div style={{fontSize:11,color:C.muted}}>ডুপ্লিকেট বাদে ইউনিক</div>
-            <div style={{fontSize:20,fontWeight:800,color:C.green}}>{dedupedPool.length}</div>
+          <div style={{flex:"1 1 72px",background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 6px",textAlign:"center"}}>
+            <div style={{fontSize:16,fontWeight:800,color:C.green,lineHeight:1.1}}>{dedupedPool.length}</div>
+            <div style={{fontSize:9.5,color:C.muted,marginTop:2}}>ইউনিক</div>
           </div>
+          <div style={{flex:"1 1 72px",background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 6px",textAlign:"center"}}>
+            <div style={{fontSize:16,fontWeight:800,color:C.yellow,lineHeight:1.1}}>{quizLoading?"...":alreadyInQuizCount}</div>
+            <div style={{fontSize:9.5,color:C.muted,marginTop:2}}>Quiz-এ আছে</div>
+          </div>
+          {alreadyQueuedCount>0 && (
+            <div style={{flex:"1 1 72px",background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 6px",textAlign:"center"}}>
+              <div style={{fontSize:16,fontWeight:800,color:C.yellow,lineHeight:1.1}}>{alreadyQueuedCount}</div>
+              <div style={{fontSize:9.5,color:C.muted,marginTop:2}}>কনভার্ট হয়েছে</div>
+            </div>
+          )}
         </div>
-        <div style={{marginTop:8,background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",textAlign:"center"}}>
-          <div style={{fontSize:11,color:C.muted}}>
-            {quizLoading?"⏳ Quiz sheet চেক হচ্ছে...":"🔁 Quiz-এ ইতিমধ্যে আছে (তালিকা থেকে বাদ পড়েছে)"}
-          </div>
-          <div style={{fontSize:18,fontWeight:800,color:C.yellow}}>{quizLoading?"...":alreadyInQuizCount}</div>
-        </div>
-        {alreadyQueuedCount>0 && (
-          <div style={{marginTop:8,background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 14px",textAlign:"center"}}>
-            <div style={{fontSize:11,color:C.muted}}>⏳ এই সেশনে ইতিমধ্যে কনভার্ট করা হয়েছে (নিচে রিভিউ/Completed-এ আছে)</div>
-            <div style={{fontSize:18,fontWeight:800,color:C.yellow}}>{alreadyQueuedCount}</div>
-          </div>
-        )}
       </div>
 
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
@@ -4699,11 +4724,9 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
           <input type="checkbox" checked={autoSave} onChange={e=>setAutoSaveP(e.target.checked)} style={{accentColor:C.green,width:16,height:16}}/>
           <span style={{fontSize:12,color:C.text}}>⚡ Auto-save — কনভার্ট শেষ হলেই সাথে সাথে <b style={{color:saveLoc==="sheet"?C.green:C.yellow}}>{saveLoc==="sheet"?"Google Sheet":"Firebase"}</b>-এ সেভ হয়ে যাবে (approval তো এমনিতেই অটো)</span>
         </label>
-        {autoSave && (
-          <div style={{marginBottom:10}}>
-            <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={saveGasSecret}/>
-          </div>
-        )}
+        {/* ⚡ এখন সবসময় দেখানো হয় (আগে শুধু auto-save চালু থাকলে দেখাতো) — ম্যানুয়াল সেভ-এও
+            এই একই saveLoc ব্যবহার হয়। নিচে রিভিউ সেকশনে আর আলাদা কপি রাখা হয়নি — একটাই জায়গা। */}
+        <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={saveGasSecret} compact/>
         <button className="btn" disabled={busy||!dedupedPool.length} style={{width:"100%",justifyContent:"center",background:C.green,color:"#04180a",padding:13,fontSize:14,fontWeight:700}} onClick={runConvert}>
           {busy?`⏳ কনভার্ট হচ্ছে... (${progress.done}/${progress.total})`:`🚀 ${dedupedPool.length}টা প্রশ্ন কনভার্ট করো`}
         </button>
@@ -4722,7 +4745,22 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
         )}
       </div>
 
-      {results.length>0 && (
+      {results.length>0 && (()=>{
+        const pendingList=results.filter(r=>!r.completed&&!r.failed);
+        const completedList=results.filter(r=>r.completed);
+        const failedListArr=results.filter(r=>r.failed);
+        const chips=[
+          {key:"all",label:`সব (${results.length})`},
+          {key:"pending",label:`⏳ Pending (${pendingList.length})`},
+          {key:"completed",label:`✅ সেভ হয়েছে (${completedList.length})`},
+          {key:"failed",label:`❌ ব্যর্থ (${failedListArr.length})`},
+        ];
+        const visibleResults=
+          reviewFilter==="pending"?pendingList:
+          reviewFilter==="completed"?completedList:
+          reviewFilter==="failed"?failedListArr:
+          results;
+        return(
         <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
           <JumpButton/>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
@@ -4731,43 +4769,87 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
             </div>
             <button className="btn" style={{fontSize:11,padding:"4px 10px",background:"transparent",color:C.red,border:`1px solid ${C.border}`}} onClick={clearDraft}>🗑️ ড্রাফট মুছো</button>
           </div>
-          {results.map(r=>r.completed?(
-            <div key={r._key} style={{background:"#22c55e12",border:`1px solid #22c55e40`,borderRadius:10,padding:"9px 12px",marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
-              <span className="pill pa" style={{flexShrink:0}}>✅ Completed</span>
-              <span style={{fontSize:12,color:C.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.question}</span>
-              <button onClick={()=>removeResult(r._key)} title="তালিকা থেকে সরাও" style={{background:"transparent",border:"none",color:C.muted,fontSize:14,cursor:"pointer",flexShrink:0}}>✕</button>
-            </div>
-          ):(
-            <div key={r._key} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:10,opacity:r.approved?1:.5}}>
-              <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
-                <input type="checkbox" checked={r.approved} onChange={()=>toggleApprove(r._key)} style={{accentColor:C.green,width:16,height:16}}/>
-                <span style={{fontSize:12,color:C.muted}}>Approve করে সেভ করো</span>
-              </label>
-              <textarea className="inp" style={{marginBottom:6,fontSize:13}} value={r.question} onChange={e=>updateResult(r._key,"question",e.target.value)}/>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
-                <input className="inp" placeholder="Option 1" value={r.opt1||""} onChange={e=>updateResult(r._key,"opt1",e.target.value)}/>
-                <input className="inp" placeholder="Option 2" value={r.opt2||""} onChange={e=>updateResult(r._key,"opt2",e.target.value)}/>
-                <input className="inp" placeholder="Option 3" value={r.opt3||""} onChange={e=>updateResult(r._key,"opt3",e.target.value)}/>
-                <input className="inp" placeholder="Option 4" value={r.opt4||""} onChange={e=>updateResult(r._key,"opt4",e.target.value)}/>
-              </div>
-              <input className="inp" style={{marginBottom:6,borderColor:C.green}} placeholder="সঠিক উত্তর" value={r.correct||""} onChange={e=>updateResult(r._key,"correct",e.target.value)}/>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
-                <input className="inp" placeholder="Subject" value={r.subject||""} onChange={e=>updateResult(r._key,"subject",e.target.value)}/>
-                <input className="inp" placeholder="Sub-topic" value={r.sub_topic||""} onChange={e=>updateResult(r._key,"sub_topic",e.target.value)}/>
-              </div>
-              <textarea className="inp" placeholder="Explanation" style={{fontSize:12}} value={r.explanation||""} onChange={e=>updateResult(r._key,"explanation",e.target.value)}/>
-              {r.prevExam && <div style={{fontSize:10,color:C.muted,marginTop:6}}>📄 উৎস exam paper: {r.prevExam}</div>}
-            </div>
-          ))}
 
-          <div style={{marginTop:4}}>
-            <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={saveGasSecret}/>
-            <div className="fld">
-              <label>সেভ চাংক সাইজ (কয়টা করে একসাথে পাঠানো হবে — ছোট মানে প্রোগ্রেস বার বেশি "লাইভ" দেখাবে, কিন্তু একটু ধীর হবে)</label>
-              <input className="inp" type="number" min={1} max={100} value={saveChunkSize} disabled={saving}
-                onChange={e=>setSaveChunkSize(Math.max(1,Math.min(100,+e.target.value||5)))}/>
-            </div>
-            <button className="btn" disabled={saving||!approvedCount} style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:12,fontSize:14,fontWeight:700}} onClick={saveApproved}>
+          {/* ⚡ ফিল্টার চিপ — ৪০০+ প্রশ্ন থাকলেও এখন সব একসাথে স্ক্রল করতে হয় না */}
+          <div style={{display:"flex",gap:6,marginBottom:11,overflowX:"auto",paddingBottom:2}}>
+            {chips.map(c=>(
+              <button key={c.key} onClick={()=>setReviewFilter(c.key)} style={{
+                flexShrink:0,padding:"6px 12px",borderRadius:20,cursor:"pointer",whiteSpace:"nowrap",
+                fontSize:11.5,fontWeight:700,
+                border:`1px solid ${reviewFilter===c.key?C.accent:C.border}`,
+                background:reviewFilter===c.key?"#3b82f622":"transparent",
+                color:reviewFilter===c.key?"#93c5fd":C.muted,
+              }}>{c.label}</button>
+            ))}
+          </div>
+
+          {visibleResults.length===0 && (
+            <div style={{textAlign:"center",padding:"18px 0",color:C.muted,fontSize:12}}>এই ফিল্টারে কিছু নেই</div>
+          )}
+
+          {visibleResults.map(r=>{
+            if(r.completed) return(
+              <div key={r._key} style={{background:"#22c55e12",border:`1px solid #22c55e40`,borderRadius:10,padding:"9px 12px",marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
+                <span className="pill pa" style={{flexShrink:0}}>✅ Completed</span>
+                <span style={{fontSize:12,color:C.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.question}</span>
+                <button onClick={()=>removeResult(r._key)} title="তালিকা থেকে সরাও" style={{background:"transparent",border:"none",color:C.muted,fontSize:14,cursor:"pointer",flexShrink:0}}>✕</button>
+              </div>
+            );
+
+            // ⚡ ডিফল্টে কোলাপ্সড — এক লাইনের কম্প্যাক্ট কার্ড, ট্যাপ করলেই ফুল এডিট ফর্ম খোলে
+            if(expandedKey!==r._key) return(
+              <div key={r._key} onClick={()=>setExpandedKey(r._key)}
+                style={{background:C.panel,border:`1px solid ${r.failed?"#ef444460":C.border}`,borderRadius:10,
+                  padding:"9px 11px",marginBottom:8,display:"flex",alignItems:"center",gap:8,cursor:"pointer",opacity:r.approved?1:.5}}>
+                <input type="checkbox" checked={r.approved} onClick={e=>e.stopPropagation()} onChange={()=>toggleApprove(r._key)} style={{accentColor:C.green,width:16,height:16,flexShrink:0}}/>
+                <span style={{fontSize:12,color:C.text,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.question}</span>
+                {r.failed && <span style={{flexShrink:0,background:"#ef444422",color:C.red,fontSize:9.5,fontWeight:800,padding:"2px 7px",borderRadius:20}}>❌ ব্যর্থ</span>}
+                <span style={{color:C.muted,fontSize:11,flexShrink:0}}>▾</span>
+              </div>
+            );
+
+            // ⚡ এক্সপ্যান্ডেড — ফুল এডিট ফর্ম (আগের মতোই)
+            return(
+              <div key={r._key} style={{background:C.panel,border:`1px solid ${C.accent}`,borderRadius:10,padding:12,marginBottom:10}}>
+                <div onClick={()=>setExpandedKey(null)} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,cursor:"pointer"}}>
+                  <input type="checkbox" checked={r.approved} onClick={e=>e.stopPropagation()} onChange={()=>toggleApprove(r._key)} style={{accentColor:C.green,width:16,height:16,flexShrink:0}}/>
+                  <span style={{fontSize:12,color:C.muted,flex:1}}>Approve করে সেভ করো{r.failed?" • আগেরবার ব্যর্থ হয়েছিল":""}</span>
+                  <span style={{color:C.muted,fontSize:11}}>▴</span>
+                </div>
+                <textarea className="inp" style={{marginBottom:6,fontSize:13}} value={r.question} onChange={e=>updateResult(r._key,"question",e.target.value)}/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+                  <input className="inp" placeholder="Option 1" value={r.opt1||""} onChange={e=>updateResult(r._key,"opt1",e.target.value)}/>
+                  <input className="inp" placeholder="Option 2" value={r.opt2||""} onChange={e=>updateResult(r._key,"opt2",e.target.value)}/>
+                  <input className="inp" placeholder="Option 3" value={r.opt3||""} onChange={e=>updateResult(r._key,"opt3",e.target.value)}/>
+                  <input className="inp" placeholder="Option 4" value={r.opt4||""} onChange={e=>updateResult(r._key,"opt4",e.target.value)}/>
+                </div>
+                <input className="inp" style={{marginBottom:6,borderColor:C.green}} placeholder="সঠিক উত্তর" value={r.correct||""} onChange={e=>updateResult(r._key,"correct",e.target.value)}/>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginBottom:6}}>
+                  <input className="inp" placeholder="Subject" value={r.subject||""} onChange={e=>updateResult(r._key,"subject",e.target.value)}/>
+                  <input className="inp" placeholder="Sub-topic" value={r.sub_topic||""} onChange={e=>updateResult(r._key,"sub_topic",e.target.value)}/>
+                </div>
+                <textarea className="inp" placeholder="Explanation" style={{fontSize:12}} value={r.explanation||""} onChange={e=>updateResult(r._key,"explanation",e.target.value)}/>
+                {r.prevExam && <div style={{fontSize:10,color:C.muted,marginTop:6}}>📄 উৎস exam paper: {r.prevExam}</div>}
+              </div>
+            );
+          })}
+
+          {/* ⚡ Save Location এখানে আর আলাদা করে দেখানো হয় না — উপরের "AI দিয়ে কনভার্ট করো" কার্ডেই
+              একবার সেট করা থাকে, দুই জায়গায় ডুপ্লিকেট রাখা হয়নি। */}
+          <div style={{fontSize:11,color:C.muted,margin:"2px 0 8px"}}>
+            💾 সেভ হবে: <b style={{color:saveLoc==="sheet"?C.green:C.accent}}>{saveLoc==="sheet"?"Google Sheet":"Firebase"}</b> — পরিবর্তনের জন্য উপরের কার্ডে যাও
+          </div>
+          <div className="fld">
+            <label>সেভ চাংক সাইজ (কয়টা করে একসাথে পাঠানো হবে — ছোট মানে প্রোগ্রেস বার বেশি "লাইভ" দেখাবে, কিন্তু একটু ধীর হবে)</label>
+            <input className="inp" type="number" min={1} max={100} value={saveChunkSize} disabled={saving}
+              onChange={e=>setSaveChunkSize(Math.max(1,Math.min(100,+e.target.value||5)))}/>
+          </div>
+
+          {/* ⚡ স্টিকি সেভ বার — স্ক্রল করলেও বাটন হারিয়ে যাবে না, বারবার উপরে যেতে হবে না।
+              bottom-nav-এর উপরে বসানো হয়েছে (bottom:70 ≈ nav height + safe-area)। */}
+          <div style={{position:"sticky",bottom:70,zIndex:20,marginTop:6,paddingTop:8,
+            background:`linear-gradient(180deg, transparent, ${C.card} 35%)`}}>
+            <button className="btn" disabled={saving||!approvedCount} style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:12,fontSize:14,fontWeight:700,boxShadow:"0 6px 20px #3b82f655"}} onClick={()=>saveApproved()}>
               {saving?`⏳ সেভ হচ্ছে... (${saveProgress.done}/${saveProgress.total}) • ${saveElapsedSec}s`:`💾 ${approvedCount}টা প্রশ্ন ${saveLoc==="sheet"?"Sheet":"Firebase"}-এ সেভ করো`}
             </button>
             {saving && (
@@ -4783,7 +4865,8 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
             )}
           </div>
         </div>
-      )}
+        );
+      })()}
 
       <FailedQueuePanel push={push} sourceFilter="QBank→Quiz"/>
 
