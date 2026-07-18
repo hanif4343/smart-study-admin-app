@@ -108,6 +108,26 @@ for svc_name, decl in services.items():
 
 open(manifest_path, "w").write(manifest)
 
+# ── 2.5 App Icon — android-src/app-icon/* → android/app/src/main/res/* ──────
+# custom launcher icon (legacy ic_launcher + adaptive ic_launcher foreground/background)
+# Capacitor default icon-গুলো overwrite করে দেয়।
+icon_src_root = "android-src/app-icon"
+res_root = "android/app/src/main/res"
+if os.path.isdir(icon_src_root):
+    icon_files_copied = 0
+    for dirpath, _, filenames in os.walk(icon_src_root):
+        rel = os.path.relpath(dirpath, icon_src_root)
+        dst_dir = os.path.join(res_root, rel) if rel != "." else res_root
+        if os.path.basename(dirpath) == "play-store":
+            continue  # Play Store listing icon — res/ এ যাওয়ার দরকার নেই
+        os.makedirs(dst_dir, exist_ok=True)
+        for fn in filenames:
+            shutil.copy2(os.path.join(dirpath, fn), os.path.join(dst_dir, fn))
+            icon_files_copied += 1
+    print(f"✅ App icon: {icon_files_copied} file(s) copied into {res_root}")
+else:
+    print(f"⚠️  App icon source not found at {icon_src_root} — default Capacitor icon থেকে যাবে")
+
 # ── 3. Copy Java source files (Kotlin .kt ফাইল SKIP করি) ────────────────────
 pkg_dir = "android/app/src/main/java/com/smartstudy/admin"
 os.makedirs(pkg_dir, exist_ok=True)
