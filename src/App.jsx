@@ -4257,6 +4257,15 @@ function JobLauncherTab({push,tick}){
 const LS_QBC_TAXONOMY   = "qbank_conv_taxonomy_v1";
 const LS_QBC_GAS_SECRET = "qbank_conv_gas_secret_v1";
 const LS_QBC_RESULTS_DRAFT = "qbank_conv_results_draft_v1"; // AI-generated results draft — app বন্ধ/ক্র্যাশ হলেও যেন কাজ না হারায়
+// ⚡ এই ট্যাবের নিজস্ব Save Location + Auto-save প্রেফারেন্স — অন্য ট্যাবগুলোর শেয়ার্ড
+// loadSaveLocPref (default "firebase") থেকে ইচ্ছাকৃতভাবে আলাদা রাখা হয়েছে, যাতে
+// QBank→Quiz-এ ডিফল্ট সবসময় Google Sheet-ই থাকে (approval তো এমনিতেই অটো হয়ে যায়)।
+const LS_QBC_SAVELOC  = "qbank_conv_saveloc_v1";   // "sheet" | "firebase" — ডিফল্ট "sheet"
+const LS_QBC_AUTOSAVE = "qbank_conv_autosave_v1";  // "1" | "0" — ডিফল্ট চালু
+function loadQbcSaveLoc(){ try{ return localStorage.getItem(LS_QBC_SAVELOC)||"sheet"; }catch{ return "sheet"; } }
+function saveQbcSaveLoc(v){ try{ localStorage.setItem(LS_QBC_SAVELOC,v); }catch{} }
+function loadQbcAutoSave(){ try{ return localStorage.getItem(LS_QBC_AUTOSAVE)!=="0"; }catch{ return true; } }
+function saveQbcAutoSave(v){ try{ localStorage.setItem(LS_QBC_AUTOSAVE,v?"1":"0"); }catch{} }
 
 // ডিফল্ট canonical taxonomy — AI এই তালিকা থেকেই subject/sub_topic বাছবে।
 // প্রয়োজনে অ্যাডমিন UI থেকেই (নিচের "Taxonomy" এডিটর) এটা বদলানো যাবে, rebuild লাগবে না।
@@ -4424,8 +4433,12 @@ function QBankConverterTab({push,tick}){
   // ── GAS Secret Key + Save Location — শেয়ার্ড (সব ফিচারে একই key/পছন্দ ব্যবহার হয়) ──
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const saveGasSecret=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
-  const[saveLoc,setSaveLoc]=useState(loadSaveLocPref); // "sheet" | "firebase"
-  const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
+  const[saveLoc,setSaveLoc]=useState(loadQbcSaveLoc); // "sheet" | "firebase" — এই ট্যাবে ডিফল্ট "sheet"
+  const setSaveLocP=(v)=>{ setSaveLoc(v); saveQbcSaveLoc(v); };
+  // ⚡ Auto-save: convert শেষ হলেই approve-করা (ডিফল্টে সবই approved) প্রশ্নগুলো নিজে থেকেই
+  // saveLoc অনুযায়ী (ডিফল্টে Google Sheet) সেভ হয়ে যায় — ম্যানুয়ালি "সেভ করো" চাপার দরকার পড়ে না।
+  const[autoSave,setAutoSave]=useState(loadQbcAutoSave);
+  const setAutoSaveP=(v)=>{ setAutoSave(v); saveQbcAutoSave(v); };
 
   const[batchSize,setBatchSize]=useState(15);
   // ⚡ সেভের সময় কয়টা করে একসাথে পাঠানো হবে — ছোট মান (৫-১০, চাইলে ১ পর্যন্ত) দিলে
@@ -4522,6 +4535,7 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
     // এখনো রিভিউ-বাকি আইটেমগুলো অক্ষত থাকে। নতুন কনভার্ট করা প্রশ্নগুলো লিস্টের শেষে যোগ হয়।
     setProgress({done:0,total:dedupedPool.length});
     let totalNew=0;
+    const allNewItems=[]; // ⚡ ব্যাচে ব্যাচে জমা হওয়া নতুন প্রশ্ন — convert শেষে সরাসরি এগুলোই auto-save করা হবে (results state আপডেট হতে দেরি হতে পারে বলে আলাদা লোকাল অ্যারেতেও রাখা হলো)
     for(let i=0;i<dedupedPool.length;i+=batchSize){
       const batch=dedupedPool.slice(i,i+batchSize);
       try{
@@ -4540,6 +4554,7 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
             };
           });
           totalNew+=newItems.length;
+          allNewItems.push(...newItems);
           setResults(rs=>[...rs,...newItems]);
         }
       }catch(e){
@@ -4548,7 +4563,15 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
       setProgress({done:Math.min(i+batchSize,dedupedPool.length),total:dedupedPool.length});
     }
     setBusy(false);
-    push("success","✅ কনভার্সন শেষ","মোট "+totalNew+"টা প্রশ্ন — এবার নিচে রিভিউ করে সেভ করো");
+    push("success","✅ কনভার্সন শেষ","মোট "+totalNew+"টা প্রশ্ন — "+(autoSave?"অটো-সেভ শুরু হচ্ছে...":"এবার নিচে রিভিউ করে সেভ করো"));
+
+    // ⚡ Auto-save: approval তো এমনিতেই অটো (নতুন সব প্রশ্ন approved:true নিয়ে আসে) — তাই
+    // ম্যানুয়ালি "সেভ করো" বাটনে চাপার দরকার নেই, convert শেষ হলেই সরাসরি saveLoc অনুযায়ী
+    // (ডিফল্টে Google Sheet) সেভ হয়ে যায়। ব্যর্থ হলেও চিন্তা নেই — ব্যর্থ রো ক্যাশে জমা থাকবে,
+    // আর approved থেকে যাওয়া আইটেম নিচের ম্যানুয়াল বাটন দিয়েও পরে সেভ করা যাবে।
+    if(autoSave && allNewItems.length){
+      await saveApproved(allNewItems);
+    }
   };
 
   const updateResult=(key,field,val)=>{ setResults(rs=>rs.map(r=>r._key===key?{...r,[field]:val}:r)); };
@@ -4557,8 +4580,8 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
   const approvedCount=results.filter(r=>r.approved).length;
   const completedCount=results.filter(r=>r.completed).length;
 
-  const saveApproved=async()=>{
-    const approved=results.filter(r=>r.approved);
+  const saveApproved=async(overrideItems)=>{
+    const approved=overrideItems||results.filter(r=>r.approved);
     if(!approved.length){ push("warn","কিছুই approve করা নেই",""); return; }
     setSaving(true);
     setSaveProgress({done:0,total:approved.length});
@@ -4672,12 +4695,29 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
         <div className="fld"><label>ব্যাচ সাইজ (একবারে কতগুলো প্রশ্ন AI-কে পাঠানো হবে)</label>
           <input className="inp" type="number" min={5} max={40} value={batchSize} onChange={e=>setBatchSize(Math.max(5,Math.min(40,+e.target.value||15)))}/>
         </div>
+        <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,cursor:"pointer"}}>
+          <input type="checkbox" checked={autoSave} onChange={e=>setAutoSaveP(e.target.checked)} style={{accentColor:C.green,width:16,height:16}}/>
+          <span style={{fontSize:12,color:C.text}}>⚡ Auto-save — কনভার্ট শেষ হলেই সাথে সাথে <b style={{color:saveLoc==="sheet"?C.green:C.yellow}}>{saveLoc==="sheet"?"Google Sheet":"Firebase"}</b>-এ সেভ হয়ে যাবে (approval তো এমনিতেই অটো)</span>
+        </label>
+        {autoSave && (
+          <div style={{marginBottom:10}}>
+            <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={saveGasSecret}/>
+          </div>
+        )}
         <button className="btn" disabled={busy||!dedupedPool.length} style={{width:"100%",justifyContent:"center",background:C.green,color:"#04180a",padding:13,fontSize:14,fontWeight:700}} onClick={runConvert}>
           {busy?`⏳ কনভার্ট হচ্ছে... (${progress.done}/${progress.total})`:`🚀 ${dedupedPool.length}টা প্রশ্ন কনভার্ট করো`}
         </button>
         {busy && (
           <div style={{marginTop:10,height:6,background:C.panel,borderRadius:6,overflow:"hidden"}}>
             <div style={{height:"100%",background:C.green,width:`${progress.total?Math.round(progress.done/progress.total*100):0}%`,transition:"width .3s"}}/>
+          </div>
+        )}
+        {saving && autoSave && (
+          <div style={{marginTop:10}}>
+            <div style={{fontSize:11,color:C.muted,marginBottom:4}}>💾 অটো-সেভ হচ্ছে... ({saveProgress.done}/{saveProgress.total}) • {saveElapsedSec}s</div>
+            <div style={{height:6,background:C.panel,borderRadius:6,overflow:"hidden"}}>
+              <div style={{height:"100%",background:C.accent,width:`${saveProgress.total?Math.round(saveProgress.done/saveProgress.total*100):0}%`,transition:"width .3s"}}/>
+            </div>
           </div>
         )}
       </div>
