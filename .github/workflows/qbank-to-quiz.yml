@@ -24,6 +24,9 @@ jobs:
   convert:
     runs-on: ubuntu-latest
     timeout-minutes: 350 # সর্বোচ্চ ৬ ঘন্টার একটু কম, নিরাপদ বাফার রেখে
+    concurrency:
+      group: qbank-to-quiz
+      cancel-in-progress: false # আগেরটা চলতে থাকলে নতুনটা বাতিল না করে সিরিয়ালে অপেক্ষা করবে — একই প্রশ্ন দুইবার AI-তে যাওয়া/ডাবল খরচ এড়াতে
 
     steps:
       - name: Checkout repo
@@ -36,8 +39,6 @@ jobs:
 
       - name: Run QBank → Quiz converter
         env:
-          FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
-          FIREBASE_SECRET: ${{ secrets.FIREBASE_SECRET }}
           GAS_URL: ${{ secrets.VITE_GAS_URL }}
           GAS_SECRET: ${{ secrets.GAS_SECRET }}
           GROQ_KEYS: ${{ secrets.GROQ_KEYS }}
