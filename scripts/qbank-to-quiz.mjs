@@ -9,8 +9,8 @@
  * তাই একই প্রশ্ন বারবার AI-তে পাঠানো হবে না।
  * ------------------------------------------------------------------
  * প্রয়োজনীয় ENV (GitHub Secrets থেকে আসবে):
- *   FIREBASE_URL, FIREBASE_SECRET   - dedup-এর জন্য QBank/Quiz পড়তে
- *   GAS_URL, GAS_SECRET             - Quiz sheet-এ লিখতে (অ্যাপের "GAS Secret Key")
+ *   GAS_URL, GAS_SECRET             - QBank/Quiz পড়তে (getSheetRows) আর Quiz-এ লিখতে (bulk_save_rows),
+ *                                      দুটোই সরাসরি Google Sheet ছুঁয়ে — Firebase লাগে না এখানে আর
  *   GROQ_KEYS, MISTRAL_KEYS, GEMINI_KEYS, OPENROUTER_KEYS,
  *   CEREBRAS_KEYS, TOGETHER_KEYS, FIREWORKS_KEYS, DEEPSEEK_KEYS  - AI provider key pool
  *   BATCH_SIZE       - AI-কে একবারে কতগুলো প্রশ্ন পাঠানো হবে (ডিফল্ট 15)
@@ -25,8 +25,6 @@
  * ------------------------------------------------------------------
  */
 
-const FIREBASE_URL = (process.env.FIREBASE_URL || "").replace(/\/+$/, "");
-const FIREBASE_SECRET = process.env.FIREBASE_SECRET || "";
 const GAS_URL = process.env.GAS_URL || "";
 const GAS_SECRET = process.env.GAS_SECRET || "";
 const BATCH_SIZE = parseInt(process.env.BATCH_SIZE || "15", 10);
@@ -41,10 +39,6 @@ const FILTER_AUDIENCE = parseList(process.env.FILTER_AUDIENCE);
 const FILTER_SUBJECT = parseList(process.env.FILTER_SUBJECT);
 const FILTER_SUBTOPIC = parseList(process.env.FILTER_SUBTOPIC);
 
-if (!FIREBASE_URL || !FIREBASE_SECRET) {
-  console.error("❌ FIREBASE_URL / FIREBASE_SECRET সেট করা নেই। GitHub Secrets চেক করো।");
-  process.exit(1);
-}
 if (!GAS_URL || !GAS_SECRET) {
   console.error("❌ GAS_URL / GAS_SECRET সেট করা নেই। GitHub Secrets চেক করো (অ্যাপের 'GAS Secret Key' এর মতোই)।");
   process.exit(1);
@@ -94,15 +88,17 @@ function normalizeQbankQ(s) {
   return (s || "").toString().replace(/[\s.,;:।?!—–\-()'"]/g, "").trim();
 }
 
-function toArr(raw) {
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw.map((v, i) => (v && typeof v === "object" ? { ...v, _fbKey: String(i) } : null)).filter(Boolean);
-  return Object.entries(raw).map(([k, v]) => (v && typeof v === "object" ? { ...v, _fbKey: k } : null)).filter(Boolean);
-}
-
-async function fbGet(path) {
-  const r = await fetch(`${FIREBASE_URL}/${path}.json?auth=${FIREBASE_SECRET}`);
-  return r.json();
+// ── QBank/Quiz সরাসরি Google Sheet থেকে পড়া (GAS-এর getSheetRows অ্যাকশন দিয়ে) —
+//    Firebase পুরোপুরি অফ থাকলেও কাজ করে, কারণ এটা Firebase একদম ছোঁয় না। অ্যাপের
+//    fetchSheetFallback()-এর মতোই একই GAS অ্যাকশন ব্যবহার করছে। ──
+async function gasGetSheetRows(tab) {
+  const url = `${GAS_URL}?action=getSheetRows&tab=${encodeURIComponent(tab)}&secret=${encodeURIComponent(GAS_SECRET)}`;
+  const resp = await fetch(url);
+  const data = await resp.json().catch(() => ({}));
+  if (data?.status !== "success" || !Array.isArray(data.rows)) {
+    throw new Error(`GAS getSheetRows(${tab}) ব্যর্থ: ${data?.message || "unknown error"}`);
+  }
+  return data.rows; // ইতিমধ্যে flat object array, প্রতিটাতে _fbKey আছে — sheet header টেক্সটই কী হিসেবে থাকে
 }
 
 function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
@@ -144,7 +140,7 @@ async function callProvider(cfg, prompt) {
   const resp = await fetch(`${cfg.apiBase}/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + cfg.key },
-    body: JSON.stringify({ model: cfg.model, messages: [{ role: "user", content: prompt }], max_tokens: 4000 }),
+    body: JSON.stringify({ model: cfg.model, messages: [{ role: "user", content: prompt }], max_tokens: 6000 }),
   });
   const data = await resp.json();
   if (!resp.ok) throw new Error(`[${cfg.id}] ${data?.error?.message || `HTTP ${resp.status}`}`);
@@ -191,13 +187,13 @@ async function main() {
   console.log(`🔑 মোট ${pool.length} টা key রেডি (providers: ${[...new Set(pool.map(p => p.id))].join(", ")})`);
 
   // ── QBank ও Quiz দুটোই Firebase থেকে পড়া ──
-  const [qbankRaw, quizRaw] = await Promise.all([fbGet("QBank"), fbGet("Quiz")]);
+  const [qbankRaw, quizRaw] = await Promise.all([gasGetSheetRows("QBank"), gasGetSheetRows("Quiz")]);
   const existingQuizKeys = new Set(
-    toArr(quizRaw).map(r => normalizeQbankQ(r.question || r.Question || "")).filter(Boolean)
+    quizRaw.map(r => normalizeQbankQ(r.question || r.Question || "")).filter(Boolean)
   );
   console.log(`📚 Quiz-এ ইতিমধ্যে ${existingQuizKeys.size} টা ইউনিক প্রশ্ন আছে।`);
 
-  const qbankRows = toArr(qbankRaw).map(row => {
+  const qbankRows = qbankRaw.map(row => {
     const audRaw = (row.AudienceTags || row.audienceTags || "").toString().trim();
     return {
       question: (row.question || row.Question || "").toString().trim(),
