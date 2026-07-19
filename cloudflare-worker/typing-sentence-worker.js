@@ -46,14 +46,28 @@ function buildKeyPool(env) {
   return pool;
 }
 
-function buildPrompt(weakWords, language, difficulty) {
+// ── HandKeyMap.kt-এর একই তালিকা এখানে মিরর করা হলো — ডেভেলপারের নিজের বিজয়
+// কীবোর্ড থেকে verified (main app ও Worker দুই জায়গাতেই এই একই তালিকা থাকা জরুরি,
+// একটা বদলালে আরেকটাও বদলাতে হবে) ──
+const RIGHT_HAND_CHARS = "ক খ ত থ দ ধ ব ভ ন ণ স ষ ম শ চ ছ জ ঝ ঞ হ গ ঘ ড় ঢ় ; ' ৎ ঃ ঁ , । . /";
+const LEFT_HAND_HINT = "য র ল প ফ ট ঠ ড ঢ ও আ ই ঈ উ ঊ এ ঐ অ (এবং বাকি সব স্বরচিহ্ন/কার)";
+
+function buildPrompt(weakWords, language, difficulty, weakHand) {
   const langName = language === "en" ? "ইংরেজি" : "বাংলা";
   const wordList = weakWords.slice(0, 10).join(", ");
+
+  let handInstruction = "";
+  if (language === "bn" && (weakHand === "left" || weakHand === "right")) {
+    const targetChars = weakHand === "right" ? RIGHT_HAND_CHARS : LEFT_HAND_HINT;
+    const handName = weakHand === "right" ? "ডান" : "বাম";
+    handInstruction = `\n3. ব্যবহারকারীর বিজয় কীবোর্ডে ${handName} হাতে বেশি ভুল হয় — তাই সম্ভব হলে এমন শব্দ একটু বেশি বেছে নাও যেগুলোতে এই অক্ষরগুলো আছে: ${targetChars} (তবে এটা শর্ত ১-২-এর চেয়ে কম গুরুত্বপূর্ণ, বাক্য অস্বাভাবিক লাগানো যাবে না)।`;
+  }
+
   return `তুমি একজন টাইপিং-শিক্ষক। ${langName} ভাষায় একটা প্র্যাকটিস অনুচ্ছেদ (৩০-৫০ শব্দ, difficulty: ${difficulty}) বানাও।
 
-শর্ত (দুটোই মানতে হবে):
+শর্ত (প্রথম দুটো অবশ্যই মানতে হবে):
 1. এই শব্দগুলো অনুচ্ছেদে স্বাভাবিকভাবে ছড়িয়ে থাকতে হবে (মোট শব্দের প্রায় ১০%, জোর করে গোঁজা মনে না হয়): ${wordList}
-2. বাকি ~৯০% সম্পূর্ণ নতুন, অর্থবহ, প্রাসঙ্গিক কন্টেন্ট হবে — কোনো বিষয়ে একটা স্বাভাবিক অনুচ্ছেদের মতো পড়তে হবে, তালিকাভুক্ত শব্দ গোঁজার জন্য বানানো কৃত্রিম বাক্য না।
+2. বাকি ~৯০% সম্পূর্ণ নতুন, অর্থবহ, প্রাসঙ্গিক কন্টেন্ট হবে — কোনো বিষয়ে একটা স্বাভাবিক অনুচ্ছেদের মতো পড়তে হবে, তালিকাভুক্ত শব্দ গোঁজার জন্য বানানো কৃত্রিম বাক্য না।${handInstruction}
 
 উত্তর অবশ্যই শুধুমাত্র একটা বৈধ JSON object হবে, অন্য কোনো টেক্সট/মার্কডাউন ছাড়া, ঠিক এই ফরম্যাটে:
 {"passage":"..."}`;
@@ -135,6 +149,7 @@ export default {
     const weakWords = Array.isArray(body.weakWords) ? body.weakWords.filter(w => typeof w === "string" && w.trim()) : [];
     const language = body.language === "en" ? "en" : "bn";
     const difficulty = ["easy", "medium", "hard"].includes(body.difficulty) ? body.difficulty : "medium";
+    const weakHand = (body.weakHand === "left" || body.weakHand === "right") ? body.weakHand : null;
 
     if (weakWords.length === 0) {
       return new Response(JSON.stringify({ error: "weakWords খালি" }), { status: 400 });
@@ -146,7 +161,7 @@ export default {
     }
 
     try {
-      const prompt = buildPrompt(weakWords, language, difficulty);
+      const prompt = buildPrompt(weakWords, language, difficulty, weakHand);
       const { passage, providerId } = await callRotating(pool, prompt);
       return new Response(JSON.stringify({ passage, provider: providerId, usedWords: weakWords }), {
         headers: { "Content-Type": "application/json" },
