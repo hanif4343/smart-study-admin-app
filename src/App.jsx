@@ -2729,17 +2729,22 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও"); return{added:0,skipped:0,failedRows:rows}; }
   const CHUNK=Math.max(1,chunkSize||100); // চাইলে ছোট চাংক (৫-১০, এমনকি ১) দিয়ে বেশি live প্রোগ্রেস আপডেট পাওয়া যায় — trade-off: ছোট চাংক = বেশি রিকোয়েস্ট = মোট সময় একটু বেশি
   const totalChunks=Math.ceil(rows.length/CHUNK);
-  let added=0,skipped=0; const failedRows=[];
+  let added=0,skipped=0,firebaseSyncFailed=false; const failedRows=[];
   for(let i=0;i<rows.length;i+=CHUNK){
     const chunk=rows.slice(i,i+CHUNK);
+    const isLast=(i+CHUNK>=rows.length);
     try{
-      const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({secret:gasSecret,type:"bulk_save_rows",targetTab,rows:chunk})});
+      const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({secret:gasSecret,type:"bulk_save_rows",targetTab,rows:chunk,sync:isLast})});
       const data=await resp.json().catch(()=>({}));
       if(data.result==="error"){ failedRows.push(...chunk); continue; }
       added+=(data.added||0); skipped+=(data.skipped||0);
+      if(isLast && data.firebaseSynced===false) firebaseSyncFailed=true;
     }catch(e){ failedRows.push(...chunk); }
     onProgress?.({done:Math.min(i+CHUNK,rows.length),total:rows.length,chunkIndex:Math.floor(i/CHUNK)+1,totalChunks});
   }
+  // ⚡ Sheet-এ সেভ ঠিকই হয়ে গেছে, কিন্তু GAS-এর Firebase mirror-sync ব্যর্থ হলে dedupe-এর
+  // "Quiz-এ আছে" কাউন্ট আর existingQuizKeys পুরনো থেকে যাবে — সেটা এখন চুপচাপ না থেকে জানানো হয়।
+  if(firebaseSyncFailed) push?.("error","⚠️ Sheet-এ সেভ হয়েছে কিন্তু Firebase sync ব্যর্থ","'Quiz-এ আছে' কাউন্ট পুরনো থাকতে পারে — একটু পরে আবার চেষ্টা করো, বা GAS Executions log চেক করো");
   return{added,skipped,failedRows};
 }
 
