@@ -2720,6 +2720,47 @@ function removeFailedItems(keys){
   saveFailedQueueList(loadFailedQueue().filter(f=>!keys.includes(f._key)));
 }
 
+/* ── Typing Passage সিম্পল আপলোডার — শুধু ভাষা + প্যাসেজ, লেভেল/টাইটেল লাগবে না ── */
+function TypingUploaderPage({push}){
+  const[language,setLanguage]=useState("bn");
+  const[content,setContent]=useState("");
+  const[saving,setSaving]=useState(false);
+  const gasSecret=loadSharedGasSecret();
+
+  const submit=async()=>{
+    if(!content.trim()){push("warn","প্যাসেজ লিখুন","");return;}
+    if(!GAS){push("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var চেক করো");return;}
+    if(!gasSecret){push("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও");return;}
+    setSaving(true);
+    try{
+      const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},
+        body:JSON.stringify({secret:gasSecret,targetTab:"Typing",language,content,timestamp:nowTs()})});
+      const data=await resp.json().catch(()=>({}));
+      if(data.result==="success"){push("success","✅ প্যাসেজ সেভ হয়েছে",`ID: ${data.id}`);setContent("");}
+      else push("error","ব্যর্থ",data.error||"অজানা সমস্যা");
+    }catch(e){push("error","ব্যর্থ",e.message);}
+    setSaving(false);
+  };
+
+  return(
+    <div className="page">
+      <div className="ftabs">
+        {[["bn","🇧🇩 বাংলা"],["en","🇬🇧 English"]].map(([code,label])=>
+          <button key={code} className={`ftab${language===code?" on":""}`} onClick={()=>setLanguage(code)}>{label}</button>
+        )}
+      </div>
+      <div className="fld">
+        <label>📄 প্যাসেজ</label>
+        <textarea className="ta" value={content} onChange={e=>setContent(e.target.value)}
+          style={{minHeight:260}} placeholder="টাইপিং প্যাসেজ এখানে লিখুন বা পেস্ট করুন..."/>
+      </div>
+      <button className="btn bg" disabled={saving||!content.trim()} onClick={submit}>
+        {saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করো"}
+      </button>
+    </div>
+  );
+}
+
 /* ── Google Sheet-এ bulk rows সেভ (GAS backend "bulk_save_rows" endpoint) ──
    onProgress (ঐচ্ছিক) — প্রতিটা chunk শেষ হলে {done,total,chunkIndex,totalChunks} দিয়ে কল হয়,
    caller চাইলে progress bar/timer দেখাতে পারে। না দিলে আগের মতোই কাজ করবে। */
@@ -6733,6 +6774,7 @@ const NAV=[
       {id:"qbankconv",   icon:"🔁", label:"QBank→Quiz"},
       {id:"questiongen", icon:"🧬", label:"AI প্রশ্ন"},
       {id:"aiimport",    icon:"📸", label:"AI Import"},
+      {id:"typing",      icon:"⌨️", label:"Typing"},
     ]
   },
 ];
@@ -7510,7 +7552,7 @@ export default function App(){
       </div>
 
       {/* Uploader hub — Bulk Upload / AI Job / AI প্রশ্ন / AI Import, একটার আন্ডারে, ট্যাব দিয়ে সুইচ */}
-      <div style={{display:(page==="bulkupload"||page==="joblauncher"||page==="qbankconv"||page==="questiongen"||page==="aiimport")?"block":"none"}}>
+      <div style={{display:(page==="bulkupload"||page==="joblauncher"||page==="qbankconv"||page==="questiongen"||page==="aiimport"||page==="typing")?"block":"none"}}>
         <div className="page" style={{paddingTop:0}}>
           <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
             <div className="atabs">
@@ -7519,6 +7561,7 @@ export default function App(){
               <button className={`atab${page==="qbankconv"?" on":""}`} onClick={()=>goPage("qbankconv")} style={{color:page==="qbankconv"?C.green:undefined}}>🔁 QBank→Quiz</button>
               <button className={`atab${page==="questiongen"?" on":""}`} onClick={()=>goPage("questiongen")} style={{color:page==="questiongen"?C.purple:undefined}}>🧬 AI প্রশ্ন</button>
               <button className={`atab${page==="aiimport"?" on":""}`} onClick={()=>goPage("aiimport")}>📸 AI Import</button>
+              <button className={`atab${page==="typing"?" on":""}`} onClick={()=>goPage("typing")}>⌨️ Typing</button>
             </div>
           </div>
           <div style={{display:page==="bulkupload" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill(null)}/></div>
@@ -7526,6 +7569,7 @@ export default function App(){
           <div style={{display:page==="qbankconv"?"block":"none"}}><QBankConverterTab push={push} tick={tick}/></div>
           <div style={{display:page==="questiongen"?"block":"none"}}><QuestionGenTab push={push} tick={tick}/></div>
           <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
+          <div style={{display:page==="typing"?"block":"none"}}><TypingUploaderPage push={push}/></div>
         </div>
       </div>
 
