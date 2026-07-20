@@ -152,8 +152,8 @@ function isDuplicate(sheet, subject, questionText, sub_topic) {
 function syncToFirebase(sheetName, folderName) {
   try {
     var cfg=getProps(), ss=SpreadsheetApp.getActiveSpreadsheet(), fbSh=ss.getSheetByName(sheetName);
-    if(!fbSh)return;
-    var fbData=fbSh.getDataRange().getValues(); if(fbData.length<2)return;
+    if(!fbSh)return true;
+    var fbData=fbSh.getDataRange().getValues(); if(fbData.length<2)return true;
     var fbHdr=fbData[0];
     if(sheetName==="Reports"){
       var keyedData={};
@@ -161,16 +161,21 @@ function syncToFirebase(sheetName, folderName) {
         var rec={}; for(var j=0;j<fbHdr.length;j++){var k=fbHdr[j].toString().trim();if(k){var v=fbData[i][j];rec[k]=(v instanceof Date)?Utilities.formatDate(v,"GMT+6","dd-MM-yyyy HH:mm:ss"):v.toString();}}
         keyedData["row_"+i]=rec;
       }
-      UrlFetchApp.fetch(cfg.FIREBASE_URL+folderName+".json?auth="+cfg.SECRET_KEY,{method:"put",contentType:"application/json",payload:JSON.stringify(keyedData)});
-      return;
+      var repResp=UrlFetchApp.fetch(cfg.FIREBASE_URL+folderName+".json?auth="+cfg.SECRET_KEY,{method:"put",contentType:"application/json",payload:JSON.stringify(keyedData),muteHttpExceptions:true});
+      var repCode=repResp.getResponseCode();
+      if(repCode<200||repCode>=300){ Logger.log("Firebase Sync HTTP "+repCode+" ("+sheetName+"): "+repResp.getContentText()); return false; }
+      return true;
     }
     var jsonData=[];
     for(var i2=1;i2<fbData.length;i2++){
       var rec2={}; for(var j2=0;j2<fbHdr.length;j2++){var k2=fbHdr[j2].toString().trim();if(k2){var v2=fbData[i2][j2];rec2[k2]=(v2 instanceof Date)?Utilities.formatDate(v2,"GMT+6","dd-MM-yyyy HH:mm:ss"):v2;}}
       jsonData.push(rec2);
     }
-    UrlFetchApp.fetch(cfg.FIREBASE_URL+folderName+".json?auth="+cfg.SECRET_KEY,{method:"put",contentType:"application/json",payload:JSON.stringify(jsonData)});
-  } catch(e){ Logger.log("Firebase Sync Error: "+e.toString()); }
+    var resp=UrlFetchApp.fetch(cfg.FIREBASE_URL+folderName+".json?auth="+cfg.SECRET_KEY,{method:"put",contentType:"application/json",payload:JSON.stringify(jsonData),muteHttpExceptions:true});
+    var code=resp.getResponseCode();
+    if(code<200||code>=300){ Logger.log("Firebase Sync HTTP "+code+" ("+sheetName+"): "+resp.getContentText()); return false; }
+    return true;
+  } catch(e){ Logger.log("Firebase Sync Error ("+sheetName+"): "+e.toString()); return false; }
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -425,6 +430,54 @@ function doGet(e) {
     return json({result:"success",fcm:sendFCMToPhone(phone,"✅ রিপোর্ট সমাধান!",'"'+subject+'" সংশোধন হয়েছে।',{type:"report_resolved",questionId:qid,url:"report"})});
   }
 
+  // ── sendChallengeNotification ──
+  if (action === "sendChallengeNotification") {
+    var toPhone   = (e.parameter.toPhone || "").toString().replace(/^'+/, "").trim();
+    var fromName  = decodeURIComponent(e.parameter.fromName  || "কেউ");
+    var fromPhone = (e.parameter.fromPhone || "").toString().replace(/^'+/, "").trim();
+    var subject   = decodeURIComponent(e.parameter.subject   || "");
+    var subTopic  = decodeURIComponent(e.parameter.subTopic  || "");
+    var chalId    = (e.parameter.challengeId || "").toString().trim();
+    var qCount    = (e.parameter.questionCount || "10").toString().trim();
+    var wagerXp   = (e.parameter.wagerXp || "0").toString().trim();
+
+    if (!toPhone) return json({ result: "error", error: "toPhone missing" });
+
+    var title = "⚔️ চ্যালেঞ্জ পাঠিয়েছে!";
+    var body  = fromName + " তোমাকে " + (subject || "Quiz") + " চ্যালেঞ্জ করেছে। " +
+                qCount + "টি প্রশ্ন · " + wagerXp + " XP বাজি!";
+
+    var extraData = {
+      type:        "challenge_invite",
+      challengeId: chalId,
+      fromPhone:   fromPhone,
+      fromName:    fromName,
+      subject:     subject,
+      subTopic:    subTopic,
+      url:         "challenge"
+    };
+
+    // Firebase Notifications-এও লিখে রাখো (in-app bell এর জন্য)
+    var safeToPhone = toPhone.replace(/[.#$\[\]\s]/g, "_");
+    var notifPayload = {
+      type:        "challenge_invite",
+      title:       title,
+      body:        body,
+      challengeId: chalId,
+      fromPhone:   fromPhone,
+      time:        new Date().toLocaleString(),
+      read:        false
+    };
+    try {
+      UrlFetchApp.fetch(
+        cfg.FIREBASE_URL + "Notifications/" + safeToPhone + "/notif_" + Date.now() + ".json?auth=" + cfg.SECRET_KEY,
+        { method: "put", contentType: "application/json", payload: JSON.stringify(notifPayload), muteHttpExceptions: true }
+      );
+    } catch(ne) {}
+
+    return json({ result: "success", fcm: sendFCMToPhone(toPhone, title, body, extraData) });
+  }
+
   // ── personalNotify ──
   if (action==="personalNotify") {
     var phone=(e.parameter.phone||"").toString().replace(/^'+/,'').trim();
@@ -558,6 +611,33 @@ function doGet(e) {
     return json({techniques:techs});
   }
 
+  // ── getSheetRows — সরাসরি Google Sheet থেকে ফুল রো পড়া (Firebase বাইপাস করে) ──
+  // Firebase read ব্যর্থ হলে (quota শেষ/নেট সমস্যা) frontend-এর loadPath() স্বয়ংক্রিয়ভাবে
+  // এটাকে fallback হিসেবে ব্যবহার করে (SHEET_FALLBACK_TABS: Quiz/QBank/Study/Typing)।
+  if (action==="getSheetRows") {
+    var grTab=(e.parameter.tab||"QBank").toString().trim();
+    var grMap={quiz:"Quiz",qbank:"QBank",study:"Study",typing:"Typing",users:"Users",notice:"Notice",reports:"Reports"};
+    grTab=grMap[grTab.toLowerCase()]||grTab;
+    var grSs=SpreadsheetApp.getActiveSpreadsheet(), grSh=grSs.getSheetByName(grTab);
+    if(!grSh) return json({status:"error",message:"Sheet not found: "+grTab});
+    if(grSh.getLastRow()<2) return json({status:"success",tab:grTab,rows:[]});
+    var grData=grSh.getDataRange().getValues();
+    var grHdr=grData[0];
+    var grRows=[];
+    for(var gri=1;gri<grData.length;gri++){
+      var grRec={};
+      for(var grj=0;grj<grHdr.length;grj++){
+        var grKey=grHdr[grj].toString().trim();
+        if(!grKey)continue;
+        var grVal=grData[gri][grj];
+        grRec[grKey]=(grVal instanceof Date)?Utilities.formatDate(grVal,"GMT+6","dd-MM-yyyy HH:mm:ss"):grVal;
+      }
+      grRec._fbKey=grRec.id||("row"+(gri+1));
+      grRows.push(grRec);
+    }
+    return json({status:"success",tab:grTab,rows:grRows});
+  }
+
   // ── getAI ──
   if (action==="getAI") {
     var promptText=e.parameter.prompt, apiKey=cfg.GEMINI_API_KEY;
@@ -594,6 +674,48 @@ function doPost(e) {
     var receivedSecret = params.secret || e.parameter.secret || "";
     if (expectedSecret && receivedSecret !== expectedSecret) {
       return json({ status: "error", message: "Unauthorized" });
+    }
+
+    // ── QBank→Quiz Converter (Admin App AI Job) বাল্ক ইনসার্ট ──
+    // এটা শুধু Sheet-এ লেখে, কখনো syncToFirebase() কল করে না — ইচ্ছাকৃতভাবে,
+    // কারণ Firebase quota রিসেট না হওয়া পর্যন্ত এই ডেটা শুধু Sheet-এ staging হিসেবে থাকবে।
+    if (params.type === "qbank_to_quiz_bulk") {
+      var targetSheetName = params.targetSheet || "Quiz";
+      var qcSh = ss.getSheetByName(targetSheetName);
+      if (!qcSh) return json({ result: "error", error: "Sheet not found: " + targetSheetName });
+
+      var rows = params.rows || [];
+      var added = 0, skipped = 0, errors = [];
+
+      rows.forEach(function(r) {
+        try {
+          if (isDuplicate(qcSh, r.subject || '', r.question || '', r.sub_topic || '')) {
+            skipped++;
+            return;
+          }
+          var newId = getNextId(targetSheetName);
+          var rowData = [
+            newId,
+            r.question || '',
+            r.opt1 || '', r.opt2 || '', r.opt3 || '', r.opt4 || '',
+            r.correct || '',
+            r.subject || '',
+            r.sub_topic || '',
+            r.explanation || '',
+            r.technique || '',
+            r.prevExam || '',              // QBank-এর মূল exam paper-এর নাম এখানে থাকবে
+            r.qType || 'MCQ',
+            r.timestamp || new Date().toLocaleString('bn-BD'),
+            r.audienceTags || 'Job'
+          ];
+          qcSh.appendRow(rowData);
+          added++;
+        } catch (rowErr) {
+          errors.push({ q: (r.question || '').substring(0, 40), err: rowErr.toString() });
+        }
+      });
+
+      return json({ result: "success", added: added, skipped: skipped, errors: errors });
     }
 
     if(params.action==="getAI"||e.parameter.action==="getAI"){
@@ -664,6 +786,76 @@ function doPost(e) {
       var searchPhone=params.phone.toString().trim().replace(/^'+/,'');
       for(var pr=1;pr<pRows.length;pr++){var rowPhone=pRows[pr][pPhCol].toString().trim().replace(/^'+/,'');if(rowPhone.replace(/^0+/,'')===searchPhone.replace(/^0+/,'')){pSh.getRange(pr+1,pPicCol+1).setValue(params.picture_url);syncToFirebase("Users","Users");return txt("Picture Updated");}}
       return txt("User not found");
+    }
+
+    // ── bulk_save_rows — একসাথে অনেক রো Google Sheet-এ সেভ (Save Location = "Google Sheet"
+    //    বেছে নিলে QBank→Quiz কনভার্টার, AI Import/OCR direct-submit, বাল্ক আপলোডার — সবাই এই
+    //    endpoint ব্যবহার করে)। প্রতিটা রো আলাদাভাবে duplicate-check হয়, শেষে একবারই Firebase sync হয়। ──
+    if(params.type==="bulk_save_rows"){
+      var bTab=params.targetTab||params.sheet;
+      var bSh=ss.getSheetByName(bTab);
+      if(!bSh)return json({result:"error",error:"Sheet not found: "+bTab});
+      var bRows=params.rows||[];
+      if(!bRows.length) return json({result:"success",added:0,skipped:0});
+
+      // ⚡ ফিক্স: আগে প্রতিটা রো-এর জন্য isDuplicate() পুরো শীট আবার getDataRange() দিয়ে
+      //    পড়তো, আর appendRow() আলাদাভাবে কল হতো — কয়েকশো প্রশ্নে এটা শয়ে শয়ে ফুল-শীট রিড
+      //    করতো বলে সেভ অস্বাভাবিক ধীর হয়ে যাচ্ছিলো (কখনো ৪৭৯টার জন্য মিনিটের পর মিনিট)।
+      //    এখন শীট একবারই পড়া হয়, ডুপ্লিকেট চেক in-memory Set দিয়ে হয়, আর সব নতুন রো
+      //    শেষে একটাই setValues() কলে ব্যাচ-লেখা হয়।
+      var bData=bSh.getDataRange().getValues();
+      var bHdr=bData.length?bData[0].map(function(h){return h.toString().toLowerCase().trim();}):[];
+      var bQIdx=bHdr.indexOf("question"), bSubIdx=bHdr.indexOf("subject"), bStIdx=bHdr.indexOf("sub_topic");
+      if(bStIdx===-1)bStIdx=bHdr.indexOf("subtopic");
+      var bNorm=function(s){return (s||'').toString().toLowerCase().replace(/\s+/g,' ').trim().substring(0,100);};
+      var bExisting={};
+      if(bQIdx!==-1){
+        for(var ber=1;ber<bData.length;ber++){
+          var bek=bNorm(bData[ber][bQIdx])+"|"+(bStIdx!==-1?bNorm(bData[ber][bStIdx]):"")+"|"+(bSubIdx!==-1?bNorm(bData[ber][bSubIdx]):"");
+          bExisting[bek]=true;
+        }
+      }
+
+      var bLock=LockService.getScriptLock(); bLock.waitLock(15000);
+      var bAdded=0, bSkipped=0;
+      try{
+        var bProp=PropertiesService.getScriptProperties(), bIdKey="MAX_ID_"+bTab.toUpperCase();
+        var bCurId=parseInt(bProp.getProperty(bIdKey)||"0");
+        if(bCurId<1000 && bSh.getLastRow()>1){
+          var bIdCol=bSh.getRange(2,1,bSh.getLastRow()-1,1).getValues().map(function(r){return parseInt(r[0])||0;});
+          bCurId=Math.max.apply(null,[1000].concat(bIdCol));
+        }
+        if(bCurId<1000)bCurId=1000;
+
+        var bNewRows=[];
+        for(var bi=0;bi<bRows.length;bi++){
+          var row=bRows[bi]||{};
+          try{
+            var bKey=bNorm(row.question)+"|"+bNorm(row.sub_topic)+"|"+bNorm(row.subject);
+            if(row.question && bExisting[bKey]){ bSkipped++; continue; }
+            var bId=row.editId||(bCurId+1);
+            var bLine=[];
+            if(bTab==="Quiz")      bLine=[bId,row.question,row.opt1,row.opt2,row.opt3,row.opt4,row.correct,row.subject,row.sub_topic,row.explanation,row.technique||"",row.prevExam||"",row.qType||"MCQ",row.timestamp||new Date().toLocaleString(),row.audienceTags||""];
+            else if(bTab==="QBank")bLine=[bId,row.question,row.opt1,row.opt2,row.opt3,row.opt4,row.correct,row.subject,row.topic||"",row.sub_topic,row.explanation,row.technique||"",row.qType||"MCQ",row.mainQpaper||"",row.timestamp||new Date().toLocaleString(),row.audienceTags||""];
+            else if(bTab==="Study")bLine=[bId,row.subject,row.sub_topic,row.question||"",row.correct||"",row.explanation,row.technique||"",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",row.visualUrl||""];
+            else if(bTab==="Typing")bLine=[bId,row.title||"",row.language||"",row.level||"",row.content||""];
+            if(bLine.length===0){ bSkipped++; continue; }
+            if(!row.editId)bCurId++;
+            bNewRows.push(bLine);
+            bExisting[bKey]=true; // একই ব্যাচে দুইবার একই প্রশ্ন থাকলে দ্বিতীয়টাও বাদ পড়বে
+            bAdded++;
+          }catch(rowErr){ bSkipped++; }
+        }
+        if(bNewRows.length){
+          bSh.getRange(bSh.getLastRow()+1,1,bNewRows.length,bNewRows[0].length).setValues(bNewRows);
+        }
+        bProp.setProperty(bIdKey,bCurId.toString());
+      } finally { bLock.releaseLock(); }
+
+      var bShouldSync = (params.sync!==undefined) ? !!params.sync : true; // পুরনো কলার (sync ফ্ল্যাগ ছাড়া) থাকলে আগের মতোই প্রতিবার সিঙ্ক হবে, নতুন ফ্রন্টএন্ড শুধু শেষ চাংকেই sync:true পাঠায়
+      var bSyncOk = true;
+      if(bShouldSync) bSyncOk = syncToFirebase(bTab,bTab);
+      return json({result:"success",added:bAdded,skipped:bSkipped,firebaseSynced:bSyncOk});
     }
 
     // ── নতুন User signup ──
@@ -742,3 +934,62 @@ function manualSyncAll() {
 
 function txt(s){return ContentService.createTextOutput(s).setMimeType(ContentService.MimeType.TEXT);}
 function json(o){return ContentService.createTextOutput(JSON.stringify(o)).setMimeType(ContentService.MimeType.JSON);}
+
+/* ══════════════════════════════════════════════════════════
+   BACKUP-ONLY: Firebase → Sheet (read-only)
+   এই ফাংশনগুলোর একটাও Firebase-এ কখনো WRITE করে না, শুধু GET/read করে।
+   কোনো automatic trigger নেই — Apps Script এডিটরে ফাংশন বেছে ▶ Run চেপে
+   ম্যানুয়ালি চালাতে হবে।
+══════════════════════════════════════════════════════════ */
+function backupFirebaseToSheet_Quiz()  { pullFirebaseToSheet_("Quiz"); }
+function backupFirebaseToSheet_QBank() { pullFirebaseToSheet_("QBank"); }
+function backupFirebaseToSheet_Study() { pullFirebaseToSheet_("Study"); }
+
+function backupFirebaseToSheet_All() {
+  pullFirebaseToSheet_("Quiz");
+  pullFirebaseToSheet_("QBank");
+  pullFirebaseToSheet_("Study");
+}
+
+function pullFirebaseToSheet_(sheetName) {
+  var cfg = getProps();
+  var ss  = SpreadsheetApp.getActiveSpreadsheet();
+  var sh  = ss.getSheetByName(sheetName);
+  if (!sh) { Logger.log("Sheet not found: " + sheetName); return; }
+
+  var url  = cfg.FIREBASE_URL + sheetName + ".json?auth=" + cfg.SECRET_KEY;
+  var resp = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+  if (resp.getResponseCode() !== 200) {
+    Logger.log("Firebase read ব্যর্থ (" + sheetName + "): " + resp.getContentText());
+    return;
+  }
+
+  var raw = JSON.parse(resp.getContentText());
+  if (!raw) { Logger.log("Firebase-এ কোনো ডেটা নেই: " + sheetName); return; }
+
+  var lastCol = sh.getLastColumn();
+  var headerRow = lastCol > 0 ? sh.getRange(1, 1, 1, lastCol).getValues()[0] : [];
+  if (headerRow.length === 0) { Logger.log("Header ফাঁকা, আগে header বসাও: " + sheetName); return; }
+
+  var keys = Array.isArray(raw) ? raw.map(function(_, i){ return i; }) : Object.keys(raw);
+  var rows = [];
+  keys.forEach(function(k) {
+    var rec = raw[k];
+    if (!rec || typeof rec !== "object") return;
+    var row = headerRow.map(function(h) {
+      var hh = h.toString().trim();
+      if (!hh) return "";
+      if (rec.hasOwnProperty(hh)) return rec[hh];
+      var lower = hh.toLowerCase();
+      for (var rk in rec) { if (rk.toLowerCase() === lower) return rec[rk]; }
+      return "";
+    });
+    rows.push(row);
+  });
+
+  var lastRow = sh.getLastRow();
+  if (lastRow > 1) sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).clearContent();
+  if (rows.length > 0) sh.getRange(2, 1, rows.length, headerRow.length).setValues(rows);
+
+  Logger.log("✅ " + sheetName + " ব্যাকআপ সম্পন্ন — " + rows.length + " রো (Firebase → Sheet, read-only)।");
+}
