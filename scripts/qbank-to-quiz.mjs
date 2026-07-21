@@ -123,6 +123,19 @@ ${JSON.stringify(TAXONOMY, null, 2)}
 ${JSON.stringify(batch.map(b => ({ question: b.question, opt1: b.opt1, opt2: b.opt2, opt3: b.opt3, opt4: b.opt4, correct: b.correct, explanation: b.explanation })), null, 2)}`;
 }
 
+// ── ব্যাখ্যা-শুধু ফলব্যাক প্রম্পট — যদি মূল কনভার্সন কলে কোনো প্রশ্নের explanation
+//    ফাঁকা/মিসিং থাকে, এটা দিয়ে আলাদাভাবে সেটুকু পূরণ করা হয় (generate-explanations.mjs
+//    এর buildPrompt-এর সাথেই মিলিয়ে রাখা) ──
+function buildExplanationOnlyPrompt(question, correct) {
+  return `আমি একজন বাংলাদেশের ছাত্র, পরীক্ষার প্রস্তুতি নিচ্ছি।
+নিচের প্রশ্নের উত্তরের ব্যাখ্যা ঠিক ৩ লাইনে, সহজ বাংলায়, সংক্ষেপে দাও। সিরিয়াল/নাম্বারিং ছাড়া, সরাসরি প্যারাগ্রাফের মতো লিখবে।
+
+প্রশ্ন: ${question}${correct ? `\nউত্তর: ${correct}` : ""}
+
+শুধু ব্যাখ্যাটাই লিখবে, অন্য কিছু বলবে না।`;
+}
+
+
 async function callProvider(cfg, prompt) {
   if (cfg.kind === "gemini") {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.model)}:generateContent`;
@@ -236,6 +249,7 @@ async function main() {
 
   let cursor = 0, aiOk = 0, aiFail = 0;
   let totalAdded = 0, totalSkipped = 0, totalSaveFailed = 0;
+  let explFallbackOk = 0, explFallbackFail = 0;
   let pending = []; // GAS-এ পাঠানোর জন্য জমা হওয়া রো — SAVE_CHUNK_SIZE ছুঁলেই ফ্লাশ হবে
 
   async function flush(sync) {
@@ -269,9 +283,24 @@ async function main() {
       if (Array.isArray(parsed)) {
         for (const p of parsed) {
           const src = batch.find(b => normalizeQbankQ(b.question) === normalizeQbankQ(p.question));
+          let explanation = (p.explanation || "").toString().trim();
+          if (!explanation) {
+            // মূল কনভার্সন কলে এই প্রশ্নের ব্যাখ্যা ফাঁকা এসেছে — এখনই আলাদাভাবে পূরণ করা হচ্ছে,
+            // যাতে Quiz sheet-এ কখনো ব্যাখ্যা-ফাঁকা প্রশ্ন না ঢোকে (আলাদা explanation-gen automation
+            // চালানো ছাড়াই)
+            try {
+              const { text: expText, usedIdx: expIdx } = await callRotating(pool, cursor, buildExplanationOnlyPrompt(p.question, p.correct));
+              cursor = (expIdx + 1) % pool.length;
+              explanation = expText;
+              explFallbackOk++;
+            } catch (ee) {
+              explFallbackFail++;
+              console.log(`⚠️ ব্যাখ্যা ফলব্যাক ব্যর্থ (প্রশ্ন খালি ব্যাখ্যা নিয়েই সেভ হবে): ${ee.message}`);
+            }
+          }
           pending.push({
             question: p.question, opt1: p.opt1, opt2: p.opt2, opt3: p.opt3, opt4: p.opt4,
-            correct: p.correct, subject: p.subject, sub_topic: p.sub_topic, explanation: p.explanation,
+            correct: p.correct, subject: p.subject, sub_topic: p.sub_topic, explanation,
             qType: "MCQ", prevExam: (src?.examPapers || []).join(", "),
             audienceTags: src?.audienceTags || "Job", timestamp: nowTs(),
           });
@@ -289,7 +318,7 @@ async function main() {
   }
   await flush(true); // শেষবার — এটাতেই Firebase sync হবে
 
-  console.log(`\n🎯 এই রান শেষ — AI ব্যাচ সফল: ${aiOk}, ব্যর্থ: ${aiFail} | Sheet-এ যোগ: ${totalAdded}, duplicate বাদ: ${totalSkipped}, সেভ-ব্যর্থ: ${totalSaveFailed}`);
+  console.log(`\n🎯 এই রান শেষ — AI ব্যাচ সফল: ${aiOk}, ব্যর্থ: ${aiFail} | Sheet-এ যোগ: ${totalAdded}, duplicate বাদ: ${totalSkipped}, সেভ-ব্যর্থ: ${totalSaveFailed} | ব্যাখ্যা ফলব্যাক — সফল: ${explFallbackOk}, ব্যর্থ: ${explFallbackFail}`);
 }
 
 main().catch(e => { console.error("💥 মূল এরর:", e); process.exit(1); });
