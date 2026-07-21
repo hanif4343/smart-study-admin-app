@@ -4173,7 +4173,12 @@ function loadGhCfg(){
   return defaults;
 }
 function saveGhCfgLS(cfg){
-  try{ localStorage.setItem(LS_GH_CFG, JSON.stringify(cfg)); }catch{}
+  // ⚠️ টোকেন কপি-পেস্ট করার সময় প্রায়ই সামনে/পেছনে স্পেস বা নতুন-লাইন চলে আসে —
+  // এটা Authorization header-কে invalid করে দেয় আর GitHub "Bad credentials" রিটার্ন
+  // করে (401), যদিও টোকেন আসলে ঠিকই আছে। তাই সেভ করার আগে সবসময় trim করো।
+  const clean = {...cfg, token: (cfg.token||"").trim(), repo: (cfg.repo||"").trim()};
+  try{ localStorage.setItem(LS_GH_CFG, JSON.stringify(clean)); }catch{}
+  return clean;
 }
 
 function JobCheckList({options,selected,onToggle,emptyText}){
@@ -4267,20 +4272,23 @@ function JobLauncherTab({push,tick}){
   const toggle=(arr,setArr,val)=>{ setArr(arr.includes(val)? arr.filter(x=>x!==val) : [...arr,val]); };
 
   const saveCfg=()=>{
-    saveGhCfgLS(cfg);
+    const clean=saveGhCfgLS(cfg);
+    setCfg(clean);
     setEditingToken(false);
     setStatus({type:"ok",msg:"✅ GitHub সেটিংস এই ডিভাইসে সেভ হয়ে গেছে।"});
   };
 
   const trigger=async()=>{
-    if(!cfg.token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
-    if(!cfg.repo||!cfg.repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
+    const token=(cfg.token||"").trim();
+    const repo=(cfg.repo||"").trim();
+    if(!token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
+    if(!repo||!repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
     setBusy(true);
     setStatus({type:"info",msg:"পাঠানো হচ্ছে..."});
     try{
-      const resp=await fetch(`https://api.github.com/repos/${cfg.repo}/actions/workflows/${cfg.workflowExplain}/dispatches`,{
+      const resp=await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${cfg.workflowExplain}/dispatches`,{
         method:"POST",
-        headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+cfg.token,"Content-Type":"application/json"},
+        headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+token,"Content-Type":"application/json"},
         body:JSON.stringify({ref:"main",inputs:{
           filter_audience:selAud.join(","),
           filter_subject:selSubj.join(","),
@@ -4288,6 +4296,12 @@ function JobLauncherTab({push,tick}){
         }})
       });
       if(resp.status===204){ setStatus({type:"ok",msg:"✅ চালু হয়ে গেছে! GitHub-এর Actions ট্যাবে গিয়ে দেখো।"}); }
+      else if(resp.status===401){
+        throw new Error("Bad credentials — এই টোকেনটা GitHub আর গ্রহণ করছে না (মেয়াদ শেষ/revoke হয়ে গেছে অথবা ভুল কপি হয়েছে)। নতুন টোকেন বানিয়ে 'পরিবর্তন' চেপে বসাও।");
+      }
+      else if(resp.status===404){
+        throw new Error("Repo/workflow ফাইল খুঁজে পায়নি — repo নাম (owner/name) আর workflow ফাইলের নাম ঠিক আছে কিনা দেখো, আর টোকেনে 'repo' স্কোপ আছে কিনা দেখো।");
+      }
       else{
         const data=await resp.json().catch(()=>({}));
         throw new Error(data.message||`HTTP ${resp.status}`);
@@ -5024,21 +5038,24 @@ function QuestionGenTab({push,tick}){
   const[busy,setBusy]=useState(false);
 
   const saveCfg=()=>{
-    saveGhCfgLS(cfg);
+    const clean=saveGhCfgLS(cfg);
+    setCfg(clean);
     setEditingToken(false);
     setStatus({type:"ok",msg:"✅ GitHub সেটিংস এই ডিভাইসে সেভ হয়ে গেছে।"});
   };
 
   const trigger=async()=>{
-    if(!cfg.token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
-    if(!cfg.repo||!cfg.repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
+    const token=(cfg.token||"").trim();
+    const repo=(cfg.repo||"").trim();
+    if(!token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
+    if(!repo||!repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
     if(!subject.trim()){ setStatus({type:"err",msg:"❌ Subject লিখো।"}); return; }
     setBusy(true);
     setStatus({type:"info",msg:"পাঠানো হচ্ছে..."});
     try{
-      const resp=await fetch(`https://api.github.com/repos/${cfg.repo}/actions/workflows/${cfg.workflowQuestions}/dispatches`,{
+      const resp=await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${cfg.workflowQuestions}/dispatches`,{
         method:"POST",
-        headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+cfg.token,"Content-Type":"application/json"},
+        headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+token,"Content-Type":"application/json"},
         body:JSON.stringify({ref:"main",inputs:{
           target_sheet:sheet,
           question_type:qtype,
@@ -5050,6 +5067,12 @@ function QuestionGenTab({push,tick}){
         }})
       });
       if(resp.status===204){ setStatus({type:"ok",msg:`✅ চালু হয়ে গেছে! ${count}টা "${subject}" প্রশ্ন তৈরি হচ্ছে — GitHub Actions ট্যাবে দেখো।`}); }
+      else if(resp.status===401){
+        throw new Error("Bad credentials — এই টোকেনটা GitHub আর গ্রহণ করছে না (মেয়াদ শেষ/revoke হয়ে গেছে অথবা ভুল কপি হয়েছে)। নতুন টোকেন বানিয়ে 'পরিবর্তন' চেপে বসাও।");
+      }
+      else if(resp.status===404){
+        throw new Error("Repo/workflow ফাইল খুঁজে পায়নি — repo নাম (owner/name) আর workflow ফাইলের নাম ঠিক আছে কিনা দেখো, আর টোকেনে 'repo' স্কোপ আছে কিনা দেখো।");
+      }
       else{
         const data=await resp.json().catch(()=>({}));
         throw new Error(data.message||`HTTP ${resp.status}`);
