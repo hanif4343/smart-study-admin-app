@@ -942,6 +942,24 @@ function useFB(path, tick=0){
   return state;
 }
 
+/* ── Sheet-only hook — Firebase পুরোপুরি বাইপাস করে সরাসরি GAS "getSheetRows" দিয়ে
+   Google Sheet থেকে পড়ে (fetchSheetFallback পুনর্ব্যবহার করে)। যেসব জায়গায় UI-কে
+   অবশ্যই আসল Sheet অবস্থা দেখাতে হবে (যেমন JobLauncherTab-এর "ব্যাখ্যা-ফাঁকা কতগুলো"
+   কাউন্ট — কারণ explanation-fill automation এখন Sheet-এ লেখে, Firebase-এ না,
+   sync হওয়ার আগ পর্যন্ত), সেখানে useFB-এর বদলে এটা ব্যবহার করো। ── */
+function useSheetRows(tab, tick=0){
+  const[state,setState]=useState({data:null,loading:true});
+  useEffect(()=>{
+    let cancelled=false;
+    setState(s=>({...s,loading:true}));
+    fetchSheetFallback(tab).then(data=>{
+      if(!cancelled) setState({data,loading:false});
+    });
+    return ()=>{ cancelled=true; };
+  },[tab,tick]);
+  return state;
+}
+
 /* ══════════ HELPERS ══════════ */
 const fmt=n=>(n||0).toLocaleString();
 const pct=(a,b)=>b?Math.round(a/b*100):0;
@@ -4174,9 +4192,13 @@ function JobCheckList({options,selected,onToggle,emptyText}){
 }
 
 function JobLauncherTab({push,tick}){
-  const{data:quiz}=useFB("Quiz",tick);
-  const{data:qbank}=useFB("QBank",tick);
-  const{data:study}=useFB("Study",tick);
+  // ⚠️ useFB (Firebase) না — useSheetRows দিয়ে সরাসরি Google Sheet থেকে পড়া হয়,
+  // কারণ explanation-fill automation এখন Sheet-এ লেখে (Firebase-এ sync পরে, ব্যাচে হয়)।
+  // Firebase থেকে পড়লে এখানে ভুল/পুরনো সংখ্যা দেখাতে পারে (যেমন Sheet-এ নতুন
+  // ব্যাখ্যা-ফাঁকা প্রশ্ন থাকলেও Firebase-এ sync না হওয়া পর্যন্ত "0" দেখাবে)।
+  const{data:quiz}=useSheetRows("Quiz",tick);
+  const{data:qbank}=useSheetRows("QBank",tick);
+  const{data:study}=useSheetRows("Study",tick);
 
   const allRows=useMemo(()=>{
     const rows=[];
