@@ -765,7 +765,7 @@ function doPost(e) {
       var idC=uHdr.indexOf("id"), fld=params.field.toLowerCase().trim(), fldC=uHdr.indexOf(fld);
       if(fldC===-1){for(var fc=0;fc<uHdr.length;fc++){if(uHdr[fc].includes(fld)){fldC=fc;break;}}}
       if(idC===-1||fldC===-1)return txt("Column not found");
-      for(var ur=1;ur<uRows.length;ur++){if(uRows[ur][idC].toString().trim()===params.id.toString().trim()){uSheet.getRange(ur+1,fldC+1).setValue(params.content);syncToFirebase(sName,sName);return txt("Successfully Updated");}}
+       for(var ur=1;ur<uRows.length;ur++){if(uRows[ur][idC].toString().trim()===params.id.toString().trim()){uSheet.getRange(ur+1,fldC+1).setValue(params.content);if(!params.bulkMode)syncToFirebase(sName,sName);return txt("Successfully Updated");}}
       return txt("ID not found: "+params.id);
     }
 
