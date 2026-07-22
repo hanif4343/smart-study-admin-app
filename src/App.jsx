@@ -4173,12 +4173,7 @@ function loadGhCfg(){
   return defaults;
 }
 function saveGhCfgLS(cfg){
-  // ⚠️ টোকেন কপি-পেস্ট করার সময় প্রায়ই সামনে/পেছনে স্পেস বা নতুন-লাইন চলে আসে —
-  // এটা Authorization header-কে invalid করে দেয় আর GitHub "Bad credentials" রিটার্ন
-  // করে (401), যদিও টোকেন আসলে ঠিকই আছে। তাই সেভ করার আগে সবসময় trim করো।
-  const clean = {...cfg, token: (cfg.token||"").trim(), repo: (cfg.repo||"").trim()};
-  try{ localStorage.setItem(LS_GH_CFG, JSON.stringify(clean)); }catch{}
-  return clean;
+  try{ localStorage.setItem(LS_GH_CFG, JSON.stringify(cfg)); }catch{}
 }
 
 function JobCheckList({options,selected,onToggle,emptyText}){
@@ -4268,27 +4263,49 @@ function JobLauncherTab({push,tick}){
   const[editingToken,setEditingToken]=useState(()=>!loadGhCfg().token);
   const[status,setStatus]=useState(null);
   const[busy,setBusy]=useState(false);
+  // ── এক-বারের "Firebase Re-key" অ্যাকশনের জন্য আলাদা state — GAS-কে সরাসরি কল করে,
+  // GitHub Action লাগে না ──
+  const gasSecret=loadSharedGasSecret();
+  const[rekeyBusy,setRekeyBusy]=useState(false);
+  const[rekeyStatus,setRekeyStatus]=useState(null);
+  const runRekey=async()=>{
+    if(!GAS){ setRekeyStatus({type:"err",msg:"❌ GAS URL সেট করা নেই (VITE_GAS_URL)"}); return; }
+    if(!gasSecret){ setRekeyStatus({type:"err",msg:"❌ GAS Secret Key দাও (Save Location প্যানেলে বসাও)"}); return; }
+    if(!window.confirm("⚠️ এটা Firebase-এর Quiz/QBank/Study ডেটা 'id' দিয়ে নতুন করে re-key করবে (এক-বারের কাজ)। GAS-এ updatedAt-ভিত্তিক incremental sync ডিপ্লয় করার পর, প্রথম এডিটের আগে ঠিক একবারই এটা চালানো উচিত। বারবার চালানোর দরকার নেই। এগোতে চাও?"))return;
+    setRekeyBusy(true); setRekeyStatus(null);
+    try{
+      const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},
+        body:JSON.stringify({secret:gasSecret,type:"force_full_rekey_sync",sheets:"Quiz,QBank,Study"})});
+      const data=await resp.json().catch(()=>({}));
+      if(data.result==="success"){
+        const lines=(data.details||[]).map(d=>`${d.sheet}: ${d.result&&d.result.ok?"✅ "+d.result.msg:"❌ "+((d.result&&d.result.msg)||"ব্যর্থ")}`).join("\n");
+        setRekeyStatus({type:"ok",msg:`✅ সম্পন্ন —\n${lines}`});
+      } else {
+        setRekeyStatus({type:"err",msg:"❌ ব্যর্থ: "+(data.error||data.message||"অজানা সমস্যা")});
+      }
+    }catch(e){
+      setRekeyStatus({type:"err",msg:"❌ "+e.message});
+    }
+    setRekeyBusy(false);
+  };
 
   const toggle=(arr,setArr,val)=>{ setArr(arr.includes(val)? arr.filter(x=>x!==val) : [...arr,val]); };
 
   const saveCfg=()=>{
-    const clean=saveGhCfgLS(cfg);
-    setCfg(clean);
+    saveGhCfgLS(cfg);
     setEditingToken(false);
     setStatus({type:"ok",msg:"✅ GitHub সেটিংস এই ডিভাইসে সেভ হয়ে গেছে।"});
   };
 
   const trigger=async()=>{
-    const token=(cfg.token||"").trim();
-    const repo=(cfg.repo||"").trim();
-    if(!token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
-    if(!repo||!repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
+    if(!cfg.token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
+    if(!cfg.repo||!cfg.repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
     setBusy(true);
     setStatus({type:"info",msg:"পাঠানো হচ্ছে..."});
     try{
-      const resp=await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${cfg.workflowExplain}/dispatches`,{
+      const resp=await fetch(`https://api.github.com/repos/${cfg.repo}/actions/workflows/${cfg.workflowExplain}/dispatches`,{
         method:"POST",
-        headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+token,"Content-Type":"application/json"},
+        headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+cfg.token,"Content-Type":"application/json"},
         body:JSON.stringify({ref:"main",inputs:{
           filter_audience:selAud.join(","),
           filter_subject:selSubj.join(","),
@@ -4296,12 +4313,6 @@ function JobLauncherTab({push,tick}){
         }})
       });
       if(resp.status===204){ setStatus({type:"ok",msg:"✅ চালু হয়ে গেছে! GitHub-এর Actions ট্যাবে গিয়ে দেখো।"}); }
-      else if(resp.status===401){
-        throw new Error("Bad credentials — এই টোকেনটা GitHub আর গ্রহণ করছে না (মেয়াদ শেষ/revoke হয়ে গেছে অথবা ভুল কপি হয়েছে)। নতুন টোকেন বানিয়ে 'পরিবর্তন' চেপে বসাও।");
-      }
-      else if(resp.status===404){
-        throw new Error("Repo/workflow ফাইল খুঁজে পায়নি — repo নাম (owner/name) আর workflow ফাইলের নাম ঠিক আছে কিনা দেখো, আর টোকেনে 'repo' স্কোপ আছে কিনা দেখো।");
-      }
       else{
         const data=await resp.json().catch(()=>({}));
         throw new Error(data.message||`HTTP ${resp.status}`);
@@ -4372,6 +4383,25 @@ function JobLauncherTab({push,tick}){
 
       <div style={{fontSize:11,color:C.muted,marginTop:14,lineHeight:1.6}}>
         টোকেন এই ডিভাইসেই (localStorage) সেভ থাকে, অন্য কোথাও পাঠানো হয় না। একবারই বানাতে হবে: GitHub → প্রোফাইল ছবি → Settings → Developer settings → Personal access tokens → Tokens (classic) → Generate new token (classic) → শুধু <b>repo</b> স্কোপ টিক দাও → Generate → টোকেন কপি করে উপরে পেস্ট করো।
+      </div>
+
+      {/* ── ⚠️ Danger zone — এক-বারের, ইচ্ছাকৃত Firebase re-key অ্যাকশন ── */}
+      <div style={{background:"#2a1608",border:`1px solid #6b3d12`,borderRadius:14,padding:14,marginTop:18}}>
+        <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:"#f0a850",fontWeight:700,marginBottom:6}}>⚠️ Danger Zone — Firebase Re-key (এক-বারের কাজ)</div>
+        <div style={{fontSize:12,color:C.muted,lineHeight:1.6,marginBottom:10}}>
+          নতুন <code>updatedAt</code>-ভিত্তিক incremental sync GAS-এ ডিপ্লয় করার পর, প্রথম এডিটের আগে এটা <b>ঠিক একবার</b> চালাও — Firebase-এর Quiz/QBank/Study ডেটা "id" দিয়ে re-key করবে (পুরনো নতুন সব প্রশ্ন+ব্যাখ্যা এক ধাক্কায় ঠিকভাবে বসে যাবে)। এটা একটা <b>write</b> (upload), Downloads quota ছোঁয় না। বারবার চালানোর দরকার নেই।
+        </div>
+        <button className="btn" disabled={rekeyBusy} style={{width:"100%",justifyContent:"center",background:"#c2650f",color:"#fff",padding:11,fontSize:13,fontWeight:700}} onClick={runRekey}>
+          {rekeyBusy?"⏳ Re-key হচ্ছে...":"🔄 Re-key Firebase (একবার)"}
+        </button>
+        {rekeyStatus && (
+          <div style={{marginTop:10,padding:"11px 13px",borderRadius:10,fontSize:12,lineHeight:1.6,whiteSpace:"pre-wrap",
+            background:rekeyStatus.type==="ok"?"#0d2818":"#2a0d10",
+            color:rekeyStatus.type==="ok"?C.green:"#ff8a80",
+            border:`1px solid ${rekeyStatus.type==="ok"?"#1a4d2e":"#5c1a1a"}`}}>
+            {rekeyStatus.msg}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -5038,24 +5068,21 @@ function QuestionGenTab({push,tick}){
   const[busy,setBusy]=useState(false);
 
   const saveCfg=()=>{
-    const clean=saveGhCfgLS(cfg);
-    setCfg(clean);
+    saveGhCfgLS(cfg);
     setEditingToken(false);
     setStatus({type:"ok",msg:"✅ GitHub সেটিংস এই ডিভাইসে সেভ হয়ে গেছে।"});
   };
 
   const trigger=async()=>{
-    const token=(cfg.token||"").trim();
-    const repo=(cfg.repo||"").trim();
-    if(!token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
-    if(!repo||!repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
+    if(!cfg.token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
+    if(!cfg.repo||!cfg.repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
     if(!subject.trim()){ setStatus({type:"err",msg:"❌ Subject লিখো।"}); return; }
     setBusy(true);
     setStatus({type:"info",msg:"পাঠানো হচ্ছে..."});
     try{
-      const resp=await fetch(`https://api.github.com/repos/${repo}/actions/workflows/${cfg.workflowQuestions}/dispatches`,{
+      const resp=await fetch(`https://api.github.com/repos/${cfg.repo}/actions/workflows/${cfg.workflowQuestions}/dispatches`,{
         method:"POST",
-        headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+token,"Content-Type":"application/json"},
+        headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+cfg.token,"Content-Type":"application/json"},
         body:JSON.stringify({ref:"main",inputs:{
           target_sheet:sheet,
           question_type:qtype,
@@ -5067,12 +5094,6 @@ function QuestionGenTab({push,tick}){
         }})
       });
       if(resp.status===204){ setStatus({type:"ok",msg:`✅ চালু হয়ে গেছে! ${count}টা "${subject}" প্রশ্ন তৈরি হচ্ছে — GitHub Actions ট্যাবে দেখো।`}); }
-      else if(resp.status===401){
-        throw new Error("Bad credentials — এই টোকেনটা GitHub আর গ্রহণ করছে না (মেয়াদ শেষ/revoke হয়ে গেছে অথবা ভুল কপি হয়েছে)। নতুন টোকেন বানিয়ে 'পরিবর্তন' চেপে বসাও।");
-      }
-      else if(resp.status===404){
-        throw new Error("Repo/workflow ফাইল খুঁজে পায়নি — repo নাম (owner/name) আর workflow ফাইলের নাম ঠিক আছে কিনা দেখো, আর টোকেনে 'repo' স্কোপ আছে কিনা দেখো।");
-      }
       else{
         const data=await resp.json().catch(()=>({}));
         throw new Error(data.message||`HTTP ${resp.status}`);
