@@ -2,6 +2,7 @@
 import React, { useState } from "react";
 import { C } from "../core/config.js";
 import { fbPatch } from "../core/firebase.js";
+import { invalidate } from "../core/dataCache.js";
 import { phoneKey } from "../core/utils.js";
 import { useModalBack } from "../hooks/useModalBack.js";
 import { ChangePasswordModal } from "./ChangePasswordModal.jsx";
