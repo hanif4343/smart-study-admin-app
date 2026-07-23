@@ -7,6 +7,7 @@ import { useFB, invalidate, loadPath } from "../../core/dataCache.js";
 import { toArr, nowTs, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { callAiProviderRotatingRaw } from "../../core/ocrProviders.js";
 import { saveRowsToSheet, saveRowsToFirebaseBulk } from "../../core/sheetSave.js";
+import { pushFailedItems } from "../../core/uploaderUtils.js";
 import { JOB_NONE_TAG } from "../../core/ghConfig.js";
 import {
   LS_QBC_TAXONOMY, LS_QBC_RESULTS_DRAFT, loadQbcSaveLoc, saveQbcSaveLoc,
@@ -15,6 +16,7 @@ import {
 import { JobCheckList } from "../../components/shared/JobCheckList.jsx";
 import { SaveLocationPicker } from "../../components/shared/SaveLocationPicker.jsx";
 import { JumpButton } from "../../components/shared/JumpButton.jsx";
+import { FailedQueuePanel } from "../../components/shared/FailedQueuePanel.jsx";
 
 function QBankConverterTab({push,tick}){
   // ⚡ Firebase quota বন্ধ থাকলেও কাজ চালু থাকে — useFB()-এর ভেতরের loadPath() এখন
