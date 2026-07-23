@@ -3,7 +3,8 @@ import React, { useState, useMemo } from "react";
 import { C } from "../core/config.js";
 import { useFB, invalidate } from "../core/dataCache.js";
 import { fbPatch, fbSet, fbDelete } from "../core/firebase.js";
-import { nowTs } from "../core/utils.js";
+import { nowTs, phoneKey } from "../core/utils.js";
+import { fcmNotifyPhone } from "../core/fcm.js";
 
 function TechniquesPage({push,tick}){
   const{data:raw,loading}=useFB("UserTechniques",tick);
