@@ -3,7 +3,7 @@
    Action (generate-explanations.yml) রিমোটলি ট্রিগার করে।
    ══════════════════════════════════════════════════════════════════ */
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { C } from "../../core/config.js";
+import { C, GAS } from "../../core/config.js";
 import { useFB, useSheetRows } from "../../core/dataCache.js";
 import { toArr, loadSharedGasSecret } from "../../core/utils.js";
 import { JOB_NONE_TAG, loadGhCfg, saveGhCfgLS } from "../../core/ghConfig.js";
@@ -105,6 +105,28 @@ function JobLauncherTab({push,tick}){
       setRekeyStatus({type:"err",msg:"❌ "+e.message});
     }
     setRekeyBusy(false);
+  };
+  // ── ছোট, targeted বিকল্প — শুধু "Not Firebase"/"NF" কলামে মার্ক করা row গুলোই sync করে ──
+  const[nfBusy,setNfBusy]=useState(false);
+  const[nfStatus,setNfStatus]=useState(null);
+  const runNfSync=async()=>{
+    if(!GAS){ setNfStatus({type:"err",msg:"❌ GAS URL সেট করা নেই (VITE_GAS_URL)"}); return; }
+    if(!gasSecret){ setNfStatus({type:"err",msg:"❌ GAS Secret Key দাও (Save Location প্যানেলে বসাও)"}); return; }
+    setNfBusy(true); setNfStatus(null);
+    try{
+      const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},
+        body:JSON.stringify({secret:gasSecret,type:"sync_nf_rows",sheets:"Quiz,QBank,Study"})});
+      const data=await resp.json().catch(()=>({}));
+      if(data.result==="success"){
+        const lines=(data.details||[]).map(d=>`${d.sheet}: ${d.result&&d.result.ok?"✅ "+d.result.msg:"❌ "+((d.result&&d.result.msg)||"ব্যর্থ")}`).join("\n");
+        setNfStatus({type:"ok",msg:`✅ সম্পন্ন —\n${lines}`});
+      } else {
+        setNfStatus({type:"err",msg:"❌ ব্যর্থ: "+(data.error||data.message||"অজানা সমস্যা")});
+      }
+    }catch(e){
+      setNfStatus({type:"err",msg:"❌ "+e.message});
+    }
+    setNfBusy(false);
   };
 
   const toggle=(arr,setArr,val)=>{ setArr(arr.includes(val)? arr.filter(x=>x!==val) : [...arr,val]); };
@@ -218,6 +240,25 @@ function JobLauncherTab({push,tick}){
             color:rekeyStatus.type==="ok"?C.green:"#ff8a80",
             border:`1px solid ${rekeyStatus.type==="ok"?"#1a4d2e":"#5c1a1a"}`}}>
             {rekeyStatus.msg}
+          </div>
+        )}
+      </div>
+
+      {/* ── ✅ ছোট, targeted বিকল্প — শুধু "Not Firebase"/"NF" মার্ক করা row sync ── */}
+      <div style={{background:"#0d2818",border:`1px solid #1a4d2e`,borderRadius:14,padding:14,marginTop:12}}>
+        <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.green,fontWeight:700,marginBottom:6}}>✅ শুধু নতুন (NF-marked) প্রশ্ন Sync করো</div>
+        <div style={{fontSize:12,color:C.muted,lineHeight:1.6,marginBottom:10}}>
+          Sheet-এ "Not Firebase"/"NF" কলামে যেসব row ম্যানুয়ালি মার্ক করা আছে (মানে এগুলো এখনো Firebase-এ নেই), শুধু সেগুলোই পাঠাবে — বাকি সব সেট (আগে থেকে Firebase-এ থাকা প্রশ্ন) ছোঁবে না। সফল হলে সেই row-এর NF মার্ক মুছে দেবে। এটা <b>Re-key</b>-এর চেয়ে ছোট, দ্রুত — যখন শুধু নির্দিষ্ট কিছু নতুন প্রশ্নই পাঠাতে হবে তখন এটাই ব্যবহার করো।
+        </div>
+        <button className="btn" disabled={nfBusy} style={{width:"100%",justifyContent:"center",background:C.green,color:"#04180a",padding:11,fontSize:13,fontWeight:700}} onClick={runNfSync}>
+          {nfBusy?"⏳ Sync হচ্ছে...":"✅ NF-marked প্রশ্ন Sync করো"}
+        </button>
+        {nfStatus && (
+          <div style={{marginTop:10,padding:"11px 13px",borderRadius:10,fontSize:12,lineHeight:1.6,whiteSpace:"pre-wrap",
+            background:nfStatus.type==="ok"?"#0d2818":"#2a0d10",
+            color:nfStatus.type==="ok"?C.green:"#ff8a80",
+            border:`1px solid ${nfStatus.type==="ok"?"#1a4d2e":"#5c1a1a"}`}}>
+            {nfStatus.msg}
           </div>
         )}
       </div>
