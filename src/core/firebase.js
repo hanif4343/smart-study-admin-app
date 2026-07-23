@@ -22,6 +22,28 @@ async function _checkResp(r){
 }
 const _tok=()=>refreshTokenIfNeeded();
 
+/* ── ⏱ Delta-sync bookkeeping — Quiz/QBank/Study-এর যেকোনো row সরাসরি Firebase-এ
+   লেখা হলে (fbPatch/fbSet/fbPush/fbDeleteBatch — GAS bypass করে যেসব জায়গায়
+   Admin App সরাসরি Firebase প্যাচ করে, যেমন rename/bulk-delete), এই helper-গুলো
+   স্বয়ংক্রিয়ভাবে updatedAt বসায় + meta/updatedAt বাম্প করে (debounced — কাছাকাছি
+   সময়ে অনেকগুলো প্যাচ হলে একবারই মেটা-write হবে)। User App-এর delta-sync এভাবেই
+   কাজ করে (GAS-এর syncToFirebase-এর সাথে মিলিয়ে)। ── */
+const FB_DELTA_SHEETS = ["Quiz","QBank","Study"];
+function _fbInjectUpdatedAt(path, data){
+  const top=(path||"").split("/")[0];
+  if(FB_DELTA_SHEETS.includes(top) && data && typeof data==="object" && !Array.isArray(data)){
+    return {...data, updatedAt: Date.now()};
+  }
+  return data;
+}
+let _fbMetaBumpTimer=null;
+function _fbBumpMetaUpdatedAt(path){
+  const top=(path||"").split("/")[0];
+  if(!FB_DELTA_SHEETS.includes(top)) return;
+  clearTimeout(_fbMetaBumpTimer);
+  _fbMetaBumpTimer=setTimeout(()=>{ fbSet("meta/updatedAt", Date.now()).catch(()=>{}); }, 800);
+}
+
 /* ── ক্ষণস্থায়ী নেটওয়ার্ক/5xx ব্যর্থতার জন্য রিট্রাই — Firebase read/write দুটোতেই ব্যবহার হয় ──
    auth/4xx এরর-এ রিট্রাই করে না (সেগুলো রিট্রাই করলেও ঠিক হবে না), শুধু network fail বা 5xx-এ। */
 async function _fbFetch(url,opts,retries=2){
@@ -60,16 +82,26 @@ const fbPatch  = async(p,d)=>{
   const t=await _tok();
   if(!t){ _LC.error("fbPatch","Not authenticated — token missing",{path:p}); throw new Error("Not authenticated — please re-login"); }
   if(!p||p.includes("/undefined")||p.includes("/null")){ _LC.error("fbPatch","Invalid path",{path:p}); throw new Error("Invalid path: "+p); }
-  const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
-  return _checkResp(r);
+  const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(_fbInjectUpdatedAt(p,d))});
+  const res=await _checkResp(r);
+  _fbBumpMetaUpdatedAt(p);
+  return res;
 };
 const fbSet   = async(p,d)=>{
   const t=await _tok();
   if(!t){ _LC.error("fbSet","Not authenticated — token missing",{path:p}); throw new Error("Not authenticated — please re-login"); }
-  const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});
-  return _checkResp(r);
+  const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(_fbInjectUpdatedAt(p,d))});
+  const res=await _checkResp(r);
+  _fbBumpMetaUpdatedAt(p);
+  return res;
 };
-const fbPush  = async(p,d)=>{const t=await _tok();const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(d)});return _checkResp(r);};
+const fbPush  = async(p,d)=>{
+  const t=await _tok();
+  const r=await _fbFetch(`${FB}/${p}.json${_authQ(t)}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(_fbInjectUpdatedAt(p,d))});
+  const res=await _checkResp(r);
+  _fbBumpMetaUpdatedAt(p);
+  return res;
+};
 const fbDelete= async p=>{
   const t=await _tok();
   if(!t){ _LC.error("fbDelete","Not authenticated — token missing",{path:p}); throw new Error("Not authenticated — please re-login"); }
@@ -104,6 +136,7 @@ async function fbDeleteBatch(sheet, fbKeys, onProgress) {
     if (onProgress) onProgress(deleted, fbKeys.length);
     _LC.log("fbDeleteBatch", `Batch ${Math.ceil((i+1)/BATCH_SZ)}: deleted ${deleted}/${fbKeys.length} from ${sheet}`);
   }
+  _fbBumpMetaUpdatedAt(sheet);
   return deleted;
 }
 
