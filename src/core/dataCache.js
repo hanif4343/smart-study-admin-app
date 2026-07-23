@@ -5,6 +5,7 @@ import { _LC } from "./logger.js";
 import { fbGet } from "./firebase.js";
 import { loadSharedGasSecret } from "./utils.js";
 
+const _store = {}; // path -> {data, ts, promise}
 const STALE  = 90_000; // 90s
 
 /* ── Google Sheet fallback — Firebase read ব্যর্থ হলে (quota শেষ, নেট সমস্যা, ইত্যাদি)
