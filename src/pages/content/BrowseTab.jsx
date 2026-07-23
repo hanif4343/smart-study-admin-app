@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../../core/config.js";
 import { useFB, invalidate } from "../../core/dataCache.js";
-import { fbDelete } from "../../core/firebase.js";
+import { fbDelete, fbDeleteBatch } from "../../core/firebase.js";
 import { toArr } from "../../core/utils.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
 import { InlineEditModal } from "./InlineEditModal.jsx";
