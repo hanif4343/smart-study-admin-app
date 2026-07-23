@@ -5,6 +5,7 @@ import { useFB, invalidate } from "../../core/dataCache.js";
 import { fbSet, fbDelete } from "../../core/firebase.js";
 import { toArr } from "../../core/utils.js";
 import { getQTypeRaw, isImportantFlag, runModelTestGenerator } from "../../core/modelTestGenerator.js";
+import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
 
 function ModelTestTab({push,tick}){
   const{data:quizRaw}=useFB("Quiz",tick);
