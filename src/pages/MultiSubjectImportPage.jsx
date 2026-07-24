@@ -92,6 +92,27 @@ function MultiSubjectImportPage({push}){
   const[submitting,setSubmitting]=useState(false);
   const stopRef=useRef(false);
 
+  /* ── Long-press → বড় প্রিভিউ (হেডিং পড়ে বুঝে grouping সহজ করার জন্য) ── */
+  const LONG_PRESS_MS=3000;
+  const[previewId,setPreviewId]=useState(null);
+  const[previewVisible,setPreviewVisible]=useState(false);
+  const longPressTimerRef=useRef(null);
+  const hideTimerRef=useRef(null);
+  const startLongPress=(id)=>{
+    clearTimeout(longPressTimerRef.current);
+    clearTimeout(hideTimerRef.current);
+    longPressTimerRef.current=setTimeout(()=>{
+      setPreviewId(id);
+      requestAnimationFrame(()=>requestAnimationFrame(()=>setPreviewVisible(true)));
+    },LONG_PRESS_MS);
+  };
+  const cancelLongPress=()=>{
+    clearTimeout(longPressTimerRef.current);
+    setPreviewVisible(false);
+    clearTimeout(hideTimerRef.current);
+    hideTimerRef.current=setTimeout(()=>setPreviewId(null),220);
+  };
+
   /* ── Gallery/Camera picker (AIImportPage-এর একই লজিক, স্বনির্ভর কপি) ── */
   const _getCamera=()=>{
     const P=window.Capacitor?.Plugins||{};
@@ -382,6 +403,22 @@ function MultiSubjectImportPage({push}){
       </div>
       {showApiSettings&&<ApiSettingsPage push={push} inline={true}/>}
 
+      {/* ── Long-press zoom preview overlay — হেডিং পড়ার জন্য বড় করে দেখায়, ছেড়ে দিলে ফেড-আউট ── */}
+      {previewId&&(()=>{
+        const pimg=images.find(x=>x.id===previewId);
+        const src=pimg&&(pimg.webPath||(pimg.base64?`data:image/jpeg;base64,${pimg.base64}`:null));
+        if(!src)return null;
+        return(
+          <div style={{position:"fixed",inset:0,zIndex:999,background:"rgba(0,0,0,0.85)",
+            display:"flex",alignItems:"center",justifyContent:"center",padding:16,
+            opacity:previewVisible?1:0,transition:"opacity 200ms ease",pointerEvents:"none"}}>
+            <img src={src} draggable={false} style={{maxWidth:"92vw",maxHeight:"85vh",borderRadius:12,
+              border:"3px solid #f59e0b",boxShadow:"0 8px 30px rgba(0,0,0,0.6)",
+              transform:previewVisible?"scale(1)":"scale(0.92)",transition:"transform 200ms ease"}}/>
+          </div>
+        );
+      })()}
+
       {/* ══════════ CONFIRM PHASE ══════════ */}
       {phase==="confirm"&&(
         <>
@@ -476,7 +513,16 @@ function MultiSubjectImportPage({push}){
                   ...(img.groupBreak?{background:"#f59e0b18",borderRadius:12,padding:4,marginLeft:2}:{})}}>
                   <div style={{position:"relative",width:76,height:76}}>
                     {img.webPath?(
-                      <img src={img.webPath} style={{width:76,height:76,borderRadius:10,objectFit:"cover",
+                      <img src={img.webPath} draggable={false}
+                        onContextMenu={e=>e.preventDefault()}
+                        onTouchStart={()=>startLongPress(img.id)}
+                        onTouchEnd={cancelLongPress}
+                        onTouchCancel={cancelLongPress}
+                        onMouseDown={()=>startLongPress(img.id)}
+                        onMouseUp={cancelLongPress}
+                        onMouseLeave={cancelLongPress}
+                        style={{width:76,height:76,borderRadius:10,objectFit:"cover",
+                        WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none",touchAction:"none",
                         border:`2px solid ${img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#6366f1":img.groupBreak?"#f59e0b":C.border}`}}/>
                     ):(
                       <div style={{width:76,height:76,borderRadius:10,background:C.panel,border:`2px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📷</div>
