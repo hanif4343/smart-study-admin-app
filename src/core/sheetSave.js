@@ -47,4 +47,36 @@ async function saveRowsToFirebaseBulk({rows,targetTab,concurrency=8,onProgress})
   return{added,failedRows};
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk };
+/* ── Google Sheet থেকে সরাসরি রো ফেচ (RenameTab-এর "Google Sheet" সোর্স মোডে ব্যবহার) —
+   dataCache.js-এর fetchSheetFallback-এর মতোই GAS "getSheetRows" অ্যাকশন কল করে, কিন্তু
+   এখানে fallback না, ইচ্ছাকৃতভাবে Sheet-ই সোর্স (Firebase-এর সাথে মিলবে না এমন ধরে নিয়েই)। ── */
+async function fetchSheetRows({sheet,gasSecret}){
+  if(!GAS||!gasSecret) return null;
+  try{
+    const url=`${GAS}?action=getSheetRows&tab=${encodeURIComponent(sheet)}&secret=${encodeURIComponent(gasSecret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json();
+    if(data?.status!=="success"||!Array.isArray(data.rows)) return null;
+    return data.rows;
+  }catch(_){ return null; }
+}
+
+/* ── Google Sheet-এ সরাসরি subject/topic/sub_topic bulk-rename — GAS "renameField"
+   অ্যাকশন কল করে (matching invisible zero-width char/extra স্পেস বাদ দিয়ে normalize করে হয়,
+   তাই দৃশ্যত-একই-রকম দেখতে সব variant একবারেই মার্জ হয়ে যায়)। সফল হলে GAS নিজে থেকেই
+   Firebase mirror-ও sync করে দেয় — এখানে আলাদা করে fbPatch করার দরকার নেই। ── */
+async function renameFieldInSheet({sheet,field,oldVal,newVal,gasSecret,push}){
+  if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{ok:false,count:0}; }
+  if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","উপরে Secret Key বসাও"); return{ok:false,count:0}; }
+  try{
+    const url=`${GAS}?action=renameField&secret=${encodeURIComponent(gasSecret)}`+
+      `&sheet=${encodeURIComponent(sheet)}&field=${encodeURIComponent(field)}`+
+      `&oldVal=${encodeURIComponent(oldVal)}&newVal=${encodeURIComponent(newVal)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.result!=="success"){ push?.("error","❌ Rename ব্যর্থ",data.error||"অজানা error"); return{ok:false,count:0}; }
+    return{ok:true,count:data.count||0,firebaseSynced:data.firebaseSynced!==false};
+  }catch(e){ push?.("error","❌ Rename ব্যর্থ",e.message); return{ok:false,count:0}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet };
