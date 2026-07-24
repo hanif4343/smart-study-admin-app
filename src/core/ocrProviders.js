@@ -224,4 +224,4 @@ async function callAiProviderRotatingRaw(prompt){
   throw new Error("সব provider ব্যর্থ — "+errors.slice(0,3).join(" | "));
 }
 
-export { DEFAULT_PROVIDERS, loadProviders, saveProviders, buildKeyPool, getActiveProvider, OCR_PROMPT_FORMATS, buildOcrPrompt, callProviderOnce, callAiProviderRotating, callAiProvider, callAiProviderRotatingRaw };
+export { DEFAULT_PROVIDERS, loadProviders, saveProviders, buildKeyPool, getActiveProvider, OCR_PROMPT_FORMATS, OCR_CORRECTION_RULES, buildOcrPrompt, callProviderOnce, callAiProviderRotating, callAiProvider, callAiProviderRotatingRaw };
