@@ -166,16 +166,166 @@ function syncToFirebase(sheetName, folderName) {
       if(repCode<200||repCode>=300){ Logger.log("Firebase Sync HTTP "+repCode+" ("+sheetName+"): "+repResp.getContentText()); return false; }
       return true;
     }
-    var jsonData=[];
-    for(var i2=1;i2<fbData.length;i2++){
-      var rec2={}; for(var j2=0;j2<fbHdr.length;j2++){var k2=fbHdr[j2].toString().trim();if(k2){var v2=fbData[i2][j2];rec2[k2]=(v2 instanceof Date)?Utilities.formatDate(v2,"GMT+6","dd-MM-yyyy HH:mm:ss"):v2;}}
-      jsonData.push(rec2);
+    var idColIdx=-1, updColIdx=-1;
+    for(var h=0;h<fbHdr.length;h++){
+      var hl=fbHdr[h].toString().toLowerCase().trim();
+      if(hl==="id")idColIdx=h;
+      if(hl==="updatedat")updColIdx=h;
     }
-    var resp=UrlFetchApp.fetch(cfg.FIREBASE_URL+folderName+".json?auth="+cfg.SECRET_KEY,{method:"put",contentType:"application/json",payload:JSON.stringify(jsonData),muteHttpExceptions:true});
+
+    // ⚠️ "id" বা "updatedAt" কলাম নেই এমন sheet (Users/Notice, অথবা "updatedAt" কলাম
+    // এখনো যোগ করা হয়নি এমন কোনো sheet) — পুরনো আচরণ (পুরো sheet PUT) অক্ষত রাখা হলো,
+    // কারণ এগুলো ছোট sheet, আগের সমস্যার উৎস না, আর "id" ছাড়া PATCH-by-id সম্ভবও না।
+    if(idColIdx===-1||updColIdx===-1){
+      var jsonDataOld=[];
+      for(var io=1;io<fbData.length;io++){
+        var reco={}; for(var jo=0;jo<fbHdr.length;jo++){var ko=fbHdr[jo].toString().trim();if(ko){var vo=fbData[io][jo];reco[ko]=(vo instanceof Date)?Utilities.formatDate(vo,"GMT+6","dd-MM-yyyy HH:mm:ss"):vo;}}
+        jsonDataOld.push(reco);
+      }
+      var respOld=UrlFetchApp.fetch(cfg.FIREBASE_URL+folderName+".json?auth="+cfg.SECRET_KEY,{method:"put",contentType:"application/json",payload:JSON.stringify(jsonDataOld),muteHttpExceptions:true});
+      var codeOld=respOld.getResponseCode();
+      if(codeOld<200||codeOld>=300){ Logger.log("Firebase Sync HTTP "+codeOld+" ("+sheetName+"): "+respOld.getContentText()); return false; }
+      return true;
+    }
+
+    // ── ✅ Quiz/QBank/Study/Typing — ইনক্রিমেন্টাল sync: শুধু "updatedAt" ভরা row
+    //    গুলো (মানে এই ফিক্সের পর নতুন যোগ/এডিট হওয়া) Firebase-এ PATCH হয়, নিজের
+    //    "id" কে Firebase key বানিয়ে। "updatedAt" খালি মানে ধরে নেওয়া হয় এই row
+    //    আগে থেকেই Firebase-এ আছে (পুরনো এক্সপোর্ট থেকে বসানো) — স্কিপ, পাঠানো হয় না।
+    //    পুরো sheet আর কখনো এক ধাক্কায় re-upload হয় না। ──
+    var patchData={}, touched=0, touchedRowNums=[];
+    var nfColIdx2=-1;
+    for(var hh=0;hh<fbHdr.length;hh++){ var nn=fbHdr[hh].toString().toLowerCase().replace(/\s+/g,""); if(nn==="notfirebase"||nn==="nf"){nfColIdx2=hh;break;} }
+    for(var i2=1;i2<fbData.length;i2++){
+      var updVal=fbData[i2][updColIdx];
+      if(!updVal) continue;
+      var rowId=fbData[i2][idColIdx];
+      if(rowId===""||rowId===null||rowId===undefined) continue;
+      var rec2={}; for(var j2=0;j2<fbHdr.length;j2++){var k2=fbHdr[j2].toString().trim();if(k2){var v2=fbData[i2][j2];rec2[k2]=(v2 instanceof Date)?Utilities.formatDate(v2,"GMT+6","dd-MM-yyyy HH:mm:ss"):v2;}}
+      patchData[rowId.toString()]=rec2;
+      touched++;
+      touchedRowNums.push(i2+1); // ১-ইনডেক্সড শিট রো নাম্বার
+    }
+    if(touched===0) return true; // পাঠানোর কিছুই নেই — নেটওয়ার্ক কলই হবে না
+
+    var resp=UrlFetchApp.fetch(cfg.FIREBASE_URL+folderName+".json?auth="+cfg.SECRET_KEY,{method:"patch",contentType:"application/json",payload:JSON.stringify(patchData),muteHttpExceptions:true});
     var code=resp.getResponseCode();
     if(code<200||code>=300){ Logger.log("Firebase Sync HTTP "+code+" ("+sheetName+"): "+resp.getContentText()); return false; }
+    // ✅ সফল হলে এই row গুলোর NF মার্ক মুছে দাও (থাকলে) — শুধু dedicated sync_nf_rows
+    // অ্যাকশন না, স্বাভাবিক sync-এও NF ঠিকভাবে ক্লিয়ার হবে।
+    if(nfColIdx2!==-1){
+      touchedRowNums.forEach(function(r){ fbSh.getRange(r,nfColIdx2+1).setValue(""); });
+    }
+    // ⏱ meta/updatedAt বাম্প — User App এই ছোট নাম্বারটা আগে চেক করে বোঝে সার্ভারে নতুন
+    // কিছু আছে কিনা, তারপরই দরকার হলে পুরো/delta ফেচ করে। শুধু Quiz/QBank/Study-এর
+    // জন্যই বাম্প হয় (এগুলোই delta-sync হয়, Users/Notice/Reports/Typing না)।
+    if(["Quiz","QBank","Study"].indexOf(sheetName)>-1){
+      try{
+        UrlFetchApp.fetch(cfg.FIREBASE_URL+"meta/updatedAt.json?auth="+cfg.SECRET_KEY,
+          {method:"put",contentType:"application/json",payload:JSON.stringify(Date.now()),muteHttpExceptions:true});
+      }catch(me){ Logger.log("meta/updatedAt bump error: "+me.toString()); }
+    }
     return true;
   } catch(e){ Logger.log("Firebase Sync Error ("+sheetName+"): "+e.toString()); return false; }
+}
+
+/* ── ⚠️ এক-বারের, ইচ্ছাকৃত, ম্যানুয়াল অ্যাকশন — পুরনো Firebase ডেটা (যেটা array-index
+   দিয়ে key করা ছিল, "id" দিয়ে না) নতুন করে "id" দিয়ে re-key করে পুরো sheet একবার PUT
+   করে। এটা করা ছাড়া উপরের ইনক্রিমেন্টাল PATCH ভবিষ্যতে পুরনো (already-in-Firebase)
+   কোনো row এডিট হলে ডুপ্লিকেট বানিয়ে ফেলবে (পুরনো array-key এন্ট্রি + নতুন id-key
+   এন্ট্রি দুটোই থেকে যাবে)। তাই deploy করার পর, প্রথম ইনক্রিমেন্টাল sync-এর ওপর ভরসা
+   করার আগে, প্রতিটা sheet-এ এই অ্যাকশনটা একবার চালিয়ে নেওয়া জরুরি। এটা "write"
+   (upload), যেটা "Downloads" কোটার (যেটা exceeded হয়েছিল) সাথে সম্পর্কিত না, আর
+   User App সরাসরি REST দিয়ে পড়ে (live listener না), তাই এই এক-বারের write কোনো
+   ডিভাইসেই বাড়তি download ট্রিগার করে না। ── */
+function forceFullRekeySync(sheetName, folderName){
+  try{
+    var cfg=getProps(), ss=SpreadsheetApp.getActiveSpreadsheet(), fbSh=ss.getSheetByName(sheetName);
+    if(!fbSh) return {ok:false,msg:"Sheet not found: "+sheetName};
+    var fbData=fbSh.getDataRange().getValues(); if(fbData.length<2) return {ok:true,msg:"খালি sheet, কিছু করার নেই"};
+    var fbHdr=fbData[0].map(function(h){return h.toString().trim();});
+    var idColIdx=-1;
+    for(var h=0;h<fbHdr.length;h++){ if(fbHdr[h].toLowerCase()==="id"){idColIdx=h;break;} }
+    if(idColIdx===-1) return {ok:false,msg:"এই sheet-এ 'id' কলাম নেই, id-keyed rekey সম্ভব না"};
+    var keyed={};
+    for(var i=1;i<fbData.length;i++){
+      var rowId=fbData[i][idColIdx]; if(rowId===""||rowId===null||rowId===undefined) continue;
+      var rec={}; for(var j=0;j<fbHdr.length;j++){var k=fbHdr[j];if(k){var v=fbData[i][j];rec[k]=(v instanceof Date)?Utilities.formatDate(v,"GMT+6","dd-MM-yyyy HH:mm:ss"):v;}}
+      keyed[rowId.toString()]=rec;
+    }
+    var resp=UrlFetchApp.fetch(cfg.FIREBASE_URL+folderName+".json?auth="+cfg.SECRET_KEY,{method:"put",contentType:"application/json",payload:JSON.stringify(keyed),muteHttpExceptions:true});
+    var code=resp.getResponseCode();
+    if(code<200||code>=300) return {ok:false,msg:"HTTP "+code+": "+resp.getContentText()};
+    if(["Quiz","QBank","Study"].indexOf(sheetName)>-1){
+      try{
+        UrlFetchApp.fetch(cfg.FIREBASE_URL+"meta/updatedAt.json?auth="+cfg.SECRET_KEY,
+          {method:"put",contentType:"application/json",payload:JSON.stringify(Date.now()),muteHttpExceptions:true});
+      }catch(me){}
+    }
+    return {ok:true,msg:"re-key সম্পূর্ণ, "+Object.keys(keyed).length+" টা row Firebase-এ id দিয়ে key করা হলো"};
+  }catch(e){ return {ok:false,msg:e.toString()}; }
+}
+
+/* ── ✅ NF (Not Firebase)-marked row sync — ম্যানুয়ালি "Not Firebase"/"NF" কলামে
+   মার্ক করা row গুলোই শুধু Firebase-এ PATCH করে (id দিয়ে key করে, নতুন রো বলে
+   কোনো পুরনো key-এর সাথে সংঘর্ষের ঝুঁকি নেই)। সফল হলে সেই row-এর NF মার্ক মুছে
+   দেয় ও updatedAt বসিয়ে দেয় (sheet-এও), যাতে দ্বিতীয়বার ভুলে আবার sync না হয়।
+   এটা force_full_rekey_sync-এর ছোট, নিরাপদ, targeted বিকল্প — যখন শুধু নির্দিষ্ট
+   কিছু row-ই নতুন (পুরো sheet না), তখন এটাই ব্যবহার করা ভালো। ── */
+function syncNFRows(sheetName, folderName){
+  try{
+    var cfg=getProps(), ss=SpreadsheetApp.getActiveSpreadsheet(), sh=ss.getSheetByName(sheetName);
+    if(!sh) return {ok:false,msg:"Sheet not found: "+sheetName,count:0};
+    var data=sh.getDataRange().getValues(); if(data.length<2) return {ok:true,msg:"খালি sheet",count:0};
+    var hdr=data[0].map(function(h){return h.toString().trim();});
+    var idColIdx=-1, nfColIdx=-1, updColIdx=-1;
+    for(var h=0;h<hdr.length;h++){
+      var norm=hdr[h].toLowerCase().replace(/\s+/g,"");
+      if(norm==="id") idColIdx=h;
+      if(norm==="notfirebase"||norm==="nf") nfColIdx=h;
+      if(norm==="updatedat") updColIdx=h;
+    }
+    if(idColIdx===-1) return {ok:false,msg:"'id' কলাম নেই",count:0};
+    if(nfColIdx===-1) return {ok:true,msg:"এই sheet-এ 'Not Firebase' কলাম নেই — কিছু করার নেই",count:0};
+
+    var patchData={}, touchedRows=[], nowMs=Date.now();
+    for(var i=1;i<data.length;i++){
+      var nfVal=(data[i][nfColIdx]||"").toString().trim();
+      if(!nfVal) continue; // NF মার্ক নেই — আগে থেকেই Firebase-এ আছে ধরে নেওয়া হচ্ছে, স্কিপ
+      var rowId=data[i][idColIdx]; if(rowId===""||rowId===null||rowId===undefined) continue;
+      var rec={};
+      for(var j=0;j<hdr.length;j++){
+        if(j===nfColIdx) continue; // NF মার্কার কলাম নিজে Firebase-এ যাবে না
+        var k=hdr[j]; if(!k) continue;
+        var v=data[i][j];
+        rec[k]=(v instanceof Date)?Utilities.formatDate(v,"GMT+6","dd-MM-yyyy HH:mm:ss"):v;
+      }
+      if(updColIdx!==-1) rec[hdr[updColIdx]]=nowMs;
+      patchData[rowId.toString()]=rec;
+      touchedRows.push(i+1); // ১-ইনডেক্সড শিট রো নাম্বার
+    }
+
+    var count=Object.keys(patchData).length;
+    if(count===0) return {ok:true,msg:"কোনো NF-marked row নেই, পাঠানোর কিছু নেই",count:0};
+
+    var resp=UrlFetchApp.fetch(cfg.FIREBASE_URL+folderName+".json?auth="+cfg.SECRET_KEY,{method:"patch",contentType:"application/json",payload:JSON.stringify(patchData),muteHttpExceptions:true});
+    var code=resp.getResponseCode();
+    if(code<200||code>=300) return {ok:false,msg:"HTTP "+code+": "+resp.getContentText(),count:0};
+
+    // ✅ সফল হলে NF মার্ক মুছে + updatedAt সেলেও বসিয়ে দাও, যাতে দ্বিতীয়বার আবার sync না হয়
+    touchedRows.forEach(function(r){
+      sh.getRange(r, nfColIdx+1).setValue("");
+      if(updColIdx!==-1) sh.getRange(r, updColIdx+1).setValue(nowMs);
+    });
+
+    if(["Quiz","QBank","Study"].indexOf(sheetName)>-1){
+      try{
+        UrlFetchApp.fetch(cfg.FIREBASE_URL+"meta/updatedAt.json?auth="+cfg.SECRET_KEY,
+          {method:"put",contentType:"application/json",payload:JSON.stringify(nowMs),muteHttpExceptions:true});
+      }catch(me){}
+    }
+    return {ok:true,msg:count+" টা NF-marked row Firebase-এ পাঠানো হলো, NF মার্ক মুছে দেওয়া হলো",count:count};
+  }catch(e){ return {ok:false,msg:e.toString(),count:0}; }
 }
 
 /* ══════════════════════════════════════════════════════════
@@ -241,9 +391,11 @@ function doGet(e) {
     if(idC===-1||fldC===-1)return json({result:"error",error:"Column not found: "+fld});
     var targetId=(e.parameter.id||"").toString().trim();
     var content=decodeURIComponent(e.parameter.content||"");
+    var ufAtC=uHdr.indexOf("updatedat");
     for(var ur=1;ur<uRows.length;ur++){
       if(uRows[ur][idC].toString().trim()===targetId){
         uSheet.getRange(ur+1,fldC+1).setValue(content);
+        if(ufAtC!==-1) uSheet.getRange(ur+1,ufAtC+1).setValue(Date.now());
         syncToFirebase(shName,shName);
         return json({result:"success"});
       }
@@ -706,7 +858,9 @@ function doPost(e) {
             r.prevExam || '',              // QBank-এর মূল exam paper-এর নাম এখানে থাকবে
             r.qType || 'MCQ',
             r.timestamp || new Date().toLocaleString('bn-BD'),
-            r.audienceTags || 'Job'
+            r.audienceTags || 'Job',
+            Date.now(),
+            "NF"
           ];
           qcSh.appendRow(rowData);
           added++;
@@ -765,7 +919,8 @@ function doPost(e) {
       var idC=uHdr.indexOf("id"), fld=params.field.toLowerCase().trim(), fldC=uHdr.indexOf(fld);
       if(fldC===-1){for(var fc=0;fc<uHdr.length;fc++){if(uHdr[fc].includes(fld)){fldC=fc;break;}}}
       if(idC===-1||fldC===-1)return txt("Column not found");
-       for(var ur=1;ur<uRows.length;ur++){if(uRows[ur][idC].toString().trim()===params.id.toString().trim()){uSheet.getRange(ur+1,fldC+1).setValue(params.content);if(!params.bulkMode)syncToFirebase(sName,sName);return txt("Successfully Updated");}}
+      var ueAtC=uHdr.indexOf("updatedat");
+      for(var ur=1;ur<uRows.length;ur++){if(uRows[ur][idC].toString().trim()===params.id.toString().trim()){uSheet.getRange(ur+1,fldC+1).setValue(params.content);if(ueAtC!==-1)uSheet.getRange(ur+1,ueAtC+1).setValue(Date.now());if(!params.bulkMode)syncToFirebase(sName,sName);return txt("Successfully Updated");}}
       return txt("ID not found: "+params.id);
     }
 
@@ -828,6 +983,7 @@ function doPost(e) {
         if(bCurId<1000)bCurId=1000;
 
         var bNewRows=[];
+        var bNowMs=Date.now();
         for(var bi=0;bi<bRows.length;bi++){
           var row=bRows[bi]||{};
           try{
@@ -835,10 +991,10 @@ function doPost(e) {
             if(row.question && bExisting[bKey]){ bSkipped++; continue; }
             var bId=row.editId||(bCurId+1);
             var bLine=[];
-            if(bTab==="Quiz")      bLine=[bId,row.question,row.opt1,row.opt2,row.opt3,row.opt4,row.correct,row.subject,row.sub_topic,row.explanation,row.technique||"",row.prevExam||"",row.qType||"MCQ",row.timestamp||new Date().toLocaleString(),row.audienceTags||""];
-            else if(bTab==="QBank")bLine=[bId,row.question,row.opt1,row.opt2,row.opt3,row.opt4,row.correct,row.subject,row.topic||"",row.sub_topic,row.explanation,row.technique||"",row.qType||"MCQ",row.mainQpaper||"",row.timestamp||new Date().toLocaleString(),row.audienceTags||""];
-            else if(bTab==="Study")bLine=[bId,row.subject,row.sub_topic,row.question||"",row.correct||"",row.explanation,row.technique||"",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",row.visualUrl||""];
-            else if(bTab==="Typing")bLine=[bId,row.title||"",row.language||"",row.level||"",row.content||""];
+            if(bTab==="Quiz")      bLine=[bId,row.question,row.opt1,row.opt2,row.opt3,row.opt4,row.correct,row.subject,row.sub_topic,row.explanation,row.technique||"",row.prevExam||"",row.qType||"MCQ",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",bNowMs,"NF"];
+            else if(bTab==="QBank")bLine=[bId,row.question,row.opt1,row.opt2,row.opt3,row.opt4,row.correct,row.subject,row.topic||"",row.sub_topic,row.explanation,row.technique||"",row.qType||"MCQ",row.mainQpaper||"",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",bNowMs,"NF"];
+            else if(bTab==="Study")bLine=[bId,row.subject,row.sub_topic,row.question||"",row.correct||"",row.explanation,row.technique||"",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",row.visualUrl||"",bNowMs,"NF"];
+            else if(bTab==="Typing")bLine=[bId,row.title||"",row.language||"",row.level||"",row.content||"",bNowMs,"NF"];
             if(bLine.length===0){ bSkipped++; continue; }
             if(!row.editId)bCurId++;
             bNewRows.push(bLine);
@@ -877,6 +1033,23 @@ function doPost(e) {
       return json({result:"synced",tabs:syncTabs});
     }
 
+    // ⚠️ এক-বারের, ইচ্ছাকৃত অ্যাকশন — আগে থেকে Firebase-এ থাকা ডেটাকে "id" দিয়ে
+    // re-key করে (দেখো forceFullRekeySync-এর ওপরের কমেন্ট)। শুধু ম্যানুয়ালি,
+    // নিজে থেকে বুঝে-শুনে একবার চালানোর জন্য — কোনো automation এটা নিজে থেকে কল করে না।
+    if(params.type==="force_full_rekey_sync"){
+      var frSheets=(params.sheets||"Quiz,QBank,Study").split(",").map(function(t){return t.trim();}).filter(Boolean);
+      var frResults=frSheets.map(function(s){ return {sheet:s, result:forceFullRekeySync(s,s)}; });
+      return json({result:"success",details:frResults});
+    }
+
+    // ✅ শুধু "Not Firebase"/"NF" কলামে মার্ক করা row গুলোই sync করে — ছোট,
+    // targeted, নিরাপদ (দেখো syncNFRows-এর ওপরের কমেন্ট)।
+    if(params.type==="sync_nf_rows"){
+      var nfSheets=(params.sheets||"Quiz,QBank,Study").split(",").map(function(t){return t.trim();}).filter(Boolean);
+      var nfResults=nfSheets.map(function(s){ return {sheet:s, result:syncNFRows(s,s)}; });
+      return json({result:"success",details:nfResults});
+    }
+
     var mSh=ss.getSheetByName(tTab); if(!mSh)return txt("Sheet not found: "+tTab);
     if(params.question&&isDuplicate(mSh,params.subject||'',params.question,params.sub_topic||''))
       return json({result:"duplicate",message:"এই sub-topic-এ প্রশ্নটি আগে থেকেই আছে"});
@@ -886,10 +1059,11 @@ function doPost(e) {
     if(!eId&&["Quiz","Study","QBank","Typing"].indexOf(tTab)>-1)finalId=getNextId(tTab);
 
     var rData=[];
-    if(tTab==="Quiz")      rData=[finalId,params.question,params.opt1,params.opt2,params.opt3,params.opt4,params.correct,params.subject,params.sub_topic,params.explanation,params.technique,params.prevExam||"",params.qType,params.timestamp,params.audienceTags||""];
-    else if(tTab==="QBank")rData=[finalId,params.question,params.opt1,params.opt2,params.opt3,params.opt4,params.correct,params.subject,params.topic,params.sub_topic,params.explanation,params.technique,params.qType,params.mainQpaper||"",params.timestamp,params.audienceTags||""];
-    else if(tTab==="Study")rData=[finalId,params.subject,params.sub_topic,params.question||"",params.correct||"",params.explanation,params.technique,params.timestamp,params.audienceTags||"",params.visualUrl||""];
-    else if(tTab==="Typing")rData=[finalId,params.title||"",params.language||"",params.level||"",params.content||""];
+    var nowMs=Date.now();
+    if(tTab==="Quiz")      rData=[finalId,params.question,params.opt1,params.opt2,params.opt3,params.opt4,params.correct,params.subject,params.sub_topic,params.explanation,params.technique,params.prevExam||"",params.qType,params.timestamp,params.audienceTags||"",nowMs];
+    else if(tTab==="QBank")rData=[finalId,params.question,params.opt1,params.opt2,params.opt3,params.opt4,params.correct,params.subject,params.topic,params.sub_topic,params.explanation,params.technique,params.qType,params.mainQpaper||"",params.timestamp,params.audienceTags||"",nowMs];
+    else if(tTab==="Study")rData=[finalId,params.subject,params.sub_topic,params.question||"",params.correct||"",params.explanation,params.technique,params.timestamp,params.audienceTags||"",params.visualUrl||"",nowMs];
+    else if(tTab==="Typing")rData=[finalId,params.title||"",params.language||"",params.level||"",params.content||"",nowMs];
     else if(tTab==="Notice")rData=[params.timestamp?params.timestamp.split(',')[0]:"",params.n_title,params.n_msg,params.timestamp];
     else if(tTab==="Reports"){
       var phone=(params.Phone||"").toString().replace(/^'+/,'').trim();
@@ -898,8 +1072,25 @@ function doPost(e) {
     }
 
     if(rData.length===0)return json({result:"error",error:"Unknown tab"});
-    if(rIdx!==-1)mSh.getRange(rIdx,1,1,rData.length).setValues([rData]);else mSh.appendRow(rData);
-    if(!params.bulkMode)syncToFirebase(tTab,tTab);
+    var writtenRow;
+    if(rIdx!==-1){ mSh.getRange(rIdx,1,1,rData.length).setValues([rData]); writtenRow=rIdx; }
+    else { mSh.appendRow(rData); writtenRow=mSh.getLastRow(); }
+
+    // ✅ NF (Not Firebase) স্বয়ংক্রিয় বুককিপিং — sync-এর আগে pessimistically "NF" বসানো
+    // হয়, sync সফল হলে মুছে ফেলা হয়। sync ব্যর্থ হলে (যেমন Firebase quota exceeded)
+    // NF-ই থেকে যায় — ম্যানুয়ালি মার্ক করার আর দরকার নেই, পরে "sync_nf_rows" অ্যাকশন
+    // দিয়ে রিট্রাই করা যাবে।
+    var nfIdx=-1;
+    if(["Quiz","QBank","Study","Typing"].indexOf(tTab)>-1){
+      var nfHdrRow=mSh.getRange(1,1,1,mSh.getLastColumn()).getValues()[0].map(function(h){return h.toString().toLowerCase().replace(/\s+/g,"");});
+      nfIdx=nfHdrRow.indexOf("notfirebase");
+      if(nfIdx===-1) nfIdx=nfHdrRow.indexOf("nf");
+    }
+    if(nfIdx!==-1) mSh.getRange(writtenRow,nfIdx+1).setValue("NF");
+    if(!params.bulkMode){
+      var syncOk=syncToFirebase(tTab,tTab);
+      if(syncOk===true && nfIdx!==-1) mSh.getRange(writtenRow,nfIdx+1).setValue("");
+    }
     return json({result:"success",id:finalId});
 
   }catch(err){return json({result:"error",error:err.toString()});}
