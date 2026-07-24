@@ -1032,7 +1032,8 @@ function doPost(e) {
             if(bTab==="Quiz")      bLine=[bId,row.question,row.opt1,row.opt2,row.opt3,row.opt4,row.correct,row.subject,row.sub_topic,row.explanation,row.technique||"",row.prevExam||"",row.qType||"MCQ",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",bNowMs,"NF"];
             else if(bTab==="QBank")bLine=[bId,row.question,row.opt1,row.opt2,row.opt3,row.opt4,row.correct,row.subject,row.topic||"",row.sub_topic,row.explanation,row.technique||"",row.qType||"MCQ",row.mainQpaper||"",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",bNowMs,"NF"];
             else if(bTab==="Study")bLine=[bId,row.subject,row.sub_topic,row.question||"",row.correct||"",row.explanation,row.technique||"",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",row.visualUrl||"",bNowMs,"NF"];
-            else if(bTab==="Typing")bLine=[bId,row.title||"",row.language||"",row.level||"",row.content||"",bNowMs,"NF"];
+            // ── Typing bulk insert-ও একই সরল schema অনুসরণ করে: id, language, content, updatedAt, NF ──
+            else if(bTab==="Typing")bLine=[bId,row.language||"",row.content||"",bNowMs,"NF"];
             if(bLine.length===0){ bSkipped++; continue; }
             if(!row.editId)bCurId++;
             bNewRows.push(bLine);
@@ -1101,7 +1102,10 @@ function doPost(e) {
     if(tTab==="Quiz")      rData=[finalId,params.question,params.opt1,params.opt2,params.opt3,params.opt4,params.correct,params.subject,params.sub_topic,params.explanation,params.technique,params.prevExam||"",params.qType,params.timestamp,params.audienceTags||"",nowMs];
     else if(tTab==="QBank")rData=[finalId,params.question,params.opt1,params.opt2,params.opt3,params.opt4,params.correct,params.subject,params.topic,params.sub_topic,params.explanation,params.technique,params.qType,params.mainQpaper||"",params.timestamp,params.audienceTags||"",nowMs];
     else if(tTab==="Study")rData=[finalId,params.subject,params.sub_topic,params.question||"",params.correct||"",params.explanation,params.technique,params.timestamp,params.audienceTags||"",params.visualUrl||"",nowMs];
-    else if(tTab==="Typing")rData=[finalId,params.title||"",params.language||"",params.level||"",params.content||"",nowMs];
+    // ── Typing ট্যাব-এর headers এখন সহজ: id, language, content, updatedAt —
+    //    আগে title/level কলামও ছিল, সেগুলো বাদ দেওয়া হলো (Admin App ও এখন এই
+    //    ৪টা ফিল্ডই পাঠাবে)। language: "bn" | "en" ──
+    else if(tTab==="Typing")rData=[finalId,params.language||"",params.content||"",nowMs];
     else if(tTab==="Notice")rData=[params.timestamp?params.timestamp.split(',')[0]:"",params.n_title,params.n_msg,params.timestamp];
     else if(tTab==="Reports"){
       var phone=(params.Phone||"").toString().replace(/^'+/,'').trim();
