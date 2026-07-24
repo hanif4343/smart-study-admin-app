@@ -41,24 +41,40 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
         const o2k=o1k.replace("1","2"),o3k=o1k.replace("1","3"),o4k=o1k.replace("1","4");
         patch={Question:question,[o1k]:opt1,[o2k]:opt2,[o3k]:opt3,[o4k]:opt4,Correct:correct,Explanation:explanation,Technique:technique,"Question Type":"MCQ"};
       }
-      if(fkey)await fbPatch(`${sheet}/${fkey}`,patch);
-      // ⚡ Firebase আগেই সেভ হয়ে গেছে (উপরে) — Sheet sync এখন ব্যাকগ্রাউন্ডে (await না করে) পাঠানো
-      // হচ্ছে, GAS-এর existing "updateField" action দিয়ে (প্রতিটা field আলাদা কল, parallel-এ)।
-      // এটা best-effort: GAS Secret না থাকলে চুপচাপ স্কিপ হবে, আর কোনো field ব্যর্থ হলেও শুধু
-      // একটা soft warning toast দেখাবে — Edit ততক্ষণে Firebase-এ সফল হয়ে গেছে, সেটা বাতিল হবে না।
+
+      // ⚡ আগে fbPatch ব্যর্থ হলে (permission denied/quota) পুরো try{} ব্লক catch-এ চলে
+      // যেত আর নিচের Sheet sync-এর কাছে কখনো পৌঁছাতোই না — Sheet sync ছিল conditional
+      // on Firebase success. এখন উল্টো: Sheet update (GAS "updateField") এখন প্রাইমারি/
+      // নির্ভরযোগ্য অ্যাকশন, Firebase patch শুধু best-effort মিরর — ব্যর্থ হলেও Sheet
+      // update থামবে না বা বাতিল হবে না।
+      let fbError=null;
+      try{ if(fkey)await fbPatch(`${sheet}/${fkey}`,patch); }
+      catch(e){ fbError=e?.message||String(e); }
+
       const gasSecret=loadSharedGasSecret();
+      const sheetFields=questionType==="Study"
+        ?{question,correct,explanation,technique}
+        :questionType==="Written"
+        ?{question,explanation,technique}
+        :{question,opt1,opt2,opt3,opt4,correct,explanation,technique};
+
+      let sheetRes={ok:false,failed:Object.keys(sheetFields)};
       if(gasSecret&&qid){
-        const sheetFields=questionType==="Study"
-          ?{question,correct,explanation,technique}
-          :questionType==="Written"
-          ?{question,explanation,technique}
-          :{question,opt1,opt2,opt3,opt4,correct,explanation,technique};
-        syncFieldsToSheet({sheet,id:qid,fields:sheetFields,gasSecret})
-          .then(res=>{ if(!res.ok)push("error","⚠️ Sheet-এ sync আংশিক ব্যর্থ",`ফিল্ড: ${res.failed.join(", ")} — Firebase-এ ঠিকই সেভ হয়েছে`); })
-          .catch(()=>{});
+        sheetRes=await syncFieldsToSheet({sheet,id:qid,fields:sheetFields,gasSecret});
       }
-      push("success","✅ আপডেট!",`#${qid}`);
-      onSaved();
+
+      if(sheetRes.ok){
+        push("success","✅ Sheet-এ আপডেট!",`#${qid}`+(fbError?` (Firebase ব্যর্থ ছিল, শুধু Sheet-এ সেভ হয়েছে)`:""));
+        onSaved();
+      } else if(!fbError){
+        // Firebase অন্তত সফল, Sheet ব্যর্থ/স্কিপড — আগের মতো Edit সফল দেখাও, শুধু sheet-warning যোগ করো
+        push("success","✅ আপডেট!",`#${qid}`);
+        if(gasSecret) push("error","⚠️ Sheet-এ sync ব্যর্থ",`ফিল্ড: ${sheetRes.failed.join(", ")||"সব"} — Firebase-এ ঠিকই সেভ হয়েছে`);
+        onSaved();
+      } else {
+        push("error","❌ Edit সম্পূর্ণ ব্যর্থ (Firebase ও Sheet দুটোই)",
+          [fbError, gasSecret?`Sheet: ${sheetRes.failed.join(", ")}`:"GAS Secret নেই"].filter(Boolean).join(" | "));
+      }
     }catch(e){push("error","Edit ব্যর্থ",String(e?.message||e||"unknown"));}
     setSaving(false);
   };
