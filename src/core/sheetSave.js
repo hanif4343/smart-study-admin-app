@@ -79,4 +79,50 @@ async function renameFieldInSheet({sheet,field,oldVal,newVal,gasSecret,push}){
   }catch(e){ push?.("error","❌ Rename ব্যর্থ",e.message); return{ok:false,count:0}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet };
+/* ── Google Sheet-এ একটা single field আপডেট (একটা row) — GAS-এর existing "updateField"
+   action কল করে (id দিয়ে row খুঁজে ওই column-টাই বসিয়ে দেয়, GAS নিজে থেকেই Firebase mirror
+   sync করে)। এটা ইচ্ছাকৃতভাবে best-effort: GAS URL/secret না থাকলে বা network/permission
+   error হলেও শুধু {ok:false} রিটার্ন করে — throw করে না, যাতে caller-এর মূল Firebase-flow
+   (যেটা এর আগেই সফলভাবে সেভ হয়ে গেছে) কখনো আটকে না যায়। ── */
+async function updateFieldInSheet({sheet,id,field,value,gasSecret}){
+  if(!GAS||!gasSecret||!id)return{ok:false,error:"missing GAS/secret/id"};
+  try{
+    const url=`${GAS}?action=updateField&secret=${encodeURIComponent(gasSecret)}`+
+      `&sheet=${encodeURIComponent(sheet)}&id=${encodeURIComponent(id)}`+
+      `&field=${encodeURIComponent(field)}&content=${encodeURIComponent(value??"")}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.result!=="success")return{ok:false,error:data.error||"unknown GAS error"};
+    return{ok:true};
+  }catch(e){ return{ok:false,error:e?.message||String(e)}; }
+}
+
+/* ── InlineEditModal-এর জন্য: একসাথে একাধিক field Sheet-এ sync (প্রতিটা field আলাদা
+   updateField কল, সবগুলো parallel-এ চলে)। Firebase patch ইতিমধ্যে হয়ে গেছে ধরে নেওয়া হয় —
+   এটা শুধু Sheet mirror-কে একই অবস্থায় আনার জন্য (best-effort, silent-fail per field)। ── */
+async function syncFieldsToSheet({sheet,id,fields,gasSecret}){
+  const entries=Object.entries(fields||{});
+  if(!GAS||!gasSecret||!id)return{ok:false,failed:entries.map(([f])=>f)};
+  const results=await Promise.all(entries.map(([field,value])=>updateFieldInSheet({sheet,id,field,value,gasSecret})));
+  const failed=entries.filter((_,i)=>!results[i].ok).map(([f])=>f);
+  return{ok:failed.length===0,failed};
+}
+
+/* ── DeleteTab-এর জন্য: Google Sheet থেকে একাধিক ID একসাথে ডিলিট — GAS-এর existing
+   "deleteByIds" action কল করে (comma-separated ids)। Firebase delete আগেই fbDeleteBatch
+   দিয়ে হয়ে যায় — GAS-এর deleteByIds ইচ্ছাকৃতভাবে Firebase mirror sync করে না (পুরনো কমেন্ট:
+   "Firebase already updated directly from app - DO NOT sync"), তাই শুধু Sheet-টাই আলাদা
+   করে ঠিক হয়। Best-effort: ব্যর্থ হলেও মূল delete flow-কে ব্লক করে না। ── */
+async function deleteIdsInSheet({sheet,ids,gasSecret}){
+  if(!GAS||!gasSecret||!ids?.length)return{ok:false,deleted:0,error:"missing GAS/secret/ids"};
+  try{
+    const url=`${GAS}?action=deleteByIds&secret=${encodeURIComponent(gasSecret)}`+
+      `&sheet=${encodeURIComponent(sheet)}&ids=${encodeURIComponent(ids.join(","))}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.result!=="success")return{ok:false,deleted:0,error:data.error||"unknown GAS error"};
+    return{ok:true,deleted:data.deleted||0};
+  }catch(e){ return{ok:false,deleted:0,error:e?.message||String(e)}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet };
