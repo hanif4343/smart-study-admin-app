@@ -67,7 +67,7 @@ function ArchivePage({push,onSendToBulk}){
   const doSendToBulk=(e)=>{
     const src=currentOf(e);
     if(!src.text.trim()){push("warn","⚠️ কোনো ডেটা নেই","");return;}
-    onSendToBulk({text:src.text,subject:src.subject,subtopic:src.subtopic,qtype:src.qtype});
+    onSendToBulk({text:src.text,subject:src.subject,subtopic:src.subtopic,qtype:src.qtype,archiveId:e.id});
     push("success","📤 Bulk পেজে পাঠানো হয়েছে","review করে Upload করুন");
   };
 
@@ -88,6 +88,10 @@ function ArchivePage({push,onSendToBulk}){
       setSubmittingId(null);
       if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,`${targetMode} — ${subject}`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
       if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+      if(res.added>0||res.skipped>0){
+        archiveDelete(e.id); refresh();
+        if(expandedId===e.id){setExpandedId(null);setEditBuf(null);}
+      }
       return;
     }
 
@@ -102,6 +106,10 @@ function ArchivePage({push,onSendToBulk}){
     setSubmittingId(null);
     if(sent>0) push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${targetMode} — ${subject}`);
     if(failed>0) push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    if(sent>0){
+      archiveDelete(e.id); refresh();
+      if(expandedId===e.id){setExpandedId(null);setEditBuf(null);}
+    }
   };
 
   return(
