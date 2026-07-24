@@ -394,6 +394,10 @@ function MultiSubjectImportPage({push}){
   const backToEdit=()=>{ setPhase("idle"); }; // ছবি/গ্রুপ-ব্রেক ঠিক করে আবার Process করা যাবে — cache থাকায় দ্রুত হবে
   const startOver=()=>{ setImages([]); setDraftGroups([]); setResult(null); setPhase("idle"); };
 
+  const[expandedGroupId,setExpandedGroupId]=useState(null); // Confirm স্ক্রিনে কোন group-এর পাতার ছবি দেখানো হচ্ছে
+  const toggleGroupImages=(gid)=>setExpandedGroupId(p=>p===gid?null:gid);
+  const imgByPageNo=(n)=>images[n-1]; // pages array 1-based (images grid index অনুযায়ী)
+
   const pct=progress.total?Math.round(progress.cur/progress.total*100):0;
   const totalIncludedQ=draftGroups.filter(g=>g.included).reduce((s,g)=>s+g.rows.length,0);
   const totalIncludedG=draftGroups.filter(g=>g.included).length;
@@ -446,6 +450,7 @@ function MultiSubjectImportPage({push}){
           </div>
           {draftGroups.map(g=>{
             const isEmpty=!g.subject.trim();
+            const imgsOpen=expandedGroupId===g.id;
             return(
               <div key={g.id} style={{background:g.included?C.panel:"#1a1a1a",opacity:g.included?1:.5,
                 border:`1px solid ${isEmpty&&g.included?"#f59e0b":C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:10}}>
@@ -459,6 +464,38 @@ function MultiSubjectImportPage({push}){
                     {g.included?"✅ রাখা হবে":"❌ বাদ"}
                   </button>
                 </div>
+                <button onClick={()=>toggleGroupImages(g.id)}
+                  style={{fontSize:10,fontWeight:800,padding:"4px 10px",borderRadius:8,cursor:"pointer",marginBottom:8,
+                    border:`1px solid ${isEmpty?"#f59e0b":C.border}`,
+                    background:isEmpty?"#f59e0b18":"transparent",
+                    color:isEmpty?"#f59e0b":C.muted}}>
+                  {imgsOpen?"▲ ছবি লুকাও":`🖼️ এই group-এর ${g.pages.length}টা পাতার ছবি দেখো (হেডার পড়ে Subject বসাতে)`}
+                </button>
+                {imgsOpen&&(
+                  <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6,marginBottom:8}}>
+                    {g.pages.map(pn=>{
+                      const im=imgByPageNo(pn);
+                      if(!im)return null;
+                      const src=im.webPath||(im.base64?`data:image/jpeg;base64,${im.base64}`:null);
+                      if(!src)return null;
+                      return(
+                        <div key={pn} style={{flexShrink:0,textAlign:"center"}}>
+                          <img src={src} draggable={false}
+                            onContextMenu={ev=>ev.preventDefault()}
+                            onTouchStart={()=>startLongPress(im.id)}
+                            onTouchEnd={cancelLongPress}
+                            onTouchCancel={cancelLongPress}
+                            onMouseDown={()=>startLongPress(im.id)}
+                            onMouseUp={cancelLongPress}
+                            onMouseLeave={cancelLongPress}
+                            style={{width:64,height:64,borderRadius:8,objectFit:"cover",border:`2px solid ${C.border}`,
+                              WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none",touchAction:"none"}}/>
+                          <div style={{fontSize:9,color:C.muted,marginTop:2}}>#{pn}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                   <div className="fld" style={{marginBottom:0}}>
                     <label>📚 Subject{isEmpty&&<span style={{color:"#f59e0b"}}> ⚠️ খালি</span>}</label>
@@ -523,64 +560,72 @@ function MultiSubjectImportPage({push}){
             {images.length>0&&phase!=="processing"&&<button className="btn" style={{background:"#7f1d1d",color:"#fca5a5",borderColor:"#991b1b",padding:"0 12px"}} onClick={clearAll}>🗑</button>}
           </div>
 
-          {/* Image Grid — reorder + manual group-break + status + detected subject/subtopic */}
+          {/* Image List — reorder + manual group-break + status + detected subject/subtopic
+              Redesigned: cropped 76x76 square thumbnails হাইড হয়ে যাচ্ছিল হেডার-লাইন, তাই এখন
+              পুরো পাতা (object-fit:contain, full-width) সরাসরি দেখা যায় — আলাদা tap/hold লাগে না */}
           {images.length>0&&(
-            <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:12}}>
-              {images.map((img,i)=>(
-                <div key={img.id} style={{position:"relative",width:84,
-                  ...(img.groupBreak?{background:"#f59e0b18",borderRadius:12,padding:4,marginLeft:2}:{})}}>
-                  <div style={{position:"relative",width:76,height:76}}>
-                    {img.webPath?(
-                      <img src={img.webPath} draggable={false}
-                        onContextMenu={e=>e.preventDefault()}
-                        onTouchStart={()=>startLongPress(img.id)}
-                        onTouchEnd={cancelLongPress}
-                        onTouchCancel={cancelLongPress}
-                        onMouseDown={()=>startLongPress(img.id)}
-                        onMouseUp={cancelLongPress}
-                        onMouseLeave={cancelLongPress}
-                        style={{width:76,height:76,borderRadius:10,objectFit:"cover",
-                        WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none",touchAction:"none",
-                        border:`2px solid ${img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#6366f1":img.groupBreak?"#f59e0b":C.border}`}}/>
-                    ):(
-                      <div style={{width:76,height:76,borderRadius:10,background:C.panel,border:`2px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📷</div>
-                    )}
-                    <div style={{position:"absolute",bottom:2,left:2,right:2,textAlign:"center",fontSize:9,fontWeight:800,
-                      color:img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#818cf8":"#94a3b8"}}>
-                      {img.status==="done"?`✔ #${i+1}`:img.status==="error"?`✗ #${i+1}`:img.status==="running"?"⏳":`#${i+1}`}
-                    </div>
-                    {phase!=="processing"&&(
-                      <div onClick={()=>removeImg(img.id)} style={{position:"absolute",top:-6,right:-6,background:"#ef4444",color:"#fff",borderRadius:999,width:18,height:18,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,cursor:"pointer",fontWeight:900}}>×</div>
-                    )}
-                    {phase!=="processing"&&(
-                      <div style={{position:"absolute",top:-6,left:-6,display:"flex",flexDirection:"column",gap:2}}>
-                        <div onClick={()=>moveImg(img.id,-1)} style={{background:"#1e293b",color:"#fff",borderRadius:999,width:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,cursor:"pointer",border:`1px solid ${C.border}`}}>↑</div>
-                        <div onClick={()=>moveImg(img.id,1)} style={{background:"#1e293b",color:"#fff",borderRadius:999,width:16,height:16,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,cursor:"pointer",border:`1px solid ${C.border}`}}>↓</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:12}}>
+              {images.map((img,i)=>{
+                const src=img.webPath||(img.base64?`data:image/jpeg;base64,${img.base64}`:null);
+                const borderCol=img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#6366f1":img.groupBreak?"#f59e0b":C.border;
+                return(
+                  <div key={img.id} style={{background:img.groupBreak?"#f59e0b14":C.panel,border:`1px solid ${borderCol}`,borderRadius:12,padding:8}}>
+                    <div style={{position:"relative"}}>
+                      {src?(
+                        <img src={src} draggable={false}
+                          onContextMenu={e=>e.preventDefault()}
+                          onTouchStart={()=>startLongPress(img.id)}
+                          onTouchEnd={cancelLongPress}
+                          onTouchCancel={cancelLongPress}
+                          onMouseDown={()=>startLongPress(img.id)}
+                          onMouseUp={cancelLongPress}
+                          onMouseLeave={cancelLongPress}
+                          style={{width:"100%",maxHeight:260,minHeight:140,objectFit:"contain",background:"#000",
+                          borderRadius:8,display:"block",
+                          WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none",touchAction:"none"}}/>
+                      ):(
+                        <div style={{width:"100%",height:120,borderRadius:8,background:"#0a1628",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>📷</div>
+                      )}
+                      <div style={{position:"absolute",top:6,left:6,fontSize:11,fontWeight:900,padding:"2px 8px",borderRadius:20,
+                        background:"#000000aa",
+                        color:img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#818cf8":"#e2e8f0"}}>
+                        {img.status==="done"?`✔ #${i+1}`:img.status==="error"?`✗ #${i+1}`:img.status==="running"?"⏳ প্রসেস হচ্ছে...":`#${i+1}`}
                       </div>
-                    )}
+                      {phase!=="processing"&&(
+                        <div onClick={()=>removeImg(img.id)} style={{position:"absolute",top:6,right:6,background:"#ef4444",color:"#fff",borderRadius:999,width:26,height:26,display:"flex",alignItems:"center",justifyContent:"center",fontSize:15,cursor:"pointer",fontWeight:900}}>×</div>
+                      )}
+                    </div>
+
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8,flexWrap:"wrap"}}>
+                      {phase!=="processing"&&(
+                        <>
+                          <button onClick={()=>moveImg(img.id,-1)} style={{background:"#1e293b",color:"#fff",borderRadius:8,width:28,height:26,border:`1px solid ${C.border}`,fontSize:12,cursor:"pointer"}}>↑</button>
+                          <button onClick={()=>moveImg(img.id,1)} style={{background:"#1e293b",color:"#fff",borderRadius:8,width:28,height:26,border:`1px solid ${C.border}`,fontSize:12,cursor:"pointer"}}>↓</button>
+                        </>
+                      )}
+                      {i===0?(
+                        <span style={{fontSize:10,fontWeight:800,color:C.muted,padding:"4px 10px",border:`1px solid ${C.border}`,borderRadius:8}}>1️⃣ Group শুরু</span>
+                      ):(
+                        phase!=="processing"&&(
+                          <button onClick={()=>toggleGroupBreak(img.id)}
+                            style={{fontSize:11,fontWeight:800,padding:"4px 10px",borderRadius:8,cursor:"pointer",
+                              background:img.groupBreak?"#f59e0b":"transparent",
+                              color:img.groupBreak?"#1a1200":C.muted,
+                              border:`1px solid ${img.groupBreak?"#f59e0b":C.border}`}}>
+                            {img.groupBreak?"✂️ নতুন Group":"চলমান (এখানে ট্যাপ করে নতুন Group মার্ক করো)"}
+                          </button>
+                        )
+                      )}
+                      {img.status==="done"&&(
+                        <span style={{fontSize:10,color:"#10b981",marginLeft:"auto"}}>{img.designation||"—"} · {img.entryCount} প্রশ্ন</span>
+                      )}
+                      {img.status==="error"&&(
+                        <span style={{fontSize:10,color:"#ef4444",marginLeft:"auto"}}>{img.error}</span>
+                      )}
+                    </div>
                   </div>
-                  {/* Manual group-break toggle — প্রথম ছবি বাদে সবগুলোতে */}
-                  {i>0&&phase!=="processing"&&(
-                    <div onClick={()=>toggleGroupBreak(img.id)}
-                      style={{marginTop:2,fontSize:8,fontWeight:800,textAlign:"center",padding:"2px 0",borderRadius:6,cursor:"pointer",
-                        background:img.groupBreak?"#f59e0b":"transparent",
-                        color:img.groupBreak?"#1a1200":C.muted,
-                        border:`1px solid ${img.groupBreak?"#f59e0b":C.border}`}}>
-                      {img.groupBreak?"✂️ নতুন Group":"চলমান"}
-                    </div>
-                  )}
-                  {i===0&&<div style={{marginTop:2,fontSize:8,fontWeight:800,textAlign:"center",color:C.muted}}>1️⃣ Group শুরু</div>}
-                  {img.status==="done"&&(
-                    <div style={{fontSize:9,color:"#10b981",marginTop:2,textAlign:"center",lineHeight:1.3,wordBreak:"break-word"}}>
-                      {img.designation||"—"}<br/>
-                      <span style={{color:C.muted}}>{img.entryCount} প্রশ্ন</span>
-                    </div>
-                  )}
-                  {img.status==="error"&&(
-                    <div style={{fontSize:9,color:"#ef4444",marginTop:2,textAlign:"center",lineHeight:1.3,wordBreak:"break-word"}}>{img.error}</div>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
