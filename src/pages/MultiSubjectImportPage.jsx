@@ -12,7 +12,7 @@
    — পুরনো AIImportPage/BulkUploaderPage অপরিবর্তিত — সম্পূর্ণ নতুন,
      আলাদা পেজ
    ══════════════════════════════════════════════════════════════════ */
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { C } from "../core/config.js";
 import { _LC } from "../core/logger.js";
 import { fbPush, fbSet } from "../core/firebase.js";
@@ -24,12 +24,14 @@ import {
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet } from "../core/sheetSave.js";
 import { getOcrCacheEntry, setOcrCacheEntry } from "../core/ocrCache.js";
+import { saveDraft, listDrafts, deleteDraft, makeDraftId } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 import { ApiSettingsPage } from "./ApiSettingsPage.jsx";
 
 const SRC_NAME="Multi-Subject Bulk Import";
 const CACHE_QTYPE="MultiSubjectWritten"; // AIImportPage-এর ক্যাশ থেকে আলাদা রাখতে নিজস্ব qtype key
+const DRAFT_SOURCE="multiimport";
 
 /* ── AI prompt: header থেকে Designation/Institution + Written প্রশ্ন-উত্তর একসাথে বের করে JSON দেয় ── */
 function buildDetectPrompt(ocrText){
@@ -75,7 +77,7 @@ function parseDetectResponse(text){
   return{designation,institution,entries};
 }
 
-function MultiSubjectImportPage({push}){
+function MultiSubjectImportPage({push,resumeDraftId}){
   // images: [{id,webPath,base64,status,designation,institution,entryCount,error,groupBreak}]
   // groupBreak=true মানে "এই ছবি থেকে নতুন group শুরু" (ইউজার নিজে মার্ক করে) — index 0 সবসময় group শুরু (মার্ক ছাড়াই)
   const[images,setImages]=useState([]);
@@ -91,6 +93,57 @@ function MultiSubjectImportPage({push}){
   const[result,setResult]=useState(null); // {added,skipped,failed,groupCount}
   const[submitting,setSubmitting]=useState(false);
   const stopRef=useRef(false);
+
+  /* ── Draft/Archive — app kill/reload হলেও Detect+Parse করা কাজ যেন হারিয়ে না যায় (submit হওয়া পর্যন্ত) ── */
+  const draftIdRef=useRef(null);
+  const restoringRef=useRef(false);
+  const[resumeDraft,setResumeDraft]=useState(null);
+
+  useEffect(()=>{
+    (async()=>{
+      if(resumeDraftId){
+        const list=await listDrafts(DRAFT_SOURCE);
+        const d=list.find(x=>x.id===resumeDraftId);
+        if(d) restoreDraft(d);
+        return;
+      }
+      const list=await listDrafts(DRAFT_SOURCE);
+      if(list.length) setResumeDraft(list[0]);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[resumeDraftId]);
+
+  const restoreDraft=(d)=>{
+    restoringRef.current=true;
+    draftIdRef.current=d.id;
+    setImages(d.images||[]);
+    setPhase(d.phase||"idle");
+    setDraftGroups(d.draftGroups||[]);
+    setTargetMode(d.targetMode||"Quiz");
+    setResumeDraft(null);
+    push("success","🔄 আগের কাজ ফিরিয়ে আনা হলো",`${(d.images||[]).length}টি ছবি — আবার Detect/AI করতে হবে না`);
+    setTimeout(()=>{restoringRef.current=false;},300);
+  };
+  const dismissDraft=async(discard)=>{
+    if(discard && resumeDraft) await deleteDraft(resumeDraft.id);
+    setResumeDraft(null);
+  };
+
+  /* ── Autosave — submit (phase "done") হওয়া পর্যন্ত প্রতিটা পরিবর্তনে debounce করে IndexedDB-তে সেভ ── */
+  useEffect(()=>{
+    if(restoringRef.current) return;
+    if(!images.length || phase==="done") return;
+    const t=setTimeout(()=>{
+      if(!draftIdRef.current) draftIdRef.current=makeDraftId(DRAFT_SOURCE);
+      saveDraft({
+        id:draftIdRef.current, source:DRAFT_SOURCE,
+        label:`Multi-Subject Import — ${images.length}টি ছবি`,
+        images, phase, draftGroups, targetMode,
+        createdAt:Date.now(),
+      });
+    },600);
+    return()=>clearTimeout(t);
+  },[images,phase,draftGroups,targetMode]);
 
   /* ── Long-press → বড় প্রিভিউ (হেডিং পড়ে বুঝে grouping সহজ করার জন্য) ── */
   const LONG_PRESS_MS=3000;
@@ -188,7 +241,10 @@ function MultiSubjectImportPage({push}){
     return copy;
   });
   const toggleGroupBreak=(id)=>setImages(p=>p.map(x=>x.id===id?{...x,groupBreak:!x.groupBreak}:x));
-  const clearAll=()=>{ setImages([]); setResult(null); setDraftGroups([]); setPhase("idle"); };
+  const clearAll=()=>{
+    if(draftIdRef.current){deleteDraft(draftIdRef.current);draftIdRef.current=null;}
+    setImages([]); setResult(null); setDraftGroups([]); setPhase("idle");
+  };
 
   /* ── webPath → base64 (2-side landscape page split আগের মতোই) ── */
   const toBase64=async(img)=>{
@@ -344,6 +400,9 @@ function MultiSubjectImportPage({push}){
       if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,
         `${included.length}টি subject/sub-topic গ্রুপ`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
       if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+      if(!res.failedRows.length && res.added>0 && draftIdRef.current){
+        deleteDraft(draftIdRef.current); draftIdRef.current=null;
+      }
       return;
     }
 
@@ -371,10 +430,16 @@ function MultiSubjectImportPage({push}){
     setSubmitting(false); setPhase("done");
     if(sent>0) push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${included.length}টি subject/sub-topic গ্রুপ`);
     if(failed>0) push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    if(failed===0 && sent>0 && draftIdRef.current){
+      deleteDraft(draftIdRef.current); draftIdRef.current=null;
+    }
   };
 
   const backToEdit=()=>{ setPhase("idle"); }; // ছবি/গ্রুপ-ব্রেক ঠিক করে আবার Process করা যাবে — cache থাকায় দ্রুত হবে
-  const startOver=()=>{ setImages([]); setDraftGroups([]); setResult(null); setPhase("idle"); };
+  const startOver=()=>{
+    if(draftIdRef.current){deleteDraft(draftIdRef.current);draftIdRef.current=null;}
+    setImages([]); setDraftGroups([]); setResult(null); setPhase("idle");
+  };
 
   const pct=progress.total?Math.round(progress.cur/progress.total*100):0;
   const totalIncludedQ=draftGroups.filter(g=>g.included).reduce((s,g)=>s+g.rows.length,0);
@@ -402,6 +467,26 @@ function MultiSubjectImportPage({push}){
         </div>
       </div>
       {showApiSettings&&<ApiSettingsPage push={push} inline={true}/>}
+
+      {/* ── Resume banner — আগের অসম্পূর্ণ (submit না হওয়া) কাজ পাওয়া গেলে ── */}
+      {resumeDraft&&(
+        <div style={{background:"#1e1b4b",border:"1px solid #6366f1",borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:800,color:"#a5b4fc",marginBottom:4}}>⚠️ আগের একটা অসম্পূর্ণ কাজ পাওয়া গেছে</div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:8}}>
+            {(resumeDraft.images||[]).length}টি ছবি — submit করার আগেই বন্ধ হয়ে গিয়েছিল। ফিরিয়ে আনলে আবার Detect/AI করতে হবে না।
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn" onClick={()=>restoreDraft(resumeDraft)}
+              style={{flex:1,justifyContent:"center",background:"#4338ca",color:"#fff",borderColor:"#6366f1",fontWeight:700}}>
+              🔄 ফিরিয়ে আনুন
+            </button>
+            <button className="btn" onClick={()=>dismissDraft(true)}
+              style={{background:"transparent",color:C.muted,borderColor:C.border,padding:"0 14px"}}>
+              🗑️ বাদ দিন
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Long-press zoom preview overlay — হেডিং পড়ার জন্য বড় করে দেখায়, ছেড়ে দিলে ফেড-আউট ── */}
       {previewId&&(()=>{
