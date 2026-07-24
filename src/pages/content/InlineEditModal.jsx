@@ -2,6 +2,8 @@
 import React, { useState } from "react";
 import { C } from "../../core/config.js";
 import { fbPatch } from "../../core/firebase.js";
+import { syncFieldsToSheet } from "../../core/sheetSave.js";
+import { loadSharedGasSecret } from "../../core/utils.js";
 import { useModalBack } from "../../hooks/useModalBack.js";
 
 function InlineEditModal({q,sheet,onClose,onSaved,push}){
@@ -40,17 +42,21 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
         patch={Question:question,[o1k]:opt1,[o2k]:opt2,[o3k]:opt3,[o4k]:opt4,Correct:correct,Explanation:explanation,Technique:technique,"Question Type":"MCQ"};
       }
       if(fkey)await fbPatch(`${sheet}/${fkey}`,patch);
-      // Sync all changed fields to Google Sheet
-      const syncFields=[
-        ["question",question],
-        ["explanation",explanation],
-        ["technique",technique],
-        ["correct",correct],
-        ["opt1",opt1],["opt2",opt2],["opt3",opt3],["opt4",opt4],
-      ];
-      syncFields.forEach(([f,v])=>{
-        // Sheet sync → GAS standalone handles this
-      });
+      // ⚡ Firebase আগেই সেভ হয়ে গেছে (উপরে) — Sheet sync এখন ব্যাকগ্রাউন্ডে (await না করে) পাঠানো
+      // হচ্ছে, GAS-এর existing "updateField" action দিয়ে (প্রতিটা field আলাদা কল, parallel-এ)।
+      // এটা best-effort: GAS Secret না থাকলে চুপচাপ স্কিপ হবে, আর কোনো field ব্যর্থ হলেও শুধু
+      // একটা soft warning toast দেখাবে — Edit ততক্ষণে Firebase-এ সফল হয়ে গেছে, সেটা বাতিল হবে না।
+      const gasSecret=loadSharedGasSecret();
+      if(gasSecret&&qid){
+        const sheetFields=questionType==="Study"
+          ?{question,correct,explanation,technique}
+          :questionType==="Written"
+          ?{question,explanation,technique}
+          :{question,opt1,opt2,opt3,opt4,correct,explanation,technique};
+        syncFieldsToSheet({sheet,id:qid,fields:sheetFields,gasSecret})
+          .then(res=>{ if(!res.ok)push("error","⚠️ Sheet-এ sync আংশিক ব্যর্থ",`ফিল্ড: ${res.failed.join(", ")} — Firebase-এ ঠিকই সেভ হয়েছে`); })
+          .catch(()=>{});
+      }
       push("success","✅ আপডেট!",`#${qid}`);
       onSaved();
     }catch(e){push("error","Edit ব্যর্থ",String(e?.message||e||"unknown"));}
