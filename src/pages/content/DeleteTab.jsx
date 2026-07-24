@@ -1,5 +1,5 @@
 /* ══════════ DELETE TAB ══════════ */
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { C } from "../../core/config.js";
 import { useFB, invalidate } from "../../core/dataCache.js";
 import { fbDeleteBatch } from "../../core/firebase.js";
@@ -13,8 +13,17 @@ function DeleteTab({push,tick}){
   const{data:raw,loading}=useFB(sheet,tick);
   const[delTarget,setDelTarget]=useState(null);
   const[delLoading,setDelLoading]=useState(false);
+  // Sheet delete সফল হলেও Firebase read এখনো পুরনো ডেটাই দেখাতে পারে (Firebase write
+  // permission block থাকলেও read কাজ করতে পারে) — তাই সদ্য-ডিলিট-হওয়া ID গুলো এখানে
+  // লোকালি ট্র্যাক করে UI থেকে সাথে সাথেই বাদ দেওয়া হয়, sheet ভিত্তিক অবস্থা যেন সঠিক দেখায়।
+  const[locallyRemoved,setLocallyRemoved]=useState(()=>new Set());
+  useEffect(()=>{ setLocallyRemoved(new Set()); },[sheet]);
 
-  const allQ=useMemo(()=>toArr(raw),[raw]);
+  const allQ=useMemo(()=>{
+    const arr=toArr(raw);
+    if(!locallyRemoved.size)return arr;
+    return arr.filter(q=>!locallyRemoved.has((q.ID||q.id||"").toString().trim()));
+  },[raw,locallyRemoved]);
 
   const groups=useMemo(()=>{
     const map={};
@@ -35,24 +44,43 @@ function DeleteTab({push,tick}){
     setDelLoading(true);
     const[groupName,qs]=delTarget;
     setDelProgress({done:0,total:qs.length});
+
+    const keys=qs.map(q=>q._fbKey).filter(Boolean);
+    const sheetIds=qs.map(q=>(q.ID||q.id||"").toString().trim()).filter(Boolean);
+    const gasSecret=loadSharedGasSecret();
+
+    // ⚡ Firebase delete আগে এখানেই "মূল" কাজ ছিল আর ব্যর্থ হলে (permission denied/quota
+    // exceeded) পুরো delete-ই বাতিল হয়ে যেত — Sheet-এর দিকে কখনো পৌঁছাতোই না। এখন উল্টো:
+    // Sheet delete (GAS "deleteByIds") এখন প্রাইমারি/নির্ভরযোগ্য অ্যাকশন, Firebase শুধু
+    // best-effort মিরর — ব্যর্থ হলেও Sheet delete থামবে না বা বাতিল হবে না।
+    let fbDeleted=0, fbError=null;
     try{
-      // ⚡ Single multi-path PATCH call — O(1) instead of O(N) serial deletes
-      const keys=qs.map(q=>q._fbKey).filter(Boolean);
-      const deleted=await fbDeleteBatch(sheet, keys, (done,total)=>setDelProgress({done,total}));
-      invalidate(sheet);
-      push("success","🗑️ Bulk Delete!",`"${groupName}" · ${deleted}টি মুছে গেছে`);
+      fbDeleted=await fbDeleteBatch(sheet, keys, (done,total)=>setDelProgress({done,total}));
+    }catch(e){ fbError=e?.message||String(e); }
+    invalidate(sheet);
+
+    let sheetRes={ok:false,deleted:0,error:"GAS Secret Key নেই — Save Location প্যানেলে বসাও"};
+    if(gasSecret&&sheetIds.length){
+      sheetRes=await deleteIdsInSheet({sheet,ids:sheetIds,gasSecret});
+    } else if(!sheetIds.length){
+      sheetRes={ok:false,deleted:0,error:"এই রো-গুলোর ID পাওয়া যায়নি"};
+    }
+
+    if(sheetRes.ok){
+      push("success","🗑️ Sheet-এ Bulk Delete!",
+        `"${groupName}" · Sheet থেকে ${sheetRes.deleted}টি মুছে গেছে`
+        +(fbError?` (Firebase ব্যর্থ ছিল: ${fbError} — শুধু Sheet থেকেই মুছেছে)`:""));
+      setLocallyRemoved(prev=>new Set([...prev,...sheetIds]));
       setDelTarget(null);
-      // ⚡ Firebase delete আগেই সফল হয়ে গেছে (উপরে) — Sheet mirror-ও ব্যাকগ্রাউন্ডে (await না করে)
-      // সিঙ্ক করা হচ্ছে GAS-এর existing "deleteByIds" action দিয়ে। Best-effort: GAS Secret না
-      // থাকলে চুপচাপ স্কিপ, ব্যর্থ হলেও শুধু soft warning — মূল ডিলিট বাতিল হবে না।
-      const gasSecret=loadSharedGasSecret();
-      const sheetIds=qs.map(q=>(q.ID||q.id||"").toString().trim()).filter(Boolean);
-      if(gasSecret&&sheetIds.length){
-        deleteIdsInSheet({sheet,ids:sheetIds,gasSecret})
-          .then(res=>{ if(!res.ok)push("error","⚠️ Sheet থেকে ডিলিট sync ব্যর্থ",res.error||"Firebase থেকে ঠিকই ডিলিট হয়েছে — Sheet-টা ম্যানুয়ালি চেক করো"); })
-          .catch(()=>{});
-      }
-    }catch(e){push("error","Delete ব্যর্থ",e.message);}
+    } else if(fbDeleted>0){
+      // Firebase-এ হয়েছে কিন্তু Sheet-এ হয়নি — আগের মতো পুরোপুরি ব্যর্থ দেখানো ঠিক না,
+      // কিন্তু স্পষ্ট করে জানানো দরকার Sheet এখনো purono ডেটাই দেখাবে
+      push("error","⚠️ Firebase-এ ডিলিট হয়েছে, Sheet-এ হয়নি",sheetRes.error||"Sheet ম্যানুয়ালি চেক করো");
+      setDelTarget(null);
+    } else {
+      push("error","❌ Delete সম্পূর্ণ ব্যর্থ (Firebase ও Sheet দুটোই)",
+        [fbError,sheetRes.error].filter(Boolean).join(" | ")||"অজানা কারণ");
+    }
     setDelProgress({done:0,total:0});
     setDelLoading(false);
   };
@@ -82,7 +110,7 @@ function DeleteTab({push,tick}){
       }
       {delTarget&&<DeleteWarningModal
         title={`"${delTarget[0]}" ডিলিট?`}
-        description={`${delTarget[1].length}টি প্রশ্ন Firebase থেকে মুছে যাবে।`}
+        description={`${delTarget[1].length}টি প্রশ্ন Google Sheet থেকে মুছে যাবে (Firebase-এও চেষ্টা হবে, ব্যর্থ হলেও Sheet delete আটকাবে না)।`}
         onConfirm={doBulkDelete} onCancel={()=>setDelTarget(null)} loading={delLoading}
         progress={delProgress}
       />}
