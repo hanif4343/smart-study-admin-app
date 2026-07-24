@@ -31,6 +31,17 @@ function hashPassword(password) {
   return rawBytes.map(function(b){ return ('0'+(b&0xFF).toString(16)).slice(-2); }).join('');
 }
 
+// ── subject/topic/sub_topic-এর মতো লেবেল normalize করে — শুধু invisible zero-width
+// char (\u200B\u200C\u200D\uFEFF, nbsp) বাদ দেয় আর extra whitespace collapse করে,
+// visible টেক্সট/emoji অক্ষত রাখে। renameField-এ এটা দিয়েই ম্যাচ করা হয়, যাতে
+// invisible-char-এ আলাদা কিন্তু দেখতে-একই-রকম variant একবারেই merge হয়ে যায়।
+function normalizeFieldValue_(s){
+  return (s===undefined||s===null?"":s.toString())
+    .replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g,"")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
 /* ══ FCM V1 ══ */
 function getFCMAccessToken() {
   var cfg = getProps();
@@ -475,8 +486,12 @@ function doGet(e) {
     var shMap2={quiz:"Quiz",qbank:"QBank",study:"Study"};
     shName=shMap2[shName.toLowerCase()]||shName;
     var field=decodeURIComponent(e.parameter.field||"subject");
-    var oldV=decodeURIComponent(e.parameter.oldVal||e.parameter.old||"");
-    var newV=decodeURIComponent(e.parameter.newVal||e.parameter.new||"");
+    // 🐛 ফিক্স: আগে শুধু .trim() দিয়ে ম্যাচ হতো — invisible zero-width char/nbsp থাকলে
+    // (যেমন taxonomy-র পুরনো বাগে ঢুকে যাওয়া \u200b) সেই variant কখনো ম্যাচ হতো না,
+    // আলাদা "ভুতুড়ে" ডুপ্লিকেট থেকে যেত। এখন normalizeFieldValue_ দিয়ে ম্যাচ হয়, তাই
+    // দেখতে-একই-রকম সব variant (invisible char যাই থাকুক) একবারেই merge হয়ে যায়।
+    var oldV=normalizeFieldValue_(decodeURIComponent(e.parameter.oldVal||e.parameter.old||""));
+    var newV=(decodeURIComponent(e.parameter.newVal||e.parameter.new||"")).trim();
     if(!oldV||!newV)return json({result:"error",error:"missing values"});
     var ss3=SpreadsheetApp.getActiveSpreadsheet(), sh3=ss3.getSheetByName(shName);
     if(!sh3)return json({result:"error",error:"sheet not found: "+shName});
@@ -484,32 +499,55 @@ function doGet(e) {
     // Find column — support subject/topic/sub_topic
     var fIdx=-1;
     for(var fi=0;fi<h3.length;fi++){
-      if(h3[fi].toString().toLowerCase()===field.toLowerCase()){fIdx=fi;break;}
+      if(h3[fi].toString().toLowerCase().trim()===field.toLowerCase().trim()){fIdx=fi;break;}
     }
     if(fIdx<0)return json({result:"error",error:"field not found: "+field});
-    var count=0;
+
+    // Firebase mirror sync-এর জন্য দরকার — updateField-এর মতোই id/updatedAt কলাম বের করা হচ্ছে
+    var updColIdx2=-1, idColIdx2=-1;
+    for(var uc=0;uc<h3.length;uc++){
+      var un=h3[uc].toString().toLowerCase().replace(/\s+/g,"");
+      if(un==="updatedat")updColIdx2=uc;
+      if(un==="id")idColIdx2=uc;
+    }
+
+    var count=0, nowMs=Date.now(), touchedRows=[];
     for(var i3=1;i3<d3.length;i3++){
-      if(d3[i3][fIdx].toString().trim()===oldV.trim()){
+      if(normalizeFieldValue_(d3[i3][fIdx])===oldV){
         sh3.getRange(i3+1,fIdx+1).setValue(newV);
+        if(updColIdx2!==-1) sh3.getRange(i3+1,updColIdx2+1).setValue(nowMs);
+        touchedRows.push(i3+1);
         count++;
       }
     }
-    // For topic rename: also update sub_topic column if it starts with "oldV > ..."
+    // For topic rename: also update sub_topic column if it starts with "oldV > ..." (normalized match)
     if(field.toLowerCase()==="topic"||field.toLowerCase()==="sub_topic"){
       var stIdx=-1;
-      for(var si=0;si<h3.length;si++){if(h3[si].toString().toLowerCase()==="sub_topic"||h3[si].toString().toLowerCase()==="subtopic"){stIdx=si;break;}}
-      if(stIdx!==-1){
+      for(var si=0;si<h3.length;si++){var sn=h3[si].toString().toLowerCase().replace(/\s+/g,"");if(sn==="sub_topic"||sn==="subtopic"){stIdx=si;break;}}
+      if(stIdx!==-1 && stIdx!==fIdx){
         for(var i4=1;i4<d3.length;i4++){
-          var stVal=d3[i4][stIdx].toString().trim();
+          var stVal=normalizeFieldValue_(d3[i4][stIdx]);
           if(stVal.indexOf(oldV+" > ")===0){
             sh3.getRange(i4+1,stIdx+1).setValue(newV+" > "+stVal.substring(oldV.length+3));
+            if(updColIdx2!==-1) sh3.getRange(i4+1,updColIdx2+1).setValue(nowMs);
+            if(touchedRows.indexOf(i4+1)===-1) touchedRows.push(i4+1);
             count++;
           }
         }
       }
     }
-    // Firebase already updated directly from app - DO NOT sync (would overwrite with array)
-    return json({result:"success",count:count,field:field,old:oldV,new:newV});
+
+    // ── আগে এখানে Firebase sync ইচ্ছাকৃতভাবে স্কিপ করা হতো ("app থেকেই আলাদা Firebase
+    // patch হয়ে যায়" ধরে নিয়ে) — কিন্তু এখন renameField-ই একমাত্র জায়গা যেখান থেকে Sheet
+    // rename হয়, তাই এখানেই Firebase mirror sync করে দেওয়া হচ্ছে (updateField-এর প্যাটার্ন
+    // অনুসরণ করে — শুধু touched row-গুলোর updatedAt বসিয়ে syncToFirebase-কে incremental
+    // patch করতে দেওয়া হয়, পুরো sheet re-upload হয় না)। ──
+    var fbSynced=true;
+    if(idColIdx2!==-1 && updColIdx2!==-1 && touchedRows.length){
+      fbSynced=syncToFirebase(shName, shName);
+    }
+
+    return json({result:"success",count:count,field:field,old:oldV,new:newV,firebaseSynced:fbSynced});
   }
 
   // ── deleteByIds ── ★ delete questions by comma-separated IDs
