@@ -14,10 +14,10 @@ const NAV=[
   {id:"uploader",   icon:"📤", label:"Uploader",
     children:[
       {id:"bulkupload",  icon:"📝", label:"Bulk Upload"},
-      {id:"joblauncher", icon:"🚀", label:"AI Job"},
+      {id:"joblauncher", icon:"🚀", label:"Exp Gen"},
       {id:"qbankconv",   icon:"🔁", label:"QBank→Quiz"},
       {id:"questiongen", icon:"🧬", label:"AI প্রশ্ন"},
-      {id:"aiimport",    icon:"📸", label:"AI Import"},
+      {id:"aiimport",    icon:"📸", label:"Single Subject"},
       {id:"multiimport", icon:"🗂️", label:"Multi-Subject"},
       {id:"archive",     icon:"🗄️", label:"Archive"},
       {id:"typing",      icon:"⌨️", label:"Typing"},
