@@ -1,109 +1,96 @@
 /* ══════════════════════════════════════════════════════════════════
-   ARCHIVE / DRAFT STORE — IndexedDB ভিত্তিক
-   ── লক্ষ্য ──
-   OCR + AI দিয়ে একবার প্রসেস করা কাজ (রাজ text, parsed প্রশ্ন, subject/tags
-   ইত্যাদি) Firebase/Google Sheet-এ সফলভাবে submit না হওয়া পর্যন্ত এখানে
-   safe থাকবে। Android background-এ app kill করে দিলে বা ভুলে back করে
-   বেরিয়ে গেলেও — app আবার খুললে এখান থেকে ঠিক যেখানে ছিলেন সেখান থেকে
-   আবার শুরু করা যাবে, নতুন করে OCR/AI চালাতে হবে না (quota/সময় বাঁচবে)।
-
-   Submit সফল (fully sent, কোনো ব্যর্থ entry নেই) হলে সাথে সাথে draft
-   ডিলিট হয়ে যায় — কারণ ডাটা ততক্ষণে ডাটাবেজেই চলে গেছে, আর্কাইভে রাখার
-   দরকার নেই।
-
-   localStorage না ব্যবহার করার কারণ: localStorage-এর সাইজ লিমিট (~৫-১০MB)
-   অনেক ছবির OCR text + base64 রাখার জন্য যথেষ্ট না। IndexedDB-তে অনেক বড়
-   ডাটা নিরাপদে রাখা যায়।
+   ARCHIVE STORE — সব OCR/AI result স্থায়ীভাবে (localStorage) জমা রাখে
+   — AI Import, Multi-Subject Bulk Import ইত্যাদি যেকোনো OCR/AI ফলাফল
+     এখানে auto-save হয় (parse হওয়ার সাথে সাথে, submit করা লাগে না)
+   — কোনো কারণে কাজ কেটে গেলে/app বন্ধ হলে এখান থেকে আবার ফিরে পাওয়া
+     যায় — AI-কে আবার কল করে limit খরচ করা লাগে না
+   — এন্ট্রিগুলো edit করা যায়, এবং Bulk Upload বা সরাসরি Sheet/Firebase-এ
+     পাঠিয়ে reuse করা যায়
    ══════════════════════════════════════════════════════════════════ */
+import { nowTs } from "./utils.js";
 
-const DB_NAME    = "ss_archive_db";
-const DB_VERSION = 1;
-const STORE      = "drafts";
+const LS_ARCHIVE="ss_archive_v1";
+const MAX_ARCHIVE=400; // এর বেশি হলে সবচেয়ে পুরনো এন্ট্রি বাদ পড়বে
 
-function _openDB(){
-  return new Promise((resolve,reject)=>{
-    if(!window.indexedDB){ reject(new Error("IndexedDB সাপোর্ট নেই এই ব্রাউজারে")); return; }
-    const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if(!db.objectStoreNames.contains(STORE)){
-        db.createObjectStore(STORE, {keyPath:"id"});
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror   = () => reject(req.error);
-  });
+function loadArchive(){
+  try{
+    const raw=localStorage.getItem(LS_ARCHIVE);
+    if(!raw)return[];
+    const arr=JSON.parse(raw);
+    return Array.isArray(arr)?arr:[];
+  }catch(e){ return[]; }
 }
 
-/* ── Draft save/upsert — প্রতিবার অটো-সেভের সময় কল হয় ── */
-async function saveDraft(draft){
-  if(!draft || !draft.id) return false;
+function saveArchive(list){
+  const trimmed=list.slice(0,MAX_ARCHIVE);
   try{
-    const db = await _openDB();
-    return await new Promise((resolve,reject)=>{
-      const tx = db.transaction(STORE, "readwrite");
-      tx.objectStore(STORE).put({...draft, updatedAt: Date.now()});
-      tx.oncomplete = () => resolve(true);
-      tx.onerror    = () => reject(tx.error);
-    });
+    localStorage.setItem(LS_ARCHIVE,JSON.stringify(trimmed));
   }catch(e){
-    console.warn("archiveStore.saveDraft failed:", e?.message||e);
-    return false;
+    // Quota exceeded — অর্ধেক পুরনো এন্ট্রি ফেলে আবার চেষ্টা করো
+    try{
+      const half=trimmed.slice(0,Math.floor(MAX_ARCHIVE/2));
+      localStorage.setItem(LS_ARCHIVE,JSON.stringify(half));
+    }catch(e2){ /* ignore — storage একেবারেই ভরে গেলে নতুন এন্ট্রি স্কিপ হবে */ }
   }
 }
 
-async function getDraft(id){
-  if(!id) return null;
-  try{
-    const db = await _openDB();
-    return await new Promise((resolve,reject)=>{
-      const tx  = db.transaction(STORE, "readonly");
-      const req = tx.objectStore(STORE).get(id);
-      req.onsuccess = () => resolve(req.result || null);
-      req.onerror   = () => reject(req.error);
-    });
-  }catch(e){ return null; }
+/* rows: [{q,correct,explanation?}] → bulk-ready {} wrapped text (multi-line answার-safe) */
+function rowsToArchiveText(rows){
+  return (rows||[]).map(r=>{
+    const q=(r.q||"").toString();
+    const correct=(r.correct||"").toString();
+    const explanation=(r.explanation||"").toString();
+    return `{${q};${correct}${explanation?(";"+explanation):""}}`;
+  }).join("\n");
 }
 
-/* ── সব draft বা নির্দিষ্ট source (aiimport/multiimport)-এর draft লিস্ট, নতুনতম আগে ── */
-async function listDrafts(source=null){
-  try{
-    const db = await _openDB();
-    return await new Promise((resolve,reject)=>{
-      const tx  = db.transaction(STORE, "readonly");
-      const req = tx.objectStore(STORE).getAll();
-      req.onsuccess = () => {
-        let all = req.result || [];
-        if(source) all = all.filter(d=>d.source===source);
-        all.sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0));
-        resolve(all);
-      };
-      req.onerror = () => reject(req.error);
-    });
-  }catch(e){ return []; }
+/* নতুন এন্ট্রি যোগ করে (সবচেয়ে উপরে/নতুন হিসেবে) — খালি text হলে কিছু করে না */
+function archiveAdd({source,subject="",subtopic="",qtype="Written",text="",rows=null,meta=null}){
+  const finalText=text&&text.trim()?text.trim():(rows?rowsToArchiveText(rows):"");
+  if(!finalText.trim())return null;
+  const entry={
+    id:`arc_${Date.now()}_${Math.floor(Math.random()*99999)}`,
+    sortTs:Date.now(),
+    ts:nowTs(),
+    source:source||"Unknown",
+    subject:subject||"",
+    subtopic:subtopic||"",
+    qtype:qtype||"Written",
+    text:finalText,
+    meta:meta||null,
+  };
+  const list=loadArchive();
+  list.unshift(entry);
+  saveArchive(list);
+  return entry;
 }
 
-async function deleteDraft(id){
-  if(!id) return false;
-  try{
-    const db = await _openDB();
-    return await new Promise((resolve,reject)=>{
-      const tx = db.transaction(STORE, "readwrite");
-      tx.objectStore(STORE).delete(id);
-      tx.oncomplete = () => resolve(true);
-      tx.onerror    = () => reject(tx.error);
-    });
-  }catch(e){ return false; }
+function archiveList(){
+  return loadArchive().sort((a,b)=>(b.sortTs||0)-(a.sortTs||0));
 }
 
-async function deleteAllDrafts(source=null){
-  const all = await listDrafts(source);
-  for(const d of all) await deleteDraft(d.id);
-  return true;
+function archiveUpdate(id,patch){
+  const list=loadArchive();
+  const idx=list.findIndex(e=>e.id===id);
+  if(idx===-1)return null;
+  list[idx]={...list[idx],...patch};
+  saveArchive(list);
+  return list[idx];
 }
 
-function makeDraftId(source){
-  return `${source}_${Date.now()}_${Math.floor(Math.random()*9999)}`;
+function archiveDelete(id){
+  const list=loadArchive().filter(e=>e.id!==id);
+  saveArchive(list);
 }
 
-export { saveDraft, getDraft, listDrafts, deleteDraft, deleteAllDrafts, makeDraftId };
+function archiveDeleteMany(ids){
+  const idSet=new Set(ids);
+  const list=loadArchive().filter(e=>!idSet.has(e.id));
+  saveArchive(list);
+}
+
+function archiveClearAll(){
+  saveArchive([]);
+}
+
+export { archiveAdd, archiveList, archiveUpdate, archiveDelete, archiveDeleteMany, archiveClearAll, rowsToArchiveText, LS_ARCHIVE, MAX_ARCHIVE };
