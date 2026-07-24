@@ -1,79 +1,225 @@
 /* ══════════════════════════════════════════════════════════════════
-   ARCHIVE PAGE — অসম্পূর্ণ (submit না হওয়া) OCR/AI Import draft-এর তালিকা
-   AI Import ও Multi-Subject Import পেজ দুটোই নিজে নিজে (background-এ)
-   এখানে draft সেভ করে — এই পেজ শুধু সেগুলো manually browse/resume/delete
-   করার জন্য। submit সফল হওয়ার সাথে সাথে draft এখান থেকে সরিয়ে ফেলা হয়
-   (ওই পেজগুলোর ভেতর থেকেই)।
+   ARCHIVE PAGE — সব OCR/AI result এক জায়গায়
+   — AI Import ও Multi-Subject Bulk Import (এবং ভবিষ্যতে অন্য যেকোনো
+     AI-চালিত ফিচার) OCR/parse করার সাথে সাথেই এখানে auto-archive
+     হয়ে যায় — আলাদা করে সেভ করার দরকার নেই
+   — এন্ট্রি edit করা যায় (Subject/Sub-topic/Text), Bulk Upload পেজে
+     পাঠানো যায়, অথবা সরাসরি Sheet/Firebase-এ Submit করা যায়
+   — কোনো কারণে কাজ কেটে গেলে/হারিয়ে গেলে AI-কে আবার কল না করেই
+     (limit বাঁচিয়ে) এখান থেকে ফিরে পাওয়া যায়
    ══════════════════════════════════════════════════════════════════ */
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useMemo } from "react";
 import { C } from "../core/config.js";
-import { listDrafts, deleteDraft } from "../core/archiveStore.js";
+import { fbPush, fbSet } from "../core/firebase.js";
+import { nowTs } from "../core/utils.js";
+import {
+  getBulkEntries, parseBulkEntry, buildBulkRecord, buildSheetRow,
+  loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
+} from "../core/uploaderUtils.js";
+import { saveRowsToSheet } from "../core/sheetSave.js";
+import { archiveList, archiveUpdate, archiveDelete } from "../core/archiveStore.js";
+import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
+import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 
-const SOURCE_LABEL = { aiimport:"📸 AI Import", multiimport:"🗂️ Multi-Subject Import" };
+const SRC_NAME="Archive";
 
-function ArchivePage({push,onResume,tick}){
-  const[drafts,setDrafts]=useState([]);
-  const[loading,setLoading]=useState(true);
+function ArchivePage({push,onSendToBulk}){
+  const[entries,setEntries]=useState(archiveList);
+  const refresh=()=>setEntries(archiveList());
+  const[filterSource,setFilterSource]=useState("All");
+  const[search,setSearch]=useState("");
+  const[expandedId,setExpandedId]=useState(null);
+  const[editBuf,setEditBuf]=useState(null); // {subject,subtopic,qtype,text}
+  const[targetMode,setTargetMode]=useState("Quiz");
+  const[saveLoc,setSaveLoc]=useState(loadSaveLocPref);
+  const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
+  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
+  const[submittingId,setSubmittingId]=useState(null);
 
-  const refresh=useCallback(()=>{
-    setLoading(true);
-    listDrafts().then(all=>{setDrafts(all);setLoading(false);}).catch(()=>setLoading(false));
-  },[]);
+  const sources=useMemo(()=>["All",...new Set(entries.map(e=>e.source))],[entries]);
+  const filtered=useMemo(()=>entries.filter(e=>{
+    if(filterSource!=="All"&&e.source!==filterSource)return false;
+    if(search.trim()){
+      const s=search.trim().toLowerCase();
+      const hay=`${e.subject} ${e.subtopic} ${e.text}`.toLowerCase();
+      if(!hay.includes(s))return false;
+    }
+    return true;
+  }),[entries,filterSource,search]);
 
-  useEffect(()=>{ refresh(); },[refresh,tick]);
+  const countQ=(text)=>getBulkEntries(text||"").filter(l=>l.trim()).length;
 
-  const handleDelete=async(d)=>{
-    await deleteDraft(d.id);
-    push("success","🗑️ Draft মুছে ফেলা হয়েছে","");
+  const startEdit=(e)=>{ setExpandedId(e.id); setEditBuf({subject:e.subject,subtopic:e.subtopic,qtype:e.qtype,text:e.text}); };
+  const cancelEdit=()=>{ setExpandedId(null); setEditBuf(null); };
+  const saveEdit=(id)=>{
+    archiveUpdate(id,editBuf);
     refresh();
+    setExpandedId(null); setEditBuf(null);
+    push("success","✅ সংরক্ষণ হয়েছে","");
+  };
+  const doDelete=(id)=>{
+    archiveDelete(id); refresh();
+    if(expandedId===id){setExpandedId(null);setEditBuf(null);}
+  };
+  const currentOf=(e)=>expandedId===e.id&&editBuf?editBuf:e;
+
+  const doSendToBulk=(e)=>{
+    const src=currentOf(e);
+    if(!src.text.trim()){push("warn","⚠️ কোনো ডেটা নেই","");return;}
+    onSendToBulk({text:src.text,subject:src.subject,subtopic:src.subtopic,qtype:src.qtype});
+    push("success","📤 Bulk পেজে পাঠানো হয়েছে","review করে Upload করুন");
   };
 
-  const countFor=(d)=>{
-    if(d.source==="aiimport"){
-      const q=(d.parsedAll||"").split("\n").filter(l=>l.trim()&&l.includes(";")).length;
-      return `${(d.images||[]).length}টি ছবি`+(q?` — ${q}টি প্রশ্ন parsed`:"");
+  const doSubmit=async(e)=>{
+    const src=currentOf(e);
+    if(!src.text.trim()){push("warn","⚠️ কোনো ডেটা নেই","");return;}
+    const effQtype=src.qtype||"Written";
+    const items=getBulkEntries(src.text).map(l=>parseBulkEntry(l,effQtype)).filter(r=>r.ok);
+    if(!items.length){push("warn","⚠️ কোনো valid প্রশ্ন পাওয়া যায়নি","format ঠিক আছে কিনা দেখুন");return;}
+    const subject=(src.subject||"").trim()||"(অজানা বিষয়)";
+    const subtopic=(src.subtopic||"").trim()||subject;
+    setSubmittingId(e.id);
+
+    if(saveLoc==="sheet"){
+      const rows=items.map(item=>buildSheetRow({item,subject,subtopic,qtype:effQtype,audienceTags:[]}));
+      const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
+      if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
+      setSubmittingId(null);
+      if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,`${targetMode} — ${subject}`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
+      if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+      return;
     }
-    if(d.source==="multiimport"){
-      const q=(d.draftGroups||[]).reduce((s,g)=>s+(g.rows?.length||0),0);
-      return `${(d.images||[]).length}টি ছবি`+(q?` — ${q}টি প্রশ্ন`:"")+(d.phase?` — ধাপ: ${d.phase}`:"");
+
+    let sent=0,failed=0; const failedRecs=[];
+    for(const item of items){
+      const ts=nowTs(); const id=Date.now()+Math.floor(Math.random()*9999);
+      const rec=buildBulkRecord({item,subject,subtopic,mode:targetMode,qtype:effQtype,audienceTags:[],ts,id});
+      try{ const res=await fbPush(targetMode,rec); if(res?.name) await fbSet(`${targetMode}/${res.name}/id`,res.name); sent++; }
+      catch(err){ failed++; failedRecs.push(rec); }
     }
-    return "";
+    if(failedRecs.length) pushFailedItems(SRC_NAME,"firebase",targetMode,failedRecs);
+    setSubmittingId(null);
+    if(sent>0) push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${targetMode} — ${subject}`);
+    if(failed>0) push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
   };
 
   return(
     <div className="page">
-      <div style={{background:"linear-gradient(135deg,#4f46e5,#7c3aed)",borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff"}}>
-        <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>🗄️ Archive — অসম্পূর্ণ কাজ</div>
-        <div style={{fontSize:11,opacity:.85}}>App বন্ধ হয়ে গেলেও OCR/AI করা কাজ এখানে safe থাকে, যতক্ষণ না submit হয়</div>
+      {/* Header */}
+      <div style={{background:"linear-gradient(135deg,#7c3aed,#0891b2)",borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff"}}>
+        <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>🗄️ Archive — সব OCR/AI Result</div>
+        <div style={{fontSize:11,opacity:.85}}>AI Import ও Multi-Subject Import-এর প্রতিটা result এখানে auto-save হয় — edit/reuse/submit করা যায়</div>
       </div>
 
-      {loading&&<div style={{textAlign:"center",color:C.muted,fontSize:12,padding:24}}>লোড হচ্ছে...</div>}
+      <div style={{background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 12px",fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.7}}>
+        <div>📦 মোট <b style={{color:C.text}}>{entries.length}</b>টা এন্ট্রি জমা আছে (ডিভাইসেই, অফলাইনেও থাকবে)</div>
+        <div>🔁 কোনো কারণে সাবমিট করা বাকি থেকে গেলে/হারিয়ে গেলে — এখান থেকে আবার AI কল ছাড়াই Bulk পেজে পাঠাও অথবা সরাসরি Submit করো</div>
+      </div>
 
-      {!loading&&!drafts.length&&(
-        <div style={{textAlign:"center",color:C.muted,fontSize:12,padding:36}}>
-          ✅ কোনো অসম্পূর্ণ কাজ নেই — যা কিছু OCR/AI করা হয়েছে সব সফলভাবে submit হয়ে গেছে
+      {/* Target Sheet + Save Location — সরাসরি Submit করার সময় লাগবে */}
+      <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+        <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:8}}>🎯 Direct Submit করার Target</div>
+        <div style={{display:"flex",gap:6,marginBottom:10}}>
+          {["Quiz","QBank"].map(m=>(
+            <button key={m} type="button" onClick={()=>setTargetMode(m)}
+              style={{flex:1,fontSize:12,fontWeight:700,padding:"7px 0",borderRadius:8,cursor:"pointer",
+                border:`1px solid ${targetMode===m?C.accent:C.border}`,
+                background:targetMode===m?C.accent+"22":"transparent",
+                color:targetMode===m?C.accent:C.muted}}>{m}</button>
+          ))}
+        </div>
+        <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={setGasSecretP}/>
+      </div>
+
+      {/* Filter + Search */}
+      <div style={{display:"flex",gap:6,overflowX:"auto",marginBottom:8,paddingBottom:2}}>
+        {sources.map(s=>(
+          <button key={s} onClick={()=>setFilterSource(s)}
+            style={{whiteSpace:"nowrap",fontSize:11,fontWeight:700,padding:"5px 12px",borderRadius:20,cursor:"pointer",
+              border:`1px solid ${filterSource===s?"#7c3aed":C.border}`,
+              background:filterSource===s?"#7c3aed22":"transparent",
+              color:filterSource===s?"#a78bfa":C.muted}}>{s}</button>
+        ))}
+      </div>
+      <input className="inp" style={{marginBottom:12}} value={search} onChange={e=>setSearch(e.target.value)}
+        placeholder="🔍 Subject/Sub-topic/টেক্সট দিয়ে খুঁজুন..."/>
+
+      {/* Empty state */}
+      {filtered.length===0&&(
+        <div style={{textAlign:"center",padding:"30px 10px",color:C.muted,fontSize:12}}>
+          {entries.length===0?"এখনো কোনো OCR/AI result আর্কাইভ হয়নি — AI Import বা Multi-Subject Import ব্যবহার করলে এখানে জমা হবে":"এই ফিল্টারে কিছু পাওয়া যায়নি"}
         </div>
       )}
 
-      {drafts.map(d=>(
-        <div key={d.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:10}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:4}}>
-            <div style={{fontSize:12,fontWeight:800,color:C.text}}>{SOURCE_LABEL[d.source]||d.source}</div>
-            <div style={{fontSize:10,color:C.muted}}>{new Date(d.updatedAt||d.createdAt||Date.now()).toLocaleString("bn-BD")}</div>
+      {/* Entry list */}
+      {filtered.map(e=>{
+        const isOpen=expandedId===e.id;
+        const src=currentOf(e);
+        return(
+          <div key={e.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6,gap:8}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:10,fontWeight:800,color:"#a78bfa",marginBottom:2}}>{e.source} · {e.qtype}</div>
+                <div style={{fontSize:12,fontWeight:700,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  📚 {e.subject||"(Subject নেই)"} <span style={{color:C.muted,fontWeight:400}}>/ {e.subtopic||"—"}</span>
+                </div>
+                <div style={{fontSize:10,color:C.muted,marginTop:2}}>🕐 {e.ts} · {countQ(e.text)}টি প্রশ্ন</div>
+              </div>
+            </div>
+
+            {!isOpen&&(
+              <div style={{fontSize:11,color:C.muted,background:"#0a1628",borderRadius:8,padding:"6px 10px",marginBottom:8,
+                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.text.replace(/[{}]/g,"").slice(0,90)}...</div>
+            )}
+
+            {isOpen&&(
+              <div style={{marginBottom:8}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                  <div className="fld" style={{marginBottom:0}}>
+                    <label>📚 Subject</label>
+                    <input className="inp" value={editBuf.subject} onChange={ev=>setEditBuf(p=>({...p,subject:ev.target.value}))}/>
+                  </div>
+                  <div className="fld" style={{marginBottom:0}}>
+                    <label>📌 Sub-topic</label>
+                    <input className="inp" value={editBuf.subtopic} onChange={ev=>setEditBuf(p=>({...p,subtopic:ev.target.value}))}/>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:6,marginBottom:8}}>
+                  {["MCQ","Written","Study"].map(t=>(
+                    <button key={t} type="button" onClick={()=>setEditBuf(p=>({...p,qtype:t}))}
+                      style={{flex:1,fontSize:11,fontWeight:700,padding:"5px 0",borderRadius:8,cursor:"pointer",
+                        border:`1px solid ${editBuf.qtype===t?C.accent:C.border}`,
+                        background:editBuf.qtype===t?C.accent+"22":"transparent",
+                        color:editBuf.qtype===t?C.accent:C.muted}}>{t}</button>
+                  ))}
+                </div>
+                <textarea className="ta" style={{minHeight:140,fontSize:11,fontFamily:"monospace",marginBottom:0}}
+                  value={editBuf.text} onChange={ev=>setEditBuf(p=>({...p,text:ev.target.value}))}/>
+              </div>
+            )}
+
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              {!isOpen?(
+                <button className="btn" onClick={()=>startEdit(e)} style={{fontSize:11,padding:"5px 10px",background:"transparent",color:C.muted,borderColor:C.border}}>✏️ Edit</button>
+              ):(
+                <>
+                  <button className="btn" onClick={()=>saveEdit(e.id)} style={{fontSize:11,padding:"5px 10px",background:"#052e16",color:"#10b981",borderColor:"#10b981"}}>💾 Save</button>
+                  <button className="btn" onClick={cancelEdit} style={{fontSize:11,padding:"5px 10px",background:"transparent",color:C.muted,borderColor:C.border}}>✕ Cancel</button>
+                </>
+              )}
+              <button className="btn" onClick={()=>doSendToBulk(e)} style={{fontSize:11,padding:"5px 10px",background:"#0a1628",color:"#22d3ee",borderColor:"#0891b2"}}>📤 Bulk-এ পাঠাও</button>
+              <button className="btn" disabled={submittingId===e.id} onClick={()=>doSubmit(e)}
+                style={{fontSize:11,padding:"5px 10px",background:"#1a0a2e",color:"#a78bfa",borderColor:"#7c3aed"}}>
+                {submittingId===e.id?"⏳ Submit হচ্ছে...":"🚀 সরাসরি Submit"}
+              </button>
+              <button className="btn" onClick={()=>doDelete(e.id)} style={{fontSize:11,padding:"5px 10px",background:"#2a0a0a",color:"#ef4444",borderColor:"#991b1b",marginLeft:"auto"}}>🗑</button>
+            </div>
           </div>
-          <div style={{fontSize:11,color:C.muted,marginBottom:8}}>{countFor(d)}</div>
-          <div style={{display:"flex",gap:8}}>
-            <button className="btn" onClick={()=>onResume(d.source,d.id)}
-              style={{flex:1,justifyContent:"center",background:"#052e16",color:"#10b981",borderColor:"#10b981",fontWeight:700}}>
-              🔄 ফিরিয়ে আনুন ও চালিয়ে যান
-            </button>
-            <button className="btn" onClick={()=>handleDelete(d)}
-              style={{background:"#7f1d1d",color:"#fca5a5",borderColor:"#991b1b",padding:"0 14px"}}>
-              🗑️
-            </button>
-          </div>
-        </div>
-      ))}
+        );
+      })}
+
+      <FailedQueuePanel push={push} sourceFilter={SRC_NAME}/>
     </div>
   );
 }
