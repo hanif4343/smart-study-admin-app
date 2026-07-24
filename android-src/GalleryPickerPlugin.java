@@ -3,6 +3,7 @@ package com.smartstudy.admin;
 import android.app.Activity;
 import android.content.ContentResolver;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
@@ -29,9 +30,20 @@ import java.util.ArrayList;
  * সহ অনেক ডিভাইসে multi-select কাজ করে না, ইউজারকে একটার পর একটা ছবি বেছে
  * gallery বারবার খুলতে হয়।
  *
- * এই plugin এর বদলে Intent.ACTION_OPEN_DOCUMENT ব্যবহার করে (System Files/Photo
- * picker) — এটা EXTRA_ALLOW_MULTIPLE সব stock ও বেশিরভাগ OEM picker-এ ঠিকভাবে
- * সাপোর্ট করে, তাই একবারেই একাধিক ছবি বাছা যায়।
+ * ── Photo Picker vs Document Picker ──────────────────────────────────────
+ * প্রথমে এখানে Intent.ACTION_OPEN_DOCUMENT (System Files/document browser)
+ * ব্যবহার করা হয়েছিল, যা multi-select ভালো সাপোর্ট করে ঠিকই, কিন্তু এটা
+ * "ডকুমেন্ট প্রোভাইডার" (Recent, Images ফোল্ডার, Downloads, Drive...) দেখায় —
+ * আসল Photos/Gallery অ্যাপের মতো album-ভিত্তিক UI দেখায় না, ফলে অনেক ছবি
+ * (যেমন নির্দিষ্ট album বা cloud-backed ছবি) খুঁজে পাওয়া কঠিন হয়ে যায়।
+ *
+ * তাই এখন আগে Android-এর সিস্টেম Photo Picker (action:
+ * "android.provider.action.PICK_IMAGES", Android 11+ এ Google Play system
+ * update দিয়ে backport করা, Android 13+ এ built-in) ব্যবহার করার চেষ্টা করা
+ * হয় — এটা ঠিক Gallery/Photos অ্যাপের মতোই album/thumbnail গ্রিড দেখায়,
+ * multi-select নিজে থেকেই সাপোর্ট করে, এবং কোনো storage permission ছাড়াই
+ * কাজ করে। এই picker না থাকলে (খুব পুরনো ডিভাইস/OS) আগের
+ * ACTION_OPEN_DOCUMENT fallback হিসেবে থেকে যায়।
  *
  * ফলাফল সরাসরি base64 আকারে ফেরত দেয় (webPath/content:// URI না — কারণ
  * content:// scheme সব সময় WebView-তে <img src> হিসেবে লোড হয় না)।
@@ -40,13 +52,35 @@ import java.util.ArrayList;
 public class GalleryPickerPlugin extends Plugin {
 
     private static final int MAX_DIM = 2000; // px — বড় ছবি হলে ডাউনস্কেল করি (মেমরি/স্পিড বাঁচাতে)
+    private static final String ACTION_PICK_IMAGES = "android.provider.action.PICK_IMAGES";
+    private static final String EXTRA_PICK_IMAGES_MAX = "android.provider.extra.PICK_IMAGES_MAX";
+    private static final int PICK_IMAGES_MAX = 100; // সিস্টেম picker-এর সাধারণ সর্বোচ্চ সীমা
+
+    private boolean isSystemPhotoPickerAvailable() {
+        try {
+            Intent probe = new Intent(ACTION_PICK_IMAGES);
+            PackageManager pm = getContext().getPackageManager();
+            return probe.resolveActivity(pm) != null;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     @PluginMethod
     public void pickImages(PluginCall call) {
-        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
-        intent.setType("image/*");
-        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        Intent intent;
+        if (isSystemPhotoPickerAvailable()) {
+            // ── Photo Picker — Gallery/Photos অ্যাপের মতো album/grid UI ──
+            intent = new Intent(ACTION_PICK_IMAGES);
+            intent.setType("image/*");
+            intent.putExtra(EXTRA_PICK_IMAGES_MAX, PICK_IMAGES_MAX);
+        } else {
+            // ── Fallback — খুব পুরনো ডিভাইস/OS, Photo Picker নেই ──
+            intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            intent.setType("image/*");
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+        }
         try {
             startActivityForResult(call, intent, "pickImagesResult");
         } catch (Exception e) {
