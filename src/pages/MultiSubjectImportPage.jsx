@@ -24,7 +24,7 @@ import {
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet } from "../core/sheetSave.js";
 import { getOcrCacheEntry, setOcrCacheEntry } from "../core/ocrCache.js";
-import { archiveAdd } from "../core/archiveStore.js";
+import { archiveAdd, archiveDeleteMany } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 import { ApiSettingsPage } from "./ApiSettingsPage.jsx";
@@ -239,20 +239,22 @@ function MultiSubjectImportPage({push}){
     const cached=getOcrCacheEntry(b64,CACHE_QTYPE);
     if(cached){
       _LC.log("MultiSubjectImport","📦 ক্যাশ হিট — AI call এড়ানো হলো");
-      return cached.detected;
+      return{...cached.detected,archiveId:cached.archiveId||null};
     }
     const raw=await nativeOcr(b64);
-    if(!raw.trim()) return{designation:"",institution:"",entries:[]};
+    if(!raw.trim()) return{designation:"",institution:"",entries:[],archiveId:null};
     const aiText=await callAiProviderRotatingRaw(buildDetectPrompt(raw));
     const detected=parseDetectResponse(aiText);
-    setOcrCacheEntry(b64,CACHE_QTYPE,{raw,detected});
+    let archiveId=null;
     if(detected.entries.length){
-      archiveAdd({
+      const arc=archiveAdd({
         source:SRC_NAME,subject:detected.designation,subtopic:detected.institution,qtype:"Written",
         rows:detected.entries.map(e=>({q:e.q,correct:e.a}))
       });
+      if(arc) archiveId=arc.id;
     }
-    return detected;
+    setOcrCacheEntry(b64,CACHE_QTYPE,{raw,detected,archiveId});
+    return{...detected,archiveId};
   };
 
   /* ── ধাপ ১: সব ছবি OCR+Detect+Parse করে draftGroups বানায় — কোনো সাবমিট হয় না, শুধু Confirm স্ক্রিনে নিয়ে যায় ── */
@@ -288,7 +290,7 @@ function MultiSubjectImportPage({push}){
       if(gid===-1||unit.manualBreak){
         gid++;
         curSubject=""; curSubtopic="";
-        groups.push({id:gid,subject:"",subtopic:"",rows:[],pages:[],included:true});
+        groups.push({id:gid,subject:"",subtopic:"",rows:[],pages:[],included:true,archiveIds:[]});
       }
       setImages(p=>p.map(x=>x.id===unit.imgId&&x.status!=="error"?{...x,status:"running"}:x));
       try{
@@ -299,6 +301,7 @@ function MultiSubjectImportPage({push}){
         if(!grp.subject&&curSubject) grp.subject=curSubject;
         if(!grp.subtopic&&curSubtopic) grp.subtopic=curSubtopic;
         detected.entries.forEach(e=>grp.rows.push({q:e.q,correct:e.a}));
+        if(detected.archiveId&&!grp.archiveIds.includes(detected.archiveId)) grp.archiveIds.push(detected.archiveId);
         const pageNo=imgIndexOf[unit.imgId];
         if(pageNo&&!grp.pages.includes(pageNo)) grp.pages.push(pageNo);
 
@@ -351,6 +354,10 @@ function MultiSubjectImportPage({push}){
       if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,
         `${included.length}টি subject/sub-topic গ্রুপ`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
       if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+      if(res.added>0||res.skipped>0){
+        const ids=included.flatMap(g=>g.archiveIds||[]);
+        if(ids.length) archiveDeleteMany(ids);
+      }
       return;
     }
 
@@ -378,6 +385,10 @@ function MultiSubjectImportPage({push}){
     setSubmitting(false); setPhase("done");
     if(sent>0) push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${included.length}টি subject/sub-topic গ্রুপ`);
     if(failed>0) push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    if(sent>0){
+      const ids=included.flatMap(g=>g.archiveIds||[]);
+      if(ids.length) archiveDeleteMany(ids);
+    }
   };
 
   const backToEdit=()=>{ setPhase("idle"); }; // ছবি/গ্রুপ-ব্রেক ঠিক করে আবার Process করা যাবে — cache থাকায় দ্রুত হবে
