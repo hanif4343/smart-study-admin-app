@@ -15,14 +15,18 @@ function saveQbcAutoSave(v){ try{ localStorage.setItem(LS_QBC_AUTOSAVE,v?"1":"0"
 
 // ডিফল্ট canonical taxonomy — AI এই তালিকা থেকেই subject/sub_topic বাছবে।
 // প্রয়োজনে অ্যাডমিন UI থেকেই (নিচের "Taxonomy" এডিটর) এটা বদলানো যাবে, rebuild লাগবে না।
+// 🐛 ফিক্স: আগে "📚 বাংলা সাহিত্য"-এর আগে একটা invisible zero-width space (\u200b) বসানো ছিল,
+// আর "📐জ্যামিতি"-তে emoji-র পর স্পেস ছিল না — AI এই invisible/inconsistent ফরম্যাট
+// হুবহু reproduce করতে না পারায় Quiz sheet-এ একই subject বারবার ভিন্ন ভ্যারিয়েন্টে
+// সেভ হতো (এটাই "সাবজেক্ট নাম বারবার ভুল হওয়া" সমস্যার মূল কারণগুলোর একটা)।
 const QBANK_CONV_TAXONOMY_DEFAULT = {
   "✍️ বাংলা ব্যাকরণ": ["কারক","সমাস","সন্ধি","উপসর্গ","বাগধারা","এক কথায় প্রকাশ","প্রকৃতি ও প্রত্যয়","ধ্বনি পরিবর্তন","বাক্যের ধরণ","বানান শুদ্ধিকরণ","যতিচিহ্ন","বিপরীত শব্দ","সমার্থক শব্দ","পরিভাষা","বাক্য","ধ্বনি"],
   "📖 English Grammar": ["Verb","Article","Preposition","Tense","Voice","Narration","Number & Gender","Synonym-Antonym","Sentence Correction","Translation"],
   "🇧🇩 বাংলাদেশ বিষয়াবলি": ["মুক্তিযুদ্ধ","সংবিধান","ভূগোল ও পরিবেশ","অর্থনীতি","ইতিহাস ও ঐতিহ্য","প্রশাসনিক কাঠামো","সাধারণ জ্ঞান"],
   "🌍 আন্তর্জাতিক": ["আন্তর্জাতিক সংস্থা","বিশ্ব ইতিহাস","বিশ্ব ভূগোল","চুক্তি ও সম্মেলন"],
-  "\u200b📚 বাংলা সাহিত্য": ["কাজী নজরুল ইসলাম","রবীন্দ্রনাথ ঠাকুর","অন্যান্য সাহিত্যিক","সাহিত্যকর্ম"],
+  "📚 বাংলা সাহিত্য": ["কাজী নজরুল ইসলাম","রবীন্দ্রনাথ ঠাকুর","অন্যান্য সাহিত্যিক","সাহিত্যকর্ম"],
   "📟 পাটিগণিত": ["গড়","শতকরা","সুদকষা","লাভ-ক্ষতি","অনুপাত-সমানুপাত","ঐকিক নিয়ম","সংখ্যা পদ্ধতি"],
-  "📐জ্যামিতি": ["ক্ষেত্রফল","পরিসীমা","কোণ","ত্রিভুজ","বৃত্ত"],
+  "📐 জ্যামিতি": ["ক্ষেত্রফল","পরিসীমা","কোণ","ত্রিভুজ","বৃত্ত"],
   "💻 কম্পিউটার": ["হার্ডওয়্যার","সফটওয়্যার","ইন্টারনেট","MS Office","শর্টকাট"],
 };
 
@@ -31,5 +35,16 @@ function normalizeQbankQ(s){
   return (s||"").toString().replace(/[\s.,;:।?!—–\-()'"]/g,"").trim();
 }
 
+// ── subject/sub_topic-এর মতো লেবেল normalize করে — শুধু invisible zero-width
+// char (\u200b\u200c\u200d\uFEFF, nbsp) বাদ দেয় আর extra whitespace collapse করে,
+// visible টেক্সট/emoji অক্ষত রাখে। এটা GAS-এর renameField action-এর normalize
+// লজিকের সাথে হুবহু মেলানো — RenameTab-এ visually-identical কিন্তু invisible-char-এ
+// আলাদা ভ্যারিয়েন্টগুলো এক গ্রুপে দেখানোর জন্য ব্যবহার হয়।
+function normalizeLabel(s){
+  return (s||"").toString()
+    .replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g,"")
+    .replace(/\s+/g," ")
+    .trim();
+}
 
-export { LS_QBC_TAXONOMY, LS_QBC_GAS_SECRET, LS_QBC_RESULTS_DRAFT, LS_QBC_SAVELOC, LS_QBC_AUTOSAVE, loadQbcSaveLoc, saveQbcSaveLoc, loadQbcAutoSave, saveQbcAutoSave, QBANK_CONV_TAXONOMY_DEFAULT, normalizeQbankQ };
+export { LS_QBC_TAXONOMY, LS_QBC_GAS_SECRET, LS_QBC_RESULTS_DRAFT, LS_QBC_SAVELOC, LS_QBC_AUTOSAVE, loadQbcSaveLoc, saveQbcSaveLoc, loadQbcAutoSave, saveQbcAutoSave, QBANK_CONV_TAXONOMY_DEFAULT, normalizeQbankQ, normalizeLabel };
