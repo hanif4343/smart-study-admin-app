@@ -113,6 +113,13 @@ function MultiSubjectImportPage({push}){
     clearTimeout(hideTimerRef.current);
     hideTimerRef.current=setTimeout(()=>setPreviewId(null),220);
   };
+  const openPreviewNow=(id)=>{ // এক-ট্যাপে সাথে সাথেই বড় প্রিভিউ (৩ সেকেন্ড অপেক্ষা লাগে না) — group confirm-এ পাতা পড়ার জন্য
+    clearTimeout(longPressTimerRef.current);
+    clearTimeout(hideTimerRef.current);
+    setPreviewId(id);
+    requestAnimationFrame(()=>requestAnimationFrame(()=>setPreviewVisible(true)));
+  };
+  const closePreviewNow=()=>cancelLongPress();
 
   /* ── Gallery/Camera picker (AIImportPage-এর একই লজিক, স্বনির্ভর কপি) ── */
   const _getCamera=()=>{
@@ -404,6 +411,14 @@ function MultiSubjectImportPage({push}){
 
   return(
     <div className="page">
+      {/* অনেকগুলো ছবি একসাথে থাকলে scroll position বোঝা যায় না — তাই দৃশ্যমান স্ক্রলবার */}
+      <style>{`
+        .ss-scroll{scrollbar-width:thin;scrollbar-color:#6366f1 #0a1628;}
+        .ss-scroll::-webkit-scrollbar{width:8px;}
+        .ss-scroll::-webkit-scrollbar-track{background:#0a1628;border-radius:10px;}
+        .ss-scroll::-webkit-scrollbar-thumb{background:#6366f1;border-radius:10px;}
+        .ss-scroll::-webkit-scrollbar-thumb:hover{background:#818cf8;}
+      `}</style>
       {/* Header */}
       <div style={{background:"linear-gradient(135deg,#0891b2,#4f46e5)",borderRadius:14,padding:"14px 16px",marginBottom:14,color:"#fff",position:"relative"}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
@@ -425,18 +440,20 @@ function MultiSubjectImportPage({push}){
       </div>
       {showApiSettings&&<ApiSettingsPage push={push} inline={true}/>}
 
-      {/* ── Long-press zoom preview overlay — হেডিং পড়ার জন্য বড় করে দেখায়, ছেড়ে দিলে ফেড-আউট ── */}
+      {/* ── Zoom preview overlay — long-press-hold-release অথবা এক-ট্যাপে খোলা যায়, ওভারলেতে ট্যাপ করলেই বন্ধ ── */}
       {previewId&&(()=>{
         const pimg=images.find(x=>x.id===previewId);
         const src=pimg&&(pimg.webPath||(pimg.base64?`data:image/jpeg;base64,${pimg.base64}`:null));
         if(!src)return null;
         return(
-          <div style={{position:"fixed",inset:0,zIndex:999,background:"rgba(0,0,0,0.85)",
-            display:"flex",alignItems:"center",justifyContent:"center",padding:16,
-            opacity:previewVisible?1:0,transition:"opacity 200ms ease",pointerEvents:"none"}}>
-            <img src={src} draggable={false} style={{maxWidth:"92vw",maxHeight:"85vh",borderRadius:12,
+          <div onClick={closePreviewNow} style={{position:"fixed",inset:0,zIndex:999,background:"rgba(0,0,0,0.9)",
+            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:16,gap:10,
+            opacity:previewVisible?1:0,transition:"opacity 200ms ease",cursor:"pointer",
+            pointerEvents:previewVisible?"auto":"none"}}>
+            <img src={src} draggable={false} style={{maxWidth:"92vw",maxHeight:"80vh",borderRadius:12,
               border:"3px solid #f59e0b",boxShadow:"0 8px 30px rgba(0,0,0,0.6)",
               transform:previewVisible?"scale(1)":"scale(0.92)",transition:"transform 200ms ease"}}/>
+            <div style={{fontSize:11,color:"#e2e8f0",fontWeight:700,background:"#000000aa",padding:"5px 12px",borderRadius:20}}>✕ বন্ধ করতে ট্যাপ করুন</div>
           </div>
         );
       })()}
@@ -448,6 +465,7 @@ function MultiSubjectImportPage({push}){
             <div style={{color:C.text,fontWeight:700,marginBottom:3}}>🔎 এক নজরে দেখে নাও — সব ঠিক থাকলে Confirm করো</div>
             <div>নিচে {draftGroups.length}টা group পাওয়া গেছে। Subject/Sub-topic ভুল বা ফাঁকা থাকলে ঠিক করে দাও, ভুল group হলে বাদ দাও (❌)।</div>
           </div>
+          <div className="ss-scroll" style={{maxHeight:"58vh",overflowY:"auto",paddingRight:6,marginBottom:4}}>
           {draftGroups.map(g=>{
             const isEmpty=!g.subject.trim();
             const imgsOpen=expandedGroupId===g.id;
@@ -472,25 +490,29 @@ function MultiSubjectImportPage({push}){
                   {imgsOpen?"▲ ছবি লুকাও":`🖼️ এই group-এর ${g.pages.length}টা পাতার ছবি দেখো (হেডার পড়ে Subject বসাতে)`}
                 </button>
                 {imgsOpen&&(
-                  <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6,marginBottom:8}}>
+                  <div className="ss-scroll" style={{display:"flex",flexDirection:"column",gap:8,marginBottom:8,
+                    maxHeight:"50vh",overflowY:"auto",paddingRight:6}}>
                     {g.pages.map(pn=>{
                       const im=imgByPageNo(pn);
                       if(!im)return null;
                       const src=im.webPath||(im.base64?`data:image/jpeg;base64,${im.base64}`:null);
                       if(!src)return null;
                       return(
-                        <div key={pn} style={{flexShrink:0,textAlign:"center"}}>
+                        <div key={pn} style={{position:"relative"}}>
                           <img src={src} draggable={false}
                             onContextMenu={ev=>ev.preventDefault()}
+                            onClick={()=>openPreviewNow(im.id)}
                             onTouchStart={()=>startLongPress(im.id)}
                             onTouchEnd={cancelLongPress}
                             onTouchCancel={cancelLongPress}
                             onMouseDown={()=>startLongPress(im.id)}
                             onMouseUp={cancelLongPress}
                             onMouseLeave={cancelLongPress}
-                            style={{width:64,height:64,borderRadius:8,objectFit:"cover",border:`2px solid ${C.border}`,
-                              WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none",touchAction:"none"}}/>
-                          <div style={{fontSize:9,color:C.muted,marginTop:2}}>#{pn}</div>
+                            style={{width:"100%",maxHeight:280,minHeight:130,objectFit:"contain",background:"#000",
+                              borderRadius:8,border:`1px solid ${C.border}`,display:"block",cursor:"pointer",
+                              WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none"}}/>
+                          <div style={{position:"absolute",top:6,left:6,fontSize:10,fontWeight:800,color:"#e2e8f0",background:"#000000aa",padding:"2px 8px",borderRadius:20}}>#{pn}</div>
+                          <div style={{position:"absolute",bottom:6,right:6,fontSize:9,fontWeight:700,color:"#f59e0b",background:"#000000aa",padding:"2px 8px",borderRadius:20}}>🔍 বড় করতে ট্যাপ করো</div>
                         </div>
                       );
                     })}
@@ -509,6 +531,7 @@ function MultiSubjectImportPage({push}){
               </div>
             );
           })}
+          </div>
           <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12,display:"flex",justifyContent:"space-between",fontSize:12}}>
             <span style={{color:C.text,fontWeight:700}}>মোট Submit হবে</span>
             <span style={{color:"#10b981",fontWeight:900}}>{totalIncludedQ}টি প্রশ্ন · {totalIncludedG}টি group</span>
@@ -564,7 +587,8 @@ function MultiSubjectImportPage({push}){
               Redesigned: cropped 76x76 square thumbnails হাইড হয়ে যাচ্ছিল হেডার-লাইন, তাই এখন
               পুরো পাতা (object-fit:contain, full-width) সরাসরি দেখা যায় — আলাদা tap/hold লাগে না */}
           {images.length>0&&(
-            <div style={{display:"flex",flexDirection:"column",gap:10,marginBottom:12}}>
+            <div className="ss-scroll" style={{display:"flex",flexDirection:"column",gap:10,marginBottom:12,
+              maxHeight:"62vh",overflowY:"auto",paddingRight:6}}>
               {images.map((img,i)=>{
                 const src=img.webPath||(img.base64?`data:image/jpeg;base64,${img.base64}`:null);
                 const borderCol=img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#6366f1":img.groupBreak?"#f59e0b":C.border;
