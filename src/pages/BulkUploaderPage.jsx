@@ -10,6 +10,7 @@ import {
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet } from "../core/sheetSave.js";
+import { archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 
@@ -36,6 +37,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
+  const archiveIdRef=useRef(null); // prefill যদি Archive থেকে এসে থাকে — সফল Submit হলে সেই এন্ট্রি Archive থেকে সরিয়ে দেওয়া হবে
 
   /* Load subjects for autocomplete */
   useEffect(()=>{
@@ -57,6 +59,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       if(payload.subject!==undefined)setSubject(payload.subject);
       if(payload.subtopic!==undefined)setSubtopic(payload.subtopic);
       if(payload.tags&&Array.isArray(payload.tags))setAudienceTags(payload.tags);
+      archiveIdRef.current=payload.archiveId||null;
       if(payload.text){
         setBulkText(payload.text);
         runValidate(payload.text,finalMode,finalQtype);
@@ -169,6 +172,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার",saveLoc,mode,result.failedRows);
       if(result.added>0)push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${mode} — ${subject}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
       if(result.failedRows.length)push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+      if((result.added>0||result.skipped>0)&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
       return;
     }
 
@@ -203,9 +207,10 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     if(failedRecs.length) pushFailedItems("বাল্ক আপলোডার",saveLoc,mode,failedRecs);
     if(sent>0)push("success",`✅ ${sent}টি সফলভাবে যোগ হয়েছে!`,`${mode} — ${subject}`);
     if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    if(sent>0&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
   };
 
-  const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setSubtopic("");};
+  const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setSubtopic("");archiveIdRef.current=null;};
 
   const pct=progress.total?Math.round(progress.done/progress.total*100):0;
 
