@@ -3,7 +3,8 @@ import React, { useState, useMemo } from "react";
 import { C } from "../../core/config.js";
 import { useFB, invalidate } from "../../core/dataCache.js";
 import { fbDeleteBatch } from "../../core/firebase.js";
-import { toArr } from "../../core/utils.js";
+import { deleteIdsInSheet } from "../../core/sheetSave.js";
+import { toArr, loadSharedGasSecret } from "../../core/utils.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
 
 function DeleteTab({push,tick}){
@@ -41,6 +42,16 @@ function DeleteTab({push,tick}){
       invalidate(sheet);
       push("success","🗑️ Bulk Delete!",`"${groupName}" · ${deleted}টি মুছে গেছে`);
       setDelTarget(null);
+      // ⚡ Firebase delete আগেই সফল হয়ে গেছে (উপরে) — Sheet mirror-ও ব্যাকগ্রাউন্ডে (await না করে)
+      // সিঙ্ক করা হচ্ছে GAS-এর existing "deleteByIds" action দিয়ে। Best-effort: GAS Secret না
+      // থাকলে চুপচাপ স্কিপ, ব্যর্থ হলেও শুধু soft warning — মূল ডিলিট বাতিল হবে না।
+      const gasSecret=loadSharedGasSecret();
+      const sheetIds=qs.map(q=>(q.ID||q.id||"").toString().trim()).filter(Boolean);
+      if(gasSecret&&sheetIds.length){
+        deleteIdsInSheet({sheet,ids:sheetIds,gasSecret})
+          .then(res=>{ if(!res.ok)push("error","⚠️ Sheet থেকে ডিলিট sync ব্যর্থ",res.error||"Firebase থেকে ঠিকই ডিলিট হয়েছে — Sheet-টা ম্যানুয়ালি চেক করো"); })
+          .catch(()=>{});
+      }
     }catch(e){push("error","Delete ব্যর্থ",e.message);}
     setDelProgress({done:0,total:0});
     setDelLoading(false);
