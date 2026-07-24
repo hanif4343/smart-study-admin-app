@@ -12,7 +12,7 @@ import {
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet } from "../core/sheetSave.js";
 import { getOcrCacheEntry, setOcrCacheEntry, clearOcrCache } from "../core/ocrCache.js";
-import { archiveAdd } from "../core/archiveStore.js";
+import { archiveAdd, archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 import { ApiSettingsPage } from "./ApiSettingsPage.jsx";
@@ -26,6 +26,7 @@ function AIImportPage({push,onSendToBulk}){
   const[copied,setCopied]=useState(false);
   const[showApiSettings,setShowApiSettings]=useState(false);
   const stopRef=useRef(false);
+  const[archivedEntryId,setArchivedEntryId]=useState(null); // এই OCR ব্যাচের Archive এন্ট্রি — সফল Submit হলে ডিলিট হবে
 
   /* ── Direct-submit metadata (Subject/Subtopic/Tags) — Bulk পেজে না গিয়ে সরাসরি Firebase-এ পাঠানোর জন্য ── */
   const[targetMode,setTargetMode]=useState("Quiz"); // Quiz | QBank — শুধু ocrQtype "Study" না হলে relevant
@@ -82,6 +83,7 @@ function AIImportPage({push,onSendToBulk}){
       if(result.failedRows.length) pushFailedItems("AI Import (OCR)",saveLoc,effMode,result.failedRows);
       if(result.added>0) push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${effMode} — ${subject}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
       if(result.failedRows.length) push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+      if((result.added>0||result.skipped>0)&&archivedEntryId){ archiveDelete(archivedEntryId); setArchivedEntryId(null); }
       return;
     }
 
@@ -109,6 +111,7 @@ function AIImportPage({push,onSendToBulk}){
     if(failedRecs.length) pushFailedItems("AI Import (OCR)",saveLoc,effMode,failedRecs);
     if(sent>0)push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${effMode} — ${subject}`);
     if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    if(sent>0&&archivedEntryId){ archiveDelete(archivedEntryId); setArchivedEntryId(null); }
   };
 
   /* ── Capacitor Camera plugin ── */
@@ -287,6 +290,7 @@ function AIImportPage({push,onSendToBulk}){
     if(!images.length){push("warn","ছবি যোগ করুন","");return;}
     setRunning(true);stopRef.current=false;
     setOcrAll("");setParsedAll("");setCopied(false);setShowParsed(true);
+    setArchivedEntryId(null);
     let combinedRaw="";
     let combinedParsed="";
     setProgress({cur:0,total:images.length});
@@ -321,7 +325,8 @@ function AIImportPage({push,onSendToBulk}){
     setRunning(false);
     const qCount=combinedParsed.split("\n").filter(l=>l.trim()&&l.includes(";")).length;
     if(combinedParsed.trim()){
-      archiveAdd({source:"AI Import (OCR)",subject,subtopic,qtype:ocrQtype,text:combinedParsed});
+      const arcEntry=archiveAdd({source:"AI Import (OCR)",subject,subtopic,qtype:ocrQtype,text:combinedParsed});
+      if(arcEntry) setArchivedEntryId(arcEntry.id);
     }
     push("success",`✅ OCR সম্পন্ন!`,`${images.length}টি ছবি — ${qCount}টি প্রশ্ন parse হয়েছে`);
   };
@@ -348,7 +353,7 @@ function AIImportPage({push,onSendToBulk}){
     const toSend=(parsedAll&&parsedAll.trim())?parsedAll:ocrAll;
     if(!toSend.trim()){push("warn","আগে OCR চালান","");return;}
     const isParsed=!!(parsedAll&&parsedAll.trim());
-    onSendToBulk({text:toSend,subject,subtopic,tags:audienceTags,mode:effMode,qtype:effQtype});
+    onSendToBulk({text:toSend,subject,subtopic,tags:audienceTags,mode:effMode,qtype:effQtype,archiveId:archivedEntryId});
     push("success",
       isParsed?"✅ Parsed প্রশ্ন Bulk-এ পাঠানো হয়েছে!":"📋 Raw OCR text Bulk-এ পাঠানো হয়েছে",
       isParsed?"Subject/Subtopic auto-fill হয়েছে — check করে Upload করুন":"Gemini দিয়ে format করুন"
