@@ -35,12 +35,19 @@ const CACHE_QTYPE="MultiSubjectWritten"; // AIImportPage-এর ক্যাশ 
 /* ── AI prompt: header থেকে Designation/Institution + Written প্রশ্ন-উত্তর একসাথে বের করে JSON দেয় ── */
 function buildDetectPrompt(ocrText){
   return `তুমি একজন বাংলা সরকারি নিয়োগ পরীক্ষার প্রশ্নব্যাংক বিশ্লেষক (শুধু Written টাইপ)।
-নিচের OCR text একটি বইয়ের একটি পাতা থেকে নেওয়া। পাতার উপরে সাধারণত একটি হেডার লাইনে চাকরির পদবী (Designation) ও প্রতিষ্ঠান/দপ্তরের নাম (Institution) লেখা থাকে।
-উদাহরণ: "বন অধিদপ্তর-এর গাড়ী চালক ২০২৫" → designation="গাড়ী চালক", institution="বন অধিদপ্তর"।
-উদাহরণ: "প্রফেসর'স অফিস সহকারী" → designation="অফিস সহকারী", institution="প্রফেসর'স" (বা হেডারে যেভাবে আলাদা বোঝা যায় সেভাবে)।
+
+নিচের OCR text একটি বইয়ের একটি পাতা থেকে নেওয়া। প্রায় প্রতিটা পাতার একদম উপরে (সাধারণত প্রথম ১-৩ লাইনে) একটা হেডার/টাইটেল লাইন থাকে যেখানে চাকরির পদবী (Designation) ও প্রতিষ্ঠান/দপ্তরের নাম (Institution) লেখা থাকে — প্রায়ই তার ঠিক পরেই "তারিখ:", "সময়:", "পূর্ণমান:" জাতীয় মেটা-তথ্য থাকে (থাকলে সেটাই হেডার শেষ হওয়ার সংকেত হিসেবে ধরে নাও)।
+
+হেডার নানা রকম ফরম্যাটে আসতে পারে, যেমন (উদাহরণ):
+- "বন অধিদপ্তর-এর গাড়ী চালক ২০২৫" → designation="গাড়ী চালক", institution="বন অধিদপ্তর"
+- "স্বাস্থ্য সহকারী/স্টোর কিপ ... রাঙ্গামাটি পার্বত্য জেলা পরিষদ" → designation="স্বাস্থ্য সহকারী/স্টোর কিপ", institution="রাঙ্গামাটি পার্বত্য জেলা পরিষদ"
+- "অফিস সহায়ক, সহায়ক ... কারিগরি শিক্ষা অধিদপ্তর" → designation="অফিস সহায়ক, সহায়ক", institution="কারিগরি শিক্ষা অধিদপ্তর"
+- "পরিসংখ্যান সহকারী ... মৎস্য অধিদপ্তর" (institution-এর বানান/OCR কিছুটা অস্পষ্ট এলেও প্রাসঙ্গিক best-guess দাও)
 
 কাজ:
-১. হেডার থেকে designation ও institution আলাদা করে বের করো। সাল/বছরের সংখ্যা, "Written" শব্দ, পাতা নম্বর — এসব designation/institution-এর অংশ নয়, বাদ দাও।
+১. হেডার থেকে designation ও institution আলাদা করে বের করো। সাল/বছরের সংখ্যা, "Written" শব্দ, পাতা নম্বর, "তারিখ/সময়/পূর্ণমান" — এসব বাদ দাও।
+   — হেডারের বানান/OCR কিছুটা garbled বা অসম্পূর্ণ হলেও, যতটুকু পড়া যায় তা দিয়ে best-effort extract করো — পুরোপুরি নিশ্চিত না হলেও যুক্তিসঙ্গত best-guess দেওয়া ভালো, শুধু সম্পূর্ণ বানিয়ে বসিও না।
+   — designation/institution শুধুমাত্র তখনই "" (খালি) দাও, যখন এই পাতার শুরুতে আদৌ কোনো heading/title-সদৃশ লাইনই নেই (শুধু প্রশ্ন-উত্তরের ধারাবাহিকতা, নতুন কোনো heading এই পাতায় দেখাই যাচ্ছে না)।
 ২. এই পাতায় থাকা Written প্রশ্ন-উত্তরগুলো (নম্বরসহ, প্রতিটা প্রশ্নের সাথে থাকা উত্তর) বের করো। MCQ/option-ভিত্তিক প্রশ্ন থাকলেও শুধু প্রশ্ন ও সরাসরি সঠিক উত্তরটুকু নাও, option বাদ দাও।
 ${OCR_CORRECTION_RULES}
 
@@ -48,7 +55,6 @@ ${OCR_CORRECTION_RULES}
 {"designation":"...","institution":"...","entries":[{"q":"...","a":"..."}]}
 
 RULES:
-- এই পাতায় হেডার স্পষ্ট না থাকলে (আগের পাতার ধারাবাহিকতা হলে) designation ও institution "" (খালি স্ট্রিং) দাও — অনুমান করে বসিও না
 - Serial number বাদ দাও
 - q বা a এর ভেতরে দরকার হলে সঠিকভাবে escape (\\") করো, যাতে JSON valid থাকে
 - পাতা নম্বর, বিজ্ঞাপন, প্রমোশনাল টেক্সট বাদ দাও
@@ -246,10 +252,10 @@ function MultiSubjectImportPage({push}){
     const cached=getOcrCacheEntry(b64,CACHE_QTYPE);
     if(cached){
       _LC.log("MultiSubjectImport","📦 ক্যাশ হিট — AI call এড়ানো হলো");
-      return{...cached.detected,archiveId:cached.archiveId||null};
+      return{...cached.detected,archiveId:cached.archiveId||null,raw:cached.raw||""};
     }
     const raw=await nativeOcr(b64);
-    if(!raw.trim()) return{designation:"",institution:"",entries:[],archiveId:null};
+    if(!raw.trim()) return{designation:"",institution:"",entries:[],archiveId:null,raw:""};
     const aiText=await callAiProviderRotatingRaw(buildDetectPrompt(raw));
     const detected=parseDetectResponse(aiText);
     let archiveId=null;
@@ -261,15 +267,16 @@ function MultiSubjectImportPage({push}){
       if(arc) archiveId=arc.id;
     }
     setOcrCacheEntry(b64,CACHE_QTYPE,{raw,detected,archiveId});
-    return{...detected,archiveId};
+    return{...detected,archiveId,raw};
   };
+
 
   /* ── ধাপ ১: সব ছবি OCR+Detect+Parse করে draftGroups বানায় — কোনো সাবমিট হয় না, শুধু Confirm স্ক্রিনে নিয়ে যায় ── */
   const processImages=async()=>{
     if(!images.length){push("warn","ছবি যোগ করুন","");return;}
     if(!buildKeyPool().length){push("warn","⚠️ কোনো AI provider active নেই","⚙️ থেকে অন্তত একটা key active করো");return;}
     setPhase("processing"); stopRef.current=false; setResult(null); setDraftGroups([]);
-    setImages(p=>p.map(x=>({...x,status:"pending",designation:"",institution:"",entryCount:0,error:""})));
+    setImages(p=>p.map(x=>({...x,status:"pending",designation:"",institution:"",entryCount:0,error:"",rawOcr:""})));
 
     // ── প্রতিটা ছবিকে base64 unit-এ ভাঙা হয় (landscape হলে ২টা পাতা); manual group-break শুধু ছবির প্রথম unit-এ প্রযোজ্য ──
     const units=[]; // {imgId, base64, isImgFirstPart, manualBreak}
@@ -316,6 +323,7 @@ function MultiSubjectImportPage({push}){
           ...x,status:"done",
           designation:x.designation||curSubject, institution:x.institution||curSubtopic,
           entryCount:(x.entryCount||0)+detected.entries.length,
+          rawOcr:(x.rawOcr?x.rawOcr+"\n---\n":"")+(detected.raw||"(OCR টেক্সট খালি এসেছে — ছবিতে লেখা স্পষ্ট পড়া যায়নি)"),
         }:x));
       }catch(e){
         setImages(p=>p.map(x=>x.id===unit.imgId?{...x,status:"error",error:e.message}:x));
@@ -403,6 +411,8 @@ function MultiSubjectImportPage({push}){
 
   const[expandedGroupId,setExpandedGroupId]=useState(null); // Confirm স্ক্রিনে কোন group-এর পাতার ছবি দেখানো হচ্ছে
   const toggleGroupImages=(gid)=>setExpandedGroupId(p=>p===gid?null:gid);
+  const[rawTextGroupId,setRawTextGroupId]=useState(null); // কোন group-এর raw OCR টেক্সট দেখানো হচ্ছে (ডায়াগনস্টিক)
+  const toggleGroupRawText=(gid)=>setRawTextGroupId(p=>p===gid?null:gid);
   const imgByPageNo=(n)=>images[n-1]; // pages array 1-based (images grid index অনুযায়ী)
 
   const pct=progress.total?Math.round(progress.cur/progress.total*100):0;
@@ -482,13 +492,37 @@ function MultiSubjectImportPage({push}){
                     {g.included?"✅ রাখা হবে":"❌ বাদ"}
                   </button>
                 </div>
-                <button onClick={()=>toggleGroupImages(g.id)}
-                  style={{fontSize:10,fontWeight:800,padding:"4px 10px",borderRadius:8,cursor:"pointer",marginBottom:8,
-                    border:`1px solid ${isEmpty?"#f59e0b":C.border}`,
-                    background:isEmpty?"#f59e0b18":"transparent",
-                    color:isEmpty?"#f59e0b":C.muted}}>
-                  {imgsOpen?"▲ ছবি লুকাও":`🖼️ এই group-এর ${g.pages.length}টা পাতার ছবি দেখো (হেডার পড়ে Subject বসাতে)`}
-                </button>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
+                  <button onClick={()=>toggleGroupImages(g.id)}
+                    style={{fontSize:10,fontWeight:800,padding:"4px 10px",borderRadius:8,cursor:"pointer",
+                      border:`1px solid ${isEmpty?"#f59e0b":C.border}`,
+                      background:isEmpty?"#f59e0b18":"transparent",
+                      color:isEmpty?"#f59e0b":C.muted}}>
+                    {imgsOpen?"▲ ছবি লুকাও":`🖼️ ${g.pages.length}টা পাতার ছবি দেখো`}
+                  </button>
+                  {isEmpty&&(
+                    <button onClick={()=>toggleGroupRawText(g.id)}
+                      style={{fontSize:10,fontWeight:800,padding:"4px 10px",borderRadius:8,cursor:"pointer",
+                        border:"1px solid #38bdf8",background:"#38bdf818",color:"#38bdf8"}}>
+                      {rawTextGroupId===g.id?"▲ OCR টেক্সট লুকাও":"📝 raw OCR টেক্সট দেখো (কেন খালি এলো বুঝতে)"}
+                    </button>
+                  )}
+                </div>
+                {rawTextGroupId===g.id&&(
+                  <div className="ss-scroll" style={{maxHeight:220,overflowY:"auto",background:"#0a1628",
+                    border:"1px solid #38bdf8",borderRadius:8,padding:"8px 10px",marginBottom:8,
+                    fontSize:10,fontFamily:"monospace",color:"#94a3b8",whiteSpace:"pre-wrap"}}>
+                    {g.pages.map(pn=>{
+                      const im=imgByPageNo(pn);
+                      return(
+                        <div key={pn} style={{marginBottom:8}}>
+                          <div style={{color:"#38bdf8",fontWeight:800,marginBottom:2}}>— পাতা #{pn} —</div>
+                          {(im&&im.rawOcr)||"(এই পাতার raw OCR টেক্সট পাওয়া যায়নি)"}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 {imgsOpen&&(
                   <div className="ss-scroll" style={{display:"flex",flexDirection:"column",gap:8,marginBottom:8,
                     maxHeight:"50vh",overflowY:"auto",paddingRight:6}}>
