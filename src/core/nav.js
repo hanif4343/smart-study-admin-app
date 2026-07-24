@@ -19,6 +19,7 @@ const NAV=[
       {id:"questiongen", icon:"🧬", label:"AI প্রশ্ন"},
       {id:"aiimport",    icon:"📸", label:"AI Import"},
       {id:"multiimport", icon:"🗂️", label:"Multi-Subject"},
+      {id:"archive",     icon:"🗄️", label:"Archive"},
       {id:"typing",      icon:"⌨️", label:"Typing"},
     ]
   },
