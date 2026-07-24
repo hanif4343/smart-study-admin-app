@@ -12,11 +12,14 @@ import {
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet } from "../core/sheetSave.js";
 import { getOcrCacheEntry, setOcrCacheEntry, clearOcrCache } from "../core/ocrCache.js";
+import { saveDraft, listDrafts, deleteDraft, makeDraftId } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 import { ApiSettingsPage } from "./ApiSettingsPage.jsx";
 
-function AIImportPage({push,onSendToBulk}){
+const DRAFT_SOURCE="aiimport";
+
+function AIImportPage({push,onSendToBulk,resumeDraftId}){
   const[images,setImages]=useState([]);   // [{uri,base64,status,ocrText}]
   const[ocrAll,setOcrAll]=useState("");
   const[ocrQtype,setOcrQtype]=useState("MCQ"); // MCQ | Written | Study — OCR অটো-পার্সের টার্গেট ফরম্যাট
@@ -25,6 +28,11 @@ function AIImportPage({push,onSendToBulk}){
   const[copied,setCopied]=useState(false);
   const[showApiSettings,setShowApiSettings]=useState(false);
   const stopRef=useRef(false);
+
+  /* ── Draft/Archive — app kill/reload হলেও OCR+AI করা কাজ যেন হারিয়ে না যায় ── */
+  const draftIdRef=useRef(null); // এই session-এর draft id — প্রথম autosave-এ তৈরি হয়
+  const restoringRef=useRef(false); // draft restore করার মুহূর্তে autosave আটকাতে
+  const[resumeDraft,setResumeDraft]=useState(null); // পুরনো অসম্পূর্ণ draft পাওয়া গেলে banner-এ দেখানোর জন্য
 
   /* ── Direct-submit metadata (Subject/Subtopic/Tags) — Bulk পেজে না গিয়ে সরাসরি Firebase-এ পাঠানোর জন্য ── */
   const[targetMode,setTargetMode]=useState("Quiz"); // Quiz | QBank — শুধু ocrQtype "Study" না হলে relevant
@@ -81,6 +89,10 @@ function AIImportPage({push,onSendToBulk}){
       if(result.failedRows.length) pushFailedItems("AI Import (OCR)",saveLoc,effMode,result.failedRows);
       if(result.added>0) push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${effMode} — ${subject}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
       if(result.failedRows.length) push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+      // সম্পূর্ণ সফল (কোনো ব্যর্থ রো নেই) হলে draft আর দরকার নেই — ডাটা তো Sheet-এই চলে গেছে
+      if(!result.failedRows.length && result.added>0 && draftIdRef.current){
+        deleteDraft(draftIdRef.current); draftIdRef.current=null;
+      }
       return;
     }
 
@@ -108,6 +120,10 @@ function AIImportPage({push,onSendToBulk}){
     if(failedRecs.length) pushFailedItems("AI Import (OCR)",saveLoc,effMode,failedRecs);
     if(sent>0)push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${effMode} — ${subject}`);
     if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    // সম্পূর্ণ সফল হলে draft আর দরকার নেই — ডাটা তো Firebase-এই চলে গেছে
+    if(failed===0 && sent>0 && draftIdRef.current){
+      deleteDraft(draftIdRef.current); draftIdRef.current=null;
+    }
   };
 
   /* ── Capacitor Camera plugin ── */
@@ -202,7 +218,10 @@ function AIImportPage({push,onSendToBulk}){
   };
 
   const removeImg=(id)=>setImages(p=>p.filter(x=>x.id!==id));
-  const clearAll=()=>{setImages([]);setOcrAll("");setParsedAll("");setCopied(false);setShowParsed(true);};
+  const clearAll=()=>{
+    if(draftIdRef.current){deleteDraft(draftIdRef.current);draftIdRef.current=null;}
+    setImages([]);setOcrAll("");setParsedAll("");setCopied(false);setShowParsed(true);
+  };
 
   /* ── Convert webPath → base64 ── */
   const toBase64=async(img)=>{
@@ -281,6 +300,61 @@ function AIImportPage({push,onSendToBulk}){
   // ocrAll = raw text (দেখার জন্য), parsedAll = semicolon lines (bulk-ready)
   const[parsedAll,setParsedAll]=useState("");
   const[showParsed,setShowParsed]=useState(true); // toggle raw/parsed view
+
+  /* ── Draft restore — mount হওয়ার সাথে সাথে আগের অসম্পূর্ণ (submit না হওয়া) draft আছে কিনা চেক ──
+     Archive ট্যাব থেকে "Resume" চাপলে App.jsx resumeDraftId পাঠায় — সরাসরি সেটাই লোড হবে,
+     না হলে এই page-এর নিজস্ব pending draft থাকলে banner-এ suggest করা হয় */
+  useEffect(()=>{
+    (async()=>{
+      if(resumeDraftId){
+        const list=await listDrafts(DRAFT_SOURCE);
+        const d=list.find(x=>x.id===resumeDraftId);
+        if(d) restoreDraft(d);
+        return;
+      }
+      const list=await listDrafts(DRAFT_SOURCE);
+      if(list.length) setResumeDraft(list[0]);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[resumeDraftId]);
+
+  const restoreDraft=(d)=>{
+    restoringRef.current=true;
+    draftIdRef.current=d.id;
+    setImages(d.images||[]);
+    setOcrAll(d.ocrAll||"");
+    setParsedAll(d.parsedAll||"");
+    setOcrQtype(d.ocrQtype||"MCQ");
+    setTargetMode(d.targetMode||"Quiz");
+    setSubject(d.subject||"");
+    setSubtopic(d.subtopic||"");
+    setAudienceTags(d.audienceTags||[]);
+    setResumeDraft(null);
+    push("success","🔄 আগের কাজ ফিরিয়ে আনা হলো",`${(d.images||[]).length}টি ছবি — আবার OCR/AI করতে হবে না`);
+    setTimeout(()=>{restoringRef.current=false;},300);
+  };
+
+  const dismissDraft=async(discard)=>{
+    if(discard && resumeDraft) await deleteDraft(resumeDraft.id);
+    setResumeDraft(null);
+  };
+
+  /* ── Autosave — কোনো পরিবর্তনে debounce করে IndexedDB-তে draft সেভ হয়, যাতে app kill/reload হলেও হারিয়ে না যায়।
+     Submit সফল হলে (directSubmit-এর ভেতর) draft ডিলিট হয়ে যাবে — ডাটাবেজে তো চলেই গেছে, আর্কাইভে রাখার দরকার নেই। */
+  useEffect(()=>{
+    if(restoringRef.current) return;
+    if(!images.length) return;
+    const t=setTimeout(()=>{
+      if(!draftIdRef.current) draftIdRef.current=makeDraftId(DRAFT_SOURCE);
+      saveDraft({
+        id:draftIdRef.current, source:DRAFT_SOURCE,
+        label:`AI Import — ${images.length}টি ছবি (${ocrQtype})`,
+        images, ocrAll, parsedAll, ocrQtype, targetMode, subject, subtopic, audienceTags,
+        createdAt:Date.now(),
+      });
+    },600);
+    return()=>clearTimeout(t);
+  },[images,ocrAll,parsedAll,ocrQtype,targetMode,subject,subtopic,audienceTags]);
 
   const startOcr=async()=>{
     if(!images.length){push("warn","ছবি যোগ করুন","");return;}
@@ -374,6 +448,29 @@ function AIImportPage({push,onSendToBulk}){
           </button>
         </div>
       </div>
+
+      {/* ── Resume banner — আগের অসম্পূর্ণ (submit না হওয়া) কাজ পাওয়া গেলে ── */}
+      {resumeDraft&&(
+        <div style={{background:"#1e1b4b",border:"1px solid #6366f1",borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+          <div style={{fontSize:12,fontWeight:800,color:"#a5b4fc",marginBottom:4}}>⚠️ আগের একটা অসম্পূর্ণ কাজ পাওয়া গেছে</div>
+          <div style={{fontSize:11,color:C.muted,marginBottom:8}}>
+            {(resumeDraft.images||[]).length}টি ছবি
+            {resumeDraft.parsedAll?` — ${resumeDraft.parsedAll.split("\n").filter(l=>l.trim()&&l.includes(";")).length}টি প্রশ্ন parse করা ছিল`:""}
+            — submit করার আগেই বন্ধ হয়ে গিয়েছিল। ফিরিয়ে আনলে আবার OCR/AI করতে হবে না।
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn" onClick={()=>restoreDraft(resumeDraft)}
+              style={{flex:1,justifyContent:"center",background:"#4338ca",color:"#fff",borderColor:"#6366f1",fontWeight:700}}>
+              🔄 ফিরিয়ে আনুন
+            </button>
+            <button className="btn" onClick={()=>dismissDraft(true)}
+              style={{background:"transparent",color:C.muted,borderColor:C.border,padding:"0 14px"}}>
+              🗑️ বাদ দিন
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Inline API Settings panel */}
       {showApiSettings&&(
         <>
