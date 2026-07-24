@@ -11,7 +11,7 @@ const STALE  = 90_000; // 90s
 /* ── Google Sheet fallback — Firebase read ব্যর্থ হলে (quota শেষ, নেট সমস্যা, ইত্যাদি)
    এই তালিকার top-level sheet-গুলোর জন্য GAS "getSheetRows" অ্যাকশন দিয়ে সরাসরি
    Google Sheet থেকে ডাটা পড়ে — Firebase পুরোপুরি বন্ধ থাকলেও অ্যাপ কাজ চালিয়ে যেতে পারে। ── */
-const SHEET_FALLBACK_TABS = ["Quiz","QBank","Study","Typing"];
+const SHEET_FALLBACK_TABS = ["Quiz","QBank","Study","Typing","Users"];
 async function fetchSheetFallback(path){
   const tab=(path||"").split("/")[0];
   if(!SHEET_FALLBACK_TABS.includes(tab) || !GAS) return null;
