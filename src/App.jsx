@@ -93,7 +93,6 @@ export default function App(){
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
   const[bulkPrefill,setBulkPrefill]=useState(null);
-  const[resumeDraftId,setResumeDraftId]=useState(null); // Archive ট্যাব থেকে "ফিরিয়ে আনুন" চাপলে সেট হয়
   const[searchDetail,setSearchDetail]=useState(null);
   const backStack=useRef(["dashboard"]);
   const modalOpen=useRef(false);
@@ -399,9 +398,9 @@ export default function App(){
           <div style={{display:page==="joblauncher"?"block":"none"}}><JobLauncherTab push={push} tick={tick}/></div>
           <div style={{display:page==="qbankconv"?"block":"none"}}><QBankConverterTab push={push} tick={tick}/></div>
           <div style={{display:page==="questiongen"?"block":"none"}}><QuestionGenTab push={push} tick={tick}/></div>
-          <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}} resumeDraftId={resumeDraftId}/></div>
-          <div style={{display:page==="multiimport"?"block":"none"}}><MultiSubjectImportPage push={push} resumeDraftId={resumeDraftId}/></div>
-          <div style={{display:page==="archive"?"block":"none"}}><ArchivePage push={push} tick={tick} onResume={(source,draftId)=>{setResumeDraftId(draftId);goPage(source);}}/></div>
+          <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
+          <div style={{display:page==="multiimport"?"block":"none"}}><MultiSubjectImportPage push={push}/></div>
+          <div style={{display:page==="archive"?"block":"none"}}><ArchivePage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
           <div style={{display:page==="typing"?"block":"none"}}><TypingUploaderPage push={push}/></div>
         </div>
       </div>
