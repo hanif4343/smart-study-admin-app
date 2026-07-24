@@ -35,6 +35,7 @@ import { JobLauncherTab } from "./pages/content/JobLauncherTab.jsx";
 import { QBankConverterTab } from "./pages/content/QBankConverterTab.jsx";
 import { QuestionGenTab } from "./pages/content/QuestionGenTab.jsx";
 import { AIImportPage } from "./pages/AIImportPage.jsx";
+import { MultiSubjectImportPage } from "./pages/MultiSubjectImportPage.jsx";
 import { TypingUploaderPage } from "./pages/TypingUploaderPage.jsx";
 
 export default function App(){
@@ -378,7 +379,7 @@ export default function App(){
       </div>
 
       {/* Uploader hub — Bulk Upload / AI Job / AI প্রশ্ন / AI Import, একটার আন্ডারে, ট্যাব দিয়ে সুইচ */}
-      <div style={{display:(page==="bulkupload"||page==="joblauncher"||page==="qbankconv"||page==="questiongen"||page==="aiimport"||page==="typing")?"block":"none"}}>
+      <div style={{display:(page==="bulkupload"||page==="joblauncher"||page==="qbankconv"||page==="questiongen"||page==="aiimport"||page==="multiimport"||page==="typing")?"block":"none"}}>
         <div className="page" style={{paddingTop:0}}>
           <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
             <div className="atabs">
@@ -387,6 +388,7 @@ export default function App(){
               <button className={`atab${page==="qbankconv"?" on":""}`} onClick={()=>goPage("qbankconv")} style={{color:page==="qbankconv"?C.green:undefined}}>🔁 QBank→Quiz</button>
               <button className={`atab${page==="questiongen"?" on":""}`} onClick={()=>goPage("questiongen")} style={{color:page==="questiongen"?C.purple:undefined}}>🧬 AI প্রশ্ন</button>
               <button className={`atab${page==="aiimport"?" on":""}`} onClick={()=>goPage("aiimport")}>📸 AI Import</button>
+              <button className={`atab${page==="multiimport"?" on":""}`} onClick={()=>goPage("multiimport")} style={{color:page==="multiimport"?"#22d3ee":undefined}}>🗂️ Multi-Subject</button>
               <button className={`atab${page==="typing"?" on":""}`} onClick={()=>goPage("typing")}>⌨️ Typing</button>
             </div>
           </div>
@@ -395,6 +397,7 @@ export default function App(){
           <div style={{display:page==="qbankconv"?"block":"none"}}><QBankConverterTab push={push} tick={tick}/></div>
           <div style={{display:page==="questiongen"?"block":"none"}}><QuestionGenTab push={push} tick={tick}/></div>
           <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
+          <div style={{display:page==="multiimport"?"block":"none"}}><MultiSubjectImportPage push={push}/></div>
           <div style={{display:page==="typing"?"block":"none"}}><TypingUploaderPage push={push}/></div>
         </div>
       </div>
