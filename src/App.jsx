@@ -379,19 +379,31 @@ export default function App(){
         </div>
       </div>
 
-      {/* Uploader hub — Bulk Upload / AI Job / AI প্রশ্ন / AI Import, একটার আন্ডারে, ট্যাব দিয়ে সুইচ */}
+      {/* Uploader hub — Text Upload / AI Job / OCR Upload / Archive গ্রুপে গোছানো, ট্যাব দিয়ে সুইচ */}
       <div style={{display:(page==="bulkupload"||page==="joblauncher"||page==="qbankconv"||page==="questiongen"||page==="aiimport"||page==="multiimport"||page==="archive"||page==="typing")?"block":"none"}}>
         <div className="page" style={{paddingTop:0}}>
           <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
-            <div className="atabs">
+            <div className="slb" style={{margin:"0 0 6px"}}>📝 Text Upload</div>
+            <div className="atabs" style={{marginBottom:10}}>
               <button className={`atab${page==="bulkupload"?" on":""}`} onClick={()=>goPage("bulkupload")}>📝 Bulk Upload</button>
-              <button className={`atab${page==="joblauncher"?" on":""}`} onClick={()=>goPage("joblauncher")} style={{color:page==="joblauncher"?C.green:undefined}}>🚀 AI Job</button>
+              <button className={`atab${page==="typing"?" on":""}`} onClick={()=>goPage("typing")}>⌨️ Typing</button>
+            </div>
+
+            <div className="slb" style={{margin:"0 0 6px"}}>🚀 AI Job</div>
+            <div className="atabs" style={{marginBottom:10}}>
+              <button className={`atab${page==="joblauncher"?" on":""}`} onClick={()=>goPage("joblauncher")} style={{color:page==="joblauncher"?C.green:undefined}}>🚀 Exp Gen</button>
               <button className={`atab${page==="qbankconv"?" on":""}`} onClick={()=>goPage("qbankconv")} style={{color:page==="qbankconv"?C.green:undefined}}>🔁 QBank→Quiz</button>
               <button className={`atab${page==="questiongen"?" on":""}`} onClick={()=>goPage("questiongen")} style={{color:page==="questiongen"?C.purple:undefined}}>🧬 AI প্রশ্ন</button>
-              <button className={`atab${page==="aiimport"?" on":""}`} onClick={()=>goPage("aiimport")}>📸 AI Import</button>
+            </div>
+
+            <div className="slb" style={{margin:"0 0 6px"}}>📸 OCR Upload</div>
+            <div className="atabs" style={{marginBottom:10}}>
+              <button className={`atab${page==="aiimport"?" on":""}`} onClick={()=>goPage("aiimport")}>📸 Single Subject</button>
               <button className={`atab${page==="multiimport"?" on":""}`} onClick={()=>goPage("multiimport")} style={{color:page==="multiimport"?"#22d3ee":undefined}}>🗂️ Multi-Subject</button>
+            </div>
+
+            <div className="atabs">
               <button className={`atab${page==="archive"?" on":""}`} onClick={()=>goPage("archive")} style={{color:page==="archive"?"#a78bfa":undefined}}>🗄️ Archive</button>
-              <button className={`atab${page==="typing"?" on":""}`} onClick={()=>goPage("typing")}>⌨️ Typing</button>
             </div>
           </div>
           <div style={{display:page==="bulkupload" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill(null)}/></div>
