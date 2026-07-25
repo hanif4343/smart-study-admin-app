@@ -103,7 +103,16 @@ public class GalleryPickerPlugin extends Plugin {
     @ActivityCallback
     private void pickImagesResult(PluginCall call, ActivityResult result) {
         if (call == null) return;
+        try {
+            pickImagesResultInner(call, result);
+        } catch (Throwable t) {
+            // ── এখানে কোনো ব্যতিক্রম (OutOfMemoryError সহ) ধরা না পড়লে পুরো অ্যাপ ক্র্যাশ করে যেত —
+            //    এটাই আসল ক্র্যাশের কারণ ছিল বলে সন্দেহ করা হচ্ছে (নিচের readAndCacheFile-এর কমেন্ট দেখুন) ──
+            call.reject("gallery processing failed: " + t.getMessage());
+        }
+    }
 
+    private void pickImagesResultInner(PluginCall call, ActivityResult result) {
         if (result.getResultCode() != Activity.RESULT_OK) {
             call.reject("cancelled");
             return;
@@ -133,7 +142,12 @@ public class GalleryPickerPlugin extends Plugin {
         JSArray photos = new JSArray();
 
         for (Uri uri : uris) {
-            String path = readAndCacheFile(cr, uri);
+            String path;
+            try {
+                path = readAndCacheFile(cr, uri);
+            } catch (Throwable t) {
+                path = null; // একটা ছবি প্রসেস করতে ব্যর্থ (OOM সহ) হলেও বাকিগুলো চালিয়ে যাই, পুরো অ্যাপ ক্র্যাশ না করে
+            }
             if (path == null) continue; // একটা ছবি corrupt হলেও বাকিগুলো চালিয়ে যাই
             JSObject photo = new JSObject();
             photo.put("path", path);
@@ -151,8 +165,19 @@ public class GalleryPickerPlugin extends Plugin {
     }
 
     /** ছবি ডিকোড+ডাউনস্কেল করে অ্যাপের cache ফোল্ডারে JPEG ফাইল হিসেবে লিখে ফেলে, ফাইলের
-     *  absolute path রিটার্ন করে — bridge দিয়ে বিশাল base64 payload পাঠানো হয় না। */
+     *  absolute path রিটার্ন করে — bridge দিয়ে বিশাল base64 payload পাঠানো হয় না।
+     *
+     *  ── আসল ক্র্যাশের কারণ সম্ভবত এখানেই ছিল ──
+     *  বড় ছবি BitmapFactory.decodeStream() দিয়ে ডিকোড করার সময় লো-RAM ফোনে
+     *  OutOfMemoryError ছুঁড়তে পারে। কিন্তু OutOfMemoryError জাভায়
+     *  java.lang.Error-এর subclass, java.lang.Exception-এর না — তাই আগের
+     *  `catch (Exception e)` ব্লক সেটা ধরতেই পারতো না, ফলে এটা uncaught
+     *  অবস্থায় পুরো অ্যাপ ক্র্যাশ করে দিত (ঠিক "গ্যালারি থেকে ফিরে আসার পর"
+     *  মুহূর্তেই, যেখানে decode হয়)। এখন `catch (Throwable t)` ব্যবহার করে
+     *  OutOfMemoryError-সহ সব ধরনের ব্যতিক্রম ধরা হচ্ছে, আর প্রথমবার OOM
+     *  হলে আরও ছোট sample size দিয়ে একবার রিট্রাই করা হয়। */
     private String readAndCacheFile(ContentResolver cr, Uri uri) {
+        Bitmap bmp = null;
         try {
             // ── ধাপ ১: শুধু dimensions জানার জন্য প্রথমে decode (মেমরি সাশ্রয়ী) ──
             BitmapFactory.Options bounds = new BitmapFactory.Options();
@@ -165,12 +190,10 @@ public class GalleryPickerPlugin extends Plugin {
             int w = bounds.outWidth, h = bounds.outHeight;
             while ((w / sample) > MAX_DIM || (h / sample) > MAX_DIM) sample *= 2;
 
-            BitmapFactory.Options opts = new BitmapFactory.Options();
-            opts.inSampleSize = sample;
-
-            Bitmap bmp;
-            try (InputStream is2 = cr.openInputStream(uri)) {
-                bmp = BitmapFactory.decodeStream(is2, null, opts);
+            bmp = decodeWithSample(cr, uri, sample);
+            if (bmp == null) {
+                // ── প্রথমবার ডিকোড ব্যর্থ/OOM হলে আরও বেশি ডাউনস্কেল করে একবার রিট্রাই ──
+                bmp = decodeWithSample(cr, uri, sample * 2);
             }
             if (bmp == null) return null;
 
@@ -180,10 +203,24 @@ public class GalleryPickerPlugin extends Plugin {
             try (FileOutputStream fos = new FileOutputStream(outFile)) {
                 bmp.compress(Bitmap.CompressFormat.JPEG, 90, fos);
             }
-            bmp.recycle();
             return outFile.getAbsolutePath();
-        } catch (Exception e) {
-            return null;
+        } catch (Throwable t) {
+            return null; // OutOfMemoryError-সহ যেকোনো ব্যতিক্রমেই crash না করে শুধু এই ছবিটা স্কিপ করি
+        } finally {
+            if (bmp != null && !bmp.isRecycled()) bmp.recycle();
+        }
+    }
+
+    /** নির্দিষ্ট inSampleSize দিয়ে ডিকোড — OutOfMemoryError হলে null রিটার্ন করে (crash না করে) */
+    private Bitmap decodeWithSample(ContentResolver cr, Uri uri, int sample) {
+        try {
+            BitmapFactory.Options opts = new BitmapFactory.Options();
+            opts.inSampleSize = Math.max(1, sample);
+            try (InputStream is = cr.openInputStream(uri)) {
+                return BitmapFactory.decodeStream(is, null, opts);
+            }
+        } catch (Throwable t) {
+            return null; // OutOfMemoryError-ও এখানে ধরা পড়ে (Exception না, তাই আলাদাভাবে দরকার ছিল)
         }
     }
 }
