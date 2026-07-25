@@ -7,7 +7,6 @@ import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.net.Uri;
-import android.util.Base64;
 
 import androidx.activity.result.ActivityResult;
 
@@ -19,9 +18,11 @@ import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.ActivityCallback;
 import com.getcapacitor.annotation.CapacitorPlugin;
 
-import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.UUID;
 
 /**
  * ── কেন এই plugin দরকার হলো ──────────────────────────────────────────────
@@ -45,8 +46,19 @@ import java.util.ArrayList;
  * কাজ করে। এই picker না থাকলে (খুব পুরনো ডিভাইস/OS) আগের
  * ACTION_OPEN_DOCUMENT fallback হিসেবে থেকে যায়।
  *
- * ফলাফল সরাসরি base64 আকারে ফেরত দেয় (webPath/content:// URI না — কারণ
- * content:// scheme সব সময় WebView-তে <img src> হিসেবে লোড হয় না)।
+ * ── ক্র্যাশ ফিক্স (২০২৬) ──────────────────────────────────────────────────
+ * আগে প্রতিটা ছবি ডিকোড+ডাউনস্কেল করে সরাসরি base64 স্ট্রিং হিসেবে JS
+ * bridge-এর একটাই call.resolve()-এ ফেরত পাঠানো হতো। বাল্ক সিলেক্টে (একসাথে
+ * অনেকগুলো ছবি — এই অ্যাপের Multi-Subject Import পেজের মূল ব্যবহার) সব
+ * ছবির base64 একসাথে জোড়া দিলে কয়েক দশ MB-র বিশাল JSON payload তৈরি হতো,
+ * যেটা bridge দিয়ে JS-এ ফেরত পাঠানোর মুহূর্তেই (ঠিক gallery থেকে অ্যাপে
+ * ফিরে আসার সময়) native-side মেমরি ফুরিয়ে অ্যাপ ক্র্যাশ/ANR করিয়ে দিত।
+ * এখন প্রতিটা ডাউনস্কেল করা ছবি bridge দিয়ে base64 হিসেবে না পাঠিয়ে অ্যাপের
+ * নিজস্ব cache ফোল্ডারে JPEG ফাইল হিসেবে লিখে ফেলা হয়, আর bridge দিয়ে শুধু
+ * ছোট্ট ফাইল-পাথ স্ট্রিং ফেরত যায় (ঠিক @capacitor/camera-এর pickImages()
+ * যেভাবে webPath রিটার্ন করে, সেভাবেই) — JS সাইডে
+ * window.Capacitor.convertFileSrc(path) দিয়ে সেটা <img src>-এ ব্যবহারযোগ্য
+ * URL-এ বদলানো হয়।
  */
 @CapacitorPlugin(name = "GalleryPicker")
 public class GalleryPickerPlugin extends Plugin {
@@ -121,10 +133,10 @@ public class GalleryPickerPlugin extends Plugin {
         JSArray photos = new JSArray();
 
         for (Uri uri : uris) {
-            String b64 = readAsBase64(cr, uri);
-            if (b64 == null) continue; // একটা ছবি corrupt হলেও বাকিগুলো চালিয়ে যাই
+            String path = readAndCacheFile(cr, uri);
+            if (path == null) continue; // একটা ছবি corrupt হলেও বাকিগুলো চালিয়ে যাই
             JSObject photo = new JSObject();
-            photo.put("base64String", b64);
+            photo.put("path", path);
             photos.put(photo);
         }
 
@@ -138,7 +150,9 @@ public class GalleryPickerPlugin extends Plugin {
         call.resolve(ret);
     }
 
-    private String readAsBase64(ContentResolver cr, Uri uri) {
+    /** ছবি ডিকোড+ডাউনস্কেল করে অ্যাপের cache ফোল্ডারে JPEG ফাইল হিসেবে লিখে ফেলে, ফাইলের
+     *  absolute path রিটার্ন করে — bridge দিয়ে বিশাল base64 payload পাঠানো হয় না। */
+    private String readAndCacheFile(ContentResolver cr, Uri uri) {
         try {
             // ── ধাপ ১: শুধু dimensions জানার জন্য প্রথমে decode (মেমরি সাশ্রয়ী) ──
             BitmapFactory.Options bounds = new BitmapFactory.Options();
@@ -160,10 +174,14 @@ public class GalleryPickerPlugin extends Plugin {
             }
             if (bmp == null) return null;
 
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            bmp.compress(Bitmap.CompressFormat.JPEG, 90, baos);
+            File dir = new File(getContext().getCacheDir(), "gallery_picks");
+            if (!dir.exists()) dir.mkdirs();
+            File outFile = new File(dir, "pick_" + UUID.randomUUID().toString() + ".jpg");
+            try (FileOutputStream fos = new FileOutputStream(outFile)) {
+                bmp.compress(Bitmap.CompressFormat.JPEG, 90, fos);
+            }
             bmp.recycle();
-            return Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP);
+            return outFile.getAbsolutePath();
         } catch (Exception e) {
             return null;
         }
