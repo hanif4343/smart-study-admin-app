@@ -8,7 +8,7 @@ import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.j
 import { InlineEditModal } from "./InlineEditModal.jsx";
 
 function BrowseTab({push,tick}){
-  const[sheet,setSheet]=useState("QBank");
+  const[sheet,setSheet]=useState("Quiz");
   const{data:raw,loading}=useFB(sheet,tick);
   const[search,setSearch]=useState("");
   const[filterSub,setFilterSub]=useState("all");
@@ -20,6 +20,7 @@ function BrowseTab({push,tick}){
   const[bulkDelTargets,setBulkDelTargets]=useState(null); // array of qs to bulk delete
   const[bulkDelLoading,setBulkDelLoading]=useState(false);
   const[page,setPage]=useState(0);
+  const[expandedKeys,setExpandedKeys]=useState(()=>new Set()); // কোন কোন কার্ড "বিস্তারিত" খোলা আছে
   const PAGE=20;
 
   const allQ=useMemo(()=>toArr(raw).reverse(),[raw]);
@@ -124,7 +125,7 @@ function BrowseTab({push,tick}){
     <>
       {/* Sheet tabs + Audience selector row */}
       <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center",flexWrap:"wrap"}}>
-        {["QBank","Quiz","Study"].map(s=>(
+        {["Quiz","QBank","Study"].map(s=>(
           <button key={s} className={`ftab${sheet===s&&viewMode==="all"?" on":""}`} onClick={()=>{setSheet(s);setFilterSub("all");setFilterAudience("all");setSearch("");setViewMode("all");}}>{s}</button>
         ))}
         <button
@@ -200,8 +201,18 @@ function BrowseTab({push,tick}){
         const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
         const isDup=viewMode==="duplicates";
         const isOriginal=q._isDupOriginal;
+        const cardKey=q._fbKey||i;
+        const isOpen=expandedKeys.has(cardKey);
+        // ── বিস্তারিত ভিউ-এর জন্য সব ফিল্ড (Firebase-এ নানা নামে থাকতে পারে, তাই সব variant চেক করা হয়) ──
+        const _o=(k1,k2,k3,k4)=>q[k1]||q[k2]||q[k3]||q[k4]||"";
+        const opt1=_o("Opt1","opt1","Option1","option1"), opt2=_o("Opt2","opt2","Option2","option2");
+        const opt3=_o("Opt3","opt3","Option3","option3"), opt4=_o("Opt4","opt4","Option4","option4");
+        const correctAns=q.Correct||q.correct||"";
+        const explanation=q.Explanation||q.explanation||"";
+        const technique=q.Technique||q.technique||"";
+        const fullQ=q.Question||q.question||"(নোট)";
         return(
-          <div key={q._fbKey||i} className="qcard" style={isDup?{border:`1.5px solid ${isOriginal?C.green:C.red}44`,background:isOriginal?C.green+"08":C.red+"08"}:{}}>
+          <div key={cardKey} className="qcard" style={isDup?{border:`1.5px solid ${isOriginal?C.green:C.red}44`,background:isOriginal?C.green+"08":C.red+"08"}:{}}>
             <div style={{display:"flex",gap:6,marginBottom:5,alignItems:"flex-start"}}>
               <span className={`qtag ${qt==="written"?"qtag-wr":"qtag-mcq"}`}>{qt==="written"?"✍️":"❓"}</span>
               <span style={{fontSize:9,color:C.muted,marginTop:1}}>#{qid}</span>
@@ -224,6 +235,53 @@ function BrowseTab({push,tick}){
                 </span>
               )}
             </div>
+            {/* ── বিস্তারিত দেখার বাটন — পুরো প্রশ্ন + অপশন + উত্তর + ব্যাখ্যা গুছিয়ে দেখায় ── */}
+            <button onClick={()=>setExpandedKeys(p=>{const n=new Set(p); n.has(cardKey)?n.delete(cardKey):n.add(cardKey); return n;})}
+              style={{width:"100%",marginTop:7,padding:"5px 0",fontSize:10,fontWeight:700,color:C.muted,
+                background:"transparent",border:`1px solid ${C.border}`,borderRadius:8,cursor:"pointer",
+                display:"flex",alignItems:"center",justifyContent:"center",gap:5}}>
+              {isOpen?"▲ লুকান":"▼ বিস্তারিত দেখুন"}
+            </button>
+            {isOpen&&(
+              <div style={{marginTop:8,padding:"10px 11px",background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:10,fontSize:12,lineHeight:1.6}}>
+                <div style={{color:C.text,fontWeight:700,marginBottom:8,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{fullQ}</div>
+                {qt!=="written"&&(opt1||opt2||opt3||opt4)&&(
+                  <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:8}}>
+                    {[["A",opt1],["B",opt2],["C",opt3],["D",opt4]].filter(([,v])=>v).map(([lbl,v])=>{
+                      const isCorrect=correctAns&&v.trim()===correctAns.toString().trim();
+                      return(
+                        <div key={lbl} style={{display:"flex",gap:6,alignItems:"flex-start",
+                          color:isCorrect?C.green:C.muted,fontWeight:isCorrect?800:500}}>
+                          <span>{isCorrect?"✅":`${lbl})`}</span>
+                          <span style={{wordBreak:"break-word"}}>{v}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+                {qt==="written"&&correctAns&&(
+                  <div style={{marginBottom:8}}>
+                    <div style={{fontSize:10,fontWeight:800,color:C.green,marginBottom:2}}>✅ উত্তর</div>
+                    <div style={{color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{correctAns}</div>
+                  </div>
+                )}
+                {explanation&&(
+                  <div style={{marginBottom:technique?8:0}}>
+                    <div style={{fontSize:10,fontWeight:800,color:"#f59e0b",marginBottom:2}}>📖 ব্যাখ্যা</div>
+                    <div style={{color:C.muted,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{explanation}</div>
+                  </div>
+                )}
+                {technique&&(
+                  <div>
+                    <div style={{fontSize:10,fontWeight:800,color:"#818cf8",marginBottom:2}}>💡 কৌশল</div>
+                    <div style={{color:C.muted,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{technique}</div>
+                  </div>
+                )}
+                {!correctAns&&!explanation&&!technique&&!opt1&&(
+                  <div style={{color:C.muted,fontSize:11}}>(অতিরিক্ত কোনো তথ্য নেই)</div>
+                )}
+              </div>
+            )}
           </div>
         );
        })
