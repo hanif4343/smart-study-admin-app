@@ -265,16 +265,23 @@ function MultiSubjectImportPage({push}){
       if(!e.message?.includes("cancelled")) push("error","Camera error",e.message);
     }
   };
-  /* ছবি যোগ হওয়ার পরপরই (ব্লকিং ছাড়া) প্রতিটার জন্য ছোট থাম্বনেইল বানিয়ে state আপডেট করে —
-     একসাথে অনেক বড় ছবি সিলেক্ট করার কারণে হওয়া মেমরি ক্র্যাশ ঠেকাতে (দেখুন উপরের কমেন্ট) */
+  /* ছবি যোগ হওয়ার পরপরই প্রতিটার জন্য ছোট থাম্বনেইল বানিয়ে state আপডেট করে —
+     ── আসল বাকি-থাকা bug এখানেই ছিল ──
+     আগে imgs.forEach(...) ব্যবহার করায় ব্যাচের সব ছবির থাম্বনেইল একসাথে
+     সমান্তরালে (parallel) জেনারেট হচ্ছিল — মানে ৩০টা ছবি সিলেক্ট করলে ৩০টা
+     full-resolution (~২০০০px) ছবি একই মুহূর্তে ডিকোড হতে যাচ্ছিল, যা একটা
+     নির্দিষ্ট সংখ্যার পর (ডিভাইসভেদে) মেমরি স্পাইক করে ক্র্যাশ করাচ্ছিল।
+     এখন একটার পর একটা (sequential, await দিয়ে) প্রসেস করা হয় — একসাথে
+     সর্বোচ্চ ১টা ফুল-রেজ ছবিই মেমরিতে ডিকোড থাকে, সংখ্যা যতই হোক না কেন। */
   const attachThumbnails=(imgs)=>{
-    imgs.forEach((im)=>{
-      const fullSrc=im.webPath||(im.base64?`data:image/jpeg;base64,${im.base64}`:null);
-      if(!fullSrc)return;
-      makeThumbnail(fullSrc).then((t)=>{
+    (async()=>{
+      for(const im of imgs){
+        const fullSrc=im.webPath||(im.base64?`data:image/jpeg;base64,${im.base64}`:null);
+        if(!fullSrc)continue;
+        const t=await makeThumbnail(fullSrc);
         setImages(p=>p.map(x=>x.id===im.id?{...x,thumb:t}:x));
-      });
-    });
+      }
+    })();
   };
   const removeImg=(id)=>setImages(p=>{
     const rm=p.find(x=>x.id===id);
@@ -621,9 +628,7 @@ function MultiSubjectImportPage({push}){
                       if(!src)return null;
                       return(
                         <div key={pn} style={{position:"relative"}}>
-                          <img src={src} draggable={false}
-                            onContextMenu={ev=>ev.preventDefault()}
-                            onClick={()=>openPreviewNow(im.id)}
+                          <img src={src} draggable={false} loading="lazy" decoding="async"
                             onTouchStart={()=>startLongPress(im.id)}
                             onTouchEnd={cancelLongPress}
                             onTouchCancel={cancelLongPress}
@@ -719,9 +724,7 @@ function MultiSubjectImportPage({push}){
                   <div key={img.id} style={{background:img.groupBreak?"#f59e0b14":C.panel,border:`1px solid ${borderCol}`,borderRadius:12,padding:8}}>
                     <div style={{position:"relative"}}>
                       {src?(
-                        <img src={src} draggable={false}
-                          onContextMenu={e=>e.preventDefault()}
-                          onTouchStart={()=>startLongPress(img.id)}
+                        <img src={src} draggable={false} loading="lazy" decoding="async"
                           onTouchEnd={cancelLongPress}
                           onTouchCancel={cancelLongPress}
                           onMouseDown={()=>startLongPress(img.id)}
