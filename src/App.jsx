@@ -39,6 +39,27 @@ import { MultiSubjectImportPage } from "./pages/MultiSubjectImportPage.jsx";
 import { ArchivePage } from "./pages/ArchivePage.jsx";
 import { TypingUploaderPage } from "./pages/TypingUploaderPage.jsx";
 
+/* Uploader hub-এর ক্যাটাগরি/সাব-অপশন গঠন — module-level রাখা হলো যাতে রেন্ডার আর sync effect দুই জায়গাতেই
+   একই স্থিতিশীল রেফারেন্স ব্যবহার করা যায় (প্রতি রেন্ডারে নতুন array তৈরি না হয়) */
+const UPLOADER_CATS=[
+  {key:"text",label:"📝 Text Upload",items:[
+    {page:"bulkupload",label:"📝 Bulk Upload"},
+    {page:"typing",label:"⌨️ Typing"},
+  ]},
+  {key:"aijob",label:"🚀 AI Job",items:[
+    {page:"joblauncher",label:"🚀 Exp Gen",color:C.green},
+    {page:"qbankconv",label:"🔁 QBank→Quiz",color:C.green},
+    {page:"questiongen",label:"🧬 AI প্রশ্ন",color:C.purple},
+  ]},
+  {key:"ocr",label:"📸 OCR Upload",items:[
+    {page:"aiimport",label:"📸 Single Subject"},
+    {page:"multiimport",label:"🗂️ Multi-Subject",color:"#22d3ee"},
+  ]},
+  {key:"archive",label:"🗄️ Archive",items:[
+    {page:"archive",label:"🗄️ Archive",color:"#a78bfa"},
+  ]},
+];
+
 export default function App(){
   // ── Android system back button — modal থাকলে close, নইলে double-back-to-exit ──
   useEffect(()=>{
@@ -94,6 +115,11 @@ export default function App(){
   const[spin,setSpin]=useState(false);
   const[bulkPrefill,setBulkPrefill]=useState(null);
   const[uploaderOpenCat,setUploaderOpenCat]=useState(null); // Uploader hub-এ কোন ক্যাটাগরি (Text Upload/AI Job/OCR Upload/Archive) খোলা আছে — accordion, একসাথে একটাই খোলা থাকে
+  useEffect(()=>{
+    // পেজ অন্য কোনো উপায়ে (যেমন archive/AI import থেকে "Send to Bulk") বদলে গেলেও সঠিক ক্যাটাগরিটাই খোলা/হাইলাইট থাকুক
+    const cat=UPLOADER_CATS.find(c=>c.items.some(it=>it.page===page));
+    if(cat) setUploaderOpenCat(cat.key);
+  },[page]);
   const[searchDetail,setSearchDetail]=useState(null);
   const backStack=useRef(["dashboard"]);
   const modalOpen=useRef(false);
@@ -400,35 +426,21 @@ export default function App(){
         <div className="page" style={{paddingTop:0}}>
           <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
             {(()=>{
-              const CATS=[
-                {key:"text",label:"📝 Text Upload",items:[
-                  {page:"bulkupload",label:"📝 Bulk Upload"},
-                  {page:"typing",label:"⌨️ Typing"},
-                ]},
-                {key:"aijob",label:"🚀 AI Job",items:[
-                  {page:"joblauncher",label:"🚀 Exp Gen",color:C.green},
-                  {page:"qbankconv",label:"🔁 QBank→Quiz",color:C.green},
-                  {page:"questiongen",label:"🧬 AI প্রশ্ন",color:C.purple},
-                ]},
-                {key:"ocr",label:"📸 OCR Upload",items:[
-                  {page:"aiimport",label:"📸 Single Subject"},
-                  {page:"multiimport",label:"🗂️ Multi-Subject",color:"#22d3ee"},
-                ]},
-                {key:"archive",label:"🗄️ Archive",items:[
-                  {page:"archive",label:"🗄️ Archive",color:"#a78bfa"},
-                ]},
-              ];
-              const openCat=CATS.find(c=>c.key===uploaderOpenCat);
+              const openCat=UPLOADER_CATS.find(c=>c.key===uploaderOpenCat);
               return(
                 <>
                   {/* ── ক্যাটাগরি লাইন — শুরুতে শুধু এইটাই দেখা যায় ── */}
                   <div className="atabs" style={{marginBottom:openCat?10:0}}>
-                    {CATS.map(cat=>(
+                    {UPLOADER_CATS.map(cat=>(
                       <button key={cat.key}
                         className={`atab${uploaderOpenCat===cat.key?" on":""}`}
                         onClick={()=>{
-                          if(cat.items.length===1){ goPage(cat.items[0].page); setUploaderOpenCat(cat.key); }
-                          else{ setUploaderOpenCat(p=>p===cat.key?null:cat.key); }
+                          if(cat.items.length===1){ goPage(cat.items[0].page); setUploaderOpenCat(cat.key); return; }
+                          const opening=uploaderOpenCat!==cat.key;
+                          setUploaderOpenCat(opening?cat.key:null);
+                          // ── ক্যাটাগরি খোলার সাথে সাথে সেটার নিজের কনটেন্টেও চলে যাও — নাহলে আগের
+                          //    ক্যাটাগরির পেজই স্ক্রিনে থেকে যায় (এই বাগটাই "OCR-এ আছি বোঝা যাচ্ছে না" সমস্যা ছিল) ──
+                          if(opening&&!cat.items.some(it=>it.page===page)) goPage(cat.items[0].page);
                         }}>
                         {cat.label}
                       </button>
