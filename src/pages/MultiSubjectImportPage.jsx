@@ -33,18 +33,24 @@ const SRC_NAME="Multi-Subject Bulk Import";
 const CACHE_QTYPE="MultiSubjectWritten"; // AIImportPage-এর ক্যাশ থেকে আলাদা রাখতে নিজস্ব qtype key
 
 /* ── ছবি সিলেক্ট করার পর ক্র্যাশ ফিক্স ──────────────────────────────────
-   এই পেজে একসাথে অনেকগুলো (বাল্ক) ছবি যোগ করা হয়, আর প্রতিটা ছবি নেটিভ
-   সাইডে আগে থেকেই ২০০০px পর্যন্ত বড় হতে পারে (GalleryPickerPlugin এর
-   MAX_DIM)। আগে লিস্টে প্রতিটা আইটেম সরাসরি সেই full-resolution base64
-   দিয়েই (object-fit:contain, full-width, ২৬০px পর্যন্ত উঁচু) রেন্ডার করা
-   হতো — অনেকগুলো ছবি একসাথে সিলেক্ট করলে WebView-কে একসাথে অনেকগুলো বড়
-   বিটম্যাপ ডিকোড করতে হতো, যা লো/মিড-এন্ড ফোনে মেমরি ফুরিয়ে (OOM) অ্যাপ
-   ক্র্যাশ করিয়ে দিত — বিশেষ করে ছবি সিলেক্ট করার সাথে সাথেই (list রেন্ডার
-   হওয়ার মুহূর্তে)।
-   সমাধান: প্রতিটা ছবি যোগ হওয়ার সাথে সাথে ছোট (max ৪৮০px) থাম্বনেইল আলাদা
-   করে বানিয়ে রাখি এবং লিস্টে সেটাই দেখাই — আসল/full base64 শুধু OCR/zoom
-   প্রিভিউ-এর জন্য অক্ষত থাকে (toBase64 এখনো img.webPath ব্যবহার করে)। ── */
-function makeThumbnail(src,maxDim=480){
+   দুটো আলাদা কারণে renderer-process OOM ক্র্যাশ হচ্ছিল:
+   ১) Gallery দিয়ে ছবি আনলে GalleryPickerPlugin নেটিভ সাইডে ২০০০px পর্যন্ত
+      ডাউনস্কেল করে ঠিকই, কিন্তু 📷 Camera দিয়ে তোলা ছবি (@capacitor/camera
+      getPhoto) কোনো ডাউনস্কেল ছাড়াই ফোনের আসল রেজোলিউশনে (অনেক ফোনে
+      ৪০০০px+ / ১২MP+) সরাসরি base64 হিসেবে আসে — এটাই সবচেয়ে বড় ঝুঁকি।
+   ২) সেই base64 কে সরাসরি বিশাল "data:...;base64,...." স্ট্রিং হিসেবে
+      React state-এ (webPath) রাখা হতো, আর একই বড় ছবি একাধিক জায়গায়
+      (list thumbnail, group-expand thumbnail, zoom preview) আলাদা আলাদা
+      ভাবে ফুল-রেজোলিউশনে ডিকোড হতো — কয়েকটা বড় ছবি একসাথে থাকলেই লো/মিড-
+      এন্ড ফোনে মেমরি ফুরিয়ে WebView renderer ক্র্যাশ করে যেত।
+   সমাধান:
+   — Camera দিয়ে তোলা ছবি সাথে সাথেই client-side ক্যানভাসে ২০০০px-এ
+     ডাউনস্কেল করা হয় (GalleryPickerPlugin-এর MAX_DIM-এর সমতুল্য)।
+   — বড় base64 স্ট্রিং state-এ না রেখে Blob + Object URL বানিয়ে রাখা হয়
+     (browser এটা JS string heap-এর বাইরে ম্যানেজ করে, অনেক হালকা)।
+   — লিস্টে দেখানোর জন্য আলাদা ছোট (max ৪৮০px) থাম্বনেইল বানানো হয় —
+     আসল ছবি শুধু OCR/zoom প্রিভিউ-এর জন্য অক্ষত থাকে। ── */
+function downscaleImageSrc(src,maxDim=2000,quality=0.9){
   return new Promise((resolve)=>{
     if(!src){resolve(src);return;}
     try{
@@ -57,7 +63,7 @@ function makeThumbnail(src,maxDim=480){
         const canvas=document.createElement("canvas");
         canvas.width=cw;canvas.height=ch;
         canvas.getContext("2d").drawImage(image,0,0,cw,ch);
-        try{resolve(canvas.toDataURL("image/jpeg",0.72));}
+        try{resolve(canvas.toDataURL("image/jpeg",quality));}
         catch(e){resolve(src);} // canvas taint ইত্যাদি হলেও অ্যাপ যেন ক্র্যাশ না করে
       };
       image.onerror=()=>resolve(src);
@@ -65,6 +71,19 @@ function makeThumbnail(src,maxDim=480){
     }catch(e){resolve(src);}
   });
 }
+const makeThumbnail=(src)=>downscaleImageSrc(src,480,0.72);
+/* বড় base64 data: URI-কে Blob object URL-এ রূপান্তর করে — এতে বিশাল
+   base64 স্ট্রিং React state/JS heap-এ আটকে থাকে না (শুধু raw bytes হিসেবে
+   browser নিজে ম্যানেজ করে), মেমরি চাপ অনেক কমে যায় */
+async function dataUrlToObjectUrl(dataUrl){
+  try{
+    const r=await fetch(dataUrl);
+    const blob=await r.blob();
+    return URL.createObjectURL(blob);
+  }catch(e){ return dataUrl; } // fetch/blob ব্যর্থ হলেও অ্যাপ যেন ক্র্যাশ না করে, আসল data URI-ই ব্যবহার হবে
+}
+const revokeIfObjectUrl=(url)=>{ if(url&&url.startsWith("blob:")){ try{URL.revokeObjectURL(url);}catch(e){} } };
+
 
 /* ── AI prompt: header থেকে Designation/Institution + Written প্রশ্ন-উত্তর একসাথে বের করে JSON দেয় ── */
 function buildDetectPrompt(ocrText){
@@ -193,9 +212,14 @@ function MultiSubjectImportPage({push}){
       const{GalleryPicker}=window.Capacitor?.Plugins||{};
       if(GalleryPicker){
         const res=await GalleryPicker.pickImages();
-        const imgs=(res.photos||[]).map(p=>({
-          webPath:`data:image/jpeg;base64,${p.base64String}`,base64:"",status:"pending",
-          designation:"",institution:"",entryCount:0,error:"",groupBreak:false,id:Date.now()+Math.random(),thumb:null
+        // ── প্রতিটা ছবির বিশাল base64 স্ট্রিং সরাসরি state এ না রেখে Blob object URL বানিয়ে রাখি (মেমরি ক্র্যাশ ঠেকাতে) ──
+        const imgs=await Promise.all((res.photos||[]).map(async(p)=>{
+          const dataUrl=`data:image/jpeg;base64,${p.base64String}`;
+          const objUrl=await dataUrlToObjectUrl(dataUrl);
+          return{
+            webPath:objUrl||dataUrl,base64:"",status:"pending",
+            designation:"",institution:"",entryCount:0,error:"",groupBreak:false,id:Date.now()+Math.random(),thumb:null
+          };
         }));
         setImages(p=>[...p,...imgs]);
         attachThumbnails(imgs);
@@ -222,7 +246,15 @@ function MultiSubjectImportPage({push}){
       const allowed=await _ensureMediaPermission();
       if(!allowed) return;
       const res=await Camera.getPhoto({quality:90,resultType:"base64",source:"CAMERA"});
-      const newImg={webPath:"",base64:res.base64String||"",status:"pending",
+      const raw=res.base64String||"";
+      if(!raw){ push("error","Camera error","ছবি পাওয়া যায়নি"); return; }
+      // ── @capacitor/camera-এর ছবি GalleryPicker-এর মতো নেটিভভাবে ডাউনস্কেল হয় না (আসল ফোন-রেজোলিউশনে,
+      //    অনেক ফোনে ৪০০০px+ আসতে পারে) — এটাই সবচেয়ে বড় মেমরি-ক্র্যাশের ঝুঁকি ছিল, তাই এখানেই ২০০০px-এ
+      //    client-side ডাউনস্কেল করে নিচ্ছি (GalleryPickerPlugin-এর MAX_DIM-এর সমতুল্য) ──
+      const downsized=await downscaleImageSrc(`data:image/jpeg;base64,${raw}`,2000,0.9);
+      const b64only=downsized.startsWith("data:")?downsized.split(",")[1]:raw;
+      const objUrl=await dataUrlToObjectUrl(downsized.startsWith("data:")?downsized:`data:image/jpeg;base64,${b64only}`);
+      const newImg={webPath:objUrl||"",base64:b64only,status:"pending",
         designation:"",institution:"",entryCount:0,error:"",groupBreak:false,id:Date.now(),thumb:null};
       setImages(p=>[...p,newImg]);
       attachThumbnails([newImg]);
@@ -231,7 +263,7 @@ function MultiSubjectImportPage({push}){
     }
   };
   /* ছবি যোগ হওয়ার পরপরই (ব্লকিং ছাড়া) প্রতিটার জন্য ছোট থাম্বনেইল বানিয়ে state আপডেট করে —
-     একসাথে অনেক বড় ছবি সিলেক্ট করার কারণে হওয়া মেমরি ক্র্যাশ ঠেকাতে (দেখুন makeThumbnail কমেন্ট) */
+     একসাথে অনেক বড় ছবি সিলেক্ট করার কারণে হওয়া মেমরি ক্র্যাশ ঠেকাতে (দেখুন উপরের কমেন্ট) */
   const attachThumbnails=(imgs)=>{
     imgs.forEach((im)=>{
       const fullSrc=im.webPath||(im.base64?`data:image/jpeg;base64,${im.base64}`:null);
@@ -241,7 +273,11 @@ function MultiSubjectImportPage({push}){
       });
     });
   };
-  const removeImg=(id)=>setImages(p=>p.filter(x=>x.id!==id));
+  const removeImg=(id)=>setImages(p=>{
+    const rm=p.find(x=>x.id===id);
+    if(rm)revokeIfObjectUrl(rm.webPath);
+    return p.filter(x=>x.id!==id);
+  });
   const moveImg=(id,dir)=>setImages(p=>{
     const i=p.findIndex(x=>x.id===id);
     const j=i+dir;
@@ -251,7 +287,7 @@ function MultiSubjectImportPage({push}){
     return copy;
   });
   const toggleGroupBreak=(id)=>setImages(p=>p.map(x=>x.id===id?{...x,groupBreak:!x.groupBreak}:x));
-  const clearAll=()=>{ setImages([]); setResult(null); setDraftGroups([]); setPhase("idle"); };
+  const clearAll=()=>{ images.forEach(x=>revokeIfObjectUrl(x.webPath)); setImages([]); setResult(null); setDraftGroups([]); setPhase("idle"); };
 
   /* ── webPath → base64 (2-side landscape page split আগের মতোই) ── */
   const toBase64=async(img)=>{
@@ -456,7 +492,7 @@ function MultiSubjectImportPage({push}){
   };
 
   const backToEdit=()=>{ setPhase("idle"); }; // ছবি/গ্রুপ-ব্রেক ঠিক করে আবার Process করা যাবে — cache থাকায় দ্রুত হবে
-  const startOver=()=>{ setImages([]); setDraftGroups([]); setResult(null); setPhase("idle"); };
+  const startOver=()=>{ images.forEach(x=>revokeIfObjectUrl(x.webPath)); setImages([]); setDraftGroups([]); setResult(null); setPhase("idle"); };
 
   const[expandedGroupId,setExpandedGroupId]=useState(null); // Confirm স্ক্রিনে কোন group-এর পাতার ছবি দেখানো হচ্ছে
   const toggleGroupImages=(gid)=>setExpandedGroupId(p=>p===gid?null:gid);
