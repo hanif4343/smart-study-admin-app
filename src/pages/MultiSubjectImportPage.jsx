@@ -212,15 +212,18 @@ function MultiSubjectImportPage({push}){
       const{GalleryPicker}=window.Capacitor?.Plugins||{};
       if(GalleryPicker){
         const res=await GalleryPicker.pickImages();
-        // ── প্রতিটা ছবির বিশাল base64 স্ট্রিং সরাসরি state এ না রেখে Blob object URL বানিয়ে রাখি (মেমরি ক্র্যাশ ঠেকাতে) ──
-        const imgs=await Promise.all((res.photos||[]).map(async(p)=>{
-          const dataUrl=`data:image/jpeg;base64,${p.base64String}`;
-          const objUrl=await dataUrlToObjectUrl(dataUrl);
+        // ── নেটিভ প্লাগিন এখন base64 না পাঠিয়ে cache ফাইল-পাথ পাঠায় (bridge payload ছোট রাখতে,
+        //    বাল্ক সিলেক্টে বড় base64 payload-ই ক্র্যাশের মূল কারণ ছিল) — convertFileSrc দিয়ে
+        //    সেই পাথকে <img src>-এ ব্যবহারযোগ্য URL বানানো হয় ──
+        const imgs=(res.photos||[]).map(p=>{
+          const webPath=p.path
+            ?(window.Capacitor?.convertFileSrc?.(p.path)||`file://${p.path}`)
+            :(p.base64String?`data:image/jpeg;base64,${p.base64String}`:""); // পুরনো plugin build ফলব্যাক
           return{
-            webPath:objUrl||dataUrl,base64:"",status:"pending",
+            webPath,base64:"",status:"pending",
             designation:"",institution:"",entryCount:0,error:"",groupBreak:false,id:Date.now()+Math.random(),thumb:null
           };
-        }));
+        }).filter(x=>x.webPath);
         setImages(p=>[...p,...imgs]);
         attachThumbnails(imgs);
         return;
