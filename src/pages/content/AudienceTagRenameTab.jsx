@@ -7,7 +7,7 @@ import { toArr } from "../../core/utils.js";
 import { AudienceRenameModal } from "./AudienceRenameModal.jsx";
 
 function AudienceTagRenameTab({push,tick}){
-  const SHEETS=["QBank","Quiz","Study"];
+  const SHEETS=["Quiz","QBank","Study"];
 
   // Load all 3 sheets
   const{data:qbRaw,loading:qbL}=useFB("QBank",tick);
@@ -22,7 +22,7 @@ function AudienceTagRenameTab({push,tick}){
 
   // ── Bulk Add Audience Tag state ──
   const[bulkMode,setBulkMode]=useState("subject"); // "subject" | "topic"
-  const[bulkSheet,setBulkSheet]=useState("QBank");
+  const[bulkSheet,setBulkSheet]=useState("Quiz");
   const[bulkTag,setBulkTag]=useState("");
   const[bulkSelected,setBulkSelected]=useState(new Set());
   const[bulkAdding,setBulkAdding]=useState(false);
@@ -162,7 +162,7 @@ function AudienceTagRenameTab({push,tick}){
 
         {/* Sheet selector */}
         <div style={{display:"flex",gap:6,marginBottom:10}}>
-          {["QBank","Quiz","Study"].map(s=>(
+          {["Quiz","QBank","Study"].map(s=>(
             <button key={s} onClick={()=>{setBulkSheet(s);setBulkSelected(new Set());}}
               style={{flex:1,padding:"5px 0",borderRadius:8,fontSize:11,fontWeight:700,border:"none",cursor:"pointer",
                 background:bulkSheet===s?C.green:"transparent",
