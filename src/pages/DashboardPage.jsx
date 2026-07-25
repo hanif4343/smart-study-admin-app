@@ -62,7 +62,7 @@ function DashboardPage({push,tick}){
       <div className="card">
         <div className="ct">📊 Analytics</div>
         <div className="atabs">
-          {[["qbank","📚 QBank"],["quiz","❓ Quiz"],["study","📖 Study"]].map(([v,l])=>(
+          {[["quiz","❓ Quiz"],["qbank","📚 QBank"],["study","📖 Study"]].map(([v,l])=>(
             <button key={v} className={`atab${atab===v?" on":""}`} onClick={()=>setAtab(v)}>{l}</button>
           ))}
         </div>
