@@ -8,7 +8,7 @@ import { toArr, loadSharedGasSecret } from "../../core/utils.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
 
 function DeleteTab({push,tick}){
-  const[sheet,setSheet]=useState("QBank");
+  const[sheet,setSheet]=useState("Quiz");
   const[type,setType]=useState("subject");
   const{data:raw,loading}=useFB(sheet,tick);
   const[delTarget,setDelTarget]=useState(null);
@@ -88,7 +88,7 @@ function DeleteTab({push,tick}){
   return(
     <>
       <div style={{display:"flex",gap:6,marginBottom:8}}>
-        {["QBank","Quiz","Study"].map(s=>(
+        {["Quiz","QBank","Study"].map(s=>(
           <button key={s} className={`ftab${sheet===s?" on":""}`} onClick={()=>setSheet(s)}>{s}</button>
         ))}
       </div>
