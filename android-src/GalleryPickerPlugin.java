@@ -106,8 +106,6 @@ public class GalleryPickerPlugin extends Plugin {
         try {
             pickImagesResultInner(call, result);
         } catch (Throwable t) {
-            // ── এখানে কোনো ব্যতিক্রম (OutOfMemoryError সহ) ধরা না পড়লে পুরো অ্যাপ ক্র্যাশ করে যেত —
-            //    এটাই আসল ক্র্যাশের কারণ ছিল বলে সন্দেহ করা হচ্ছে (নিচের readAndCacheFile-এর কমেন্ট দেখুন) ──
             call.reject("gallery processing failed: " + t.getMessage());
         }
     }
@@ -138,30 +136,45 @@ public class GalleryPickerPlugin extends Plugin {
             return;
         }
 
-        ContentResolver cr = getContext().getContentResolver();
-        JSArray photos = new JSArray();
-
-        for (Uri uri : uris) {
-            String path;
+        /* ── আসল ক্র্যাশের কারণ এটাই ছিল (ANR, OOM না) ──────────────────────
+           onActivityResult (তাই এই @ActivityCallback মেথডও) সবসময় Android-এর
+           মেইন/UI থ্রেডে চলে। আগে নিচের ডিকোড+ডাউনস্কেল+ফাইল-লেখার লুপটা এখানেই
+           (মেইন থ্রেডে) সরাসরি চলতো — কয়েকটা ছবি হলে দ্রুত শেষ হতো, কিন্তু ৫০+
+           ছবি সিলেক্ট করলে এই কাজ Android-এর ANR টাইমআউট (~৫ সেকেন্ড) পার করে
+           ফেলতো, ফলে সিস্টেম "is not responding" ডায়ালগ দেখাতো (এটা আসলে OOM
+           ক্র্যাশ ছিল না, ANR ছিল)। এখন পুরো লুপটা একটা আলাদা ব্যাকগ্রাউন্ড
+           থ্রেডে চালানো হয় — ঠিক @capacitor/camera প্লাগিনও এভাবেই ভারী কাজ
+           ব্যাকগ্রাউন্ড থ্রেডে করে call.resolve() কল করে। ── */
+        new Thread(() -> {
             try {
-                path = readAndCacheFile(cr, uri);
+                ContentResolver cr = getContext().getContentResolver();
+                JSArray photos = new JSArray();
+
+                for (Uri uri : uris) {
+                    String path;
+                    try {
+                        path = readAndCacheFile(cr, uri);
+                    } catch (Throwable t) {
+                        path = null; // একটা ছবি প্রসেস করতে ব্যর্থ (OOM সহ) হলেও বাকিগুলো চালিয়ে যাই
+                    }
+                    if (path == null) continue;
+                    JSObject photo = new JSObject();
+                    photo.put("path", path);
+                    photos.put(photo);
+                }
+
+                if (photos.length() == 0) {
+                    call.reject("could not read any selected image");
+                    return;
+                }
+
+                JSObject ret = new JSObject();
+                ret.put("photos", photos);
+                call.resolve(ret);
             } catch (Throwable t) {
-                path = null; // একটা ছবি প্রসেস করতে ব্যর্থ (OOM সহ) হলেও বাকিগুলো চালিয়ে যাই, পুরো অ্যাপ ক্র্যাশ না করে
+                call.reject("gallery processing failed: " + t.getMessage());
             }
-            if (path == null) continue; // একটা ছবি corrupt হলেও বাকিগুলো চালিয়ে যাই
-            JSObject photo = new JSObject();
-            photo.put("path", path);
-            photos.put(photo);
-        }
-
-        if (photos.length() == 0) {
-            call.reject("could not read any selected image");
-            return;
-        }
-
-        JSObject ret = new JSObject();
-        ret.put("photos", photos);
-        call.resolve(ret);
+        }, "gallery-picker-worker").start();
     }
 
     /** ছবি ডিকোড+ডাউনস্কেল করে অ্যাপের cache ফোল্ডারে JPEG ফাইল হিসেবে লিখে ফেলে, ফাইলের
