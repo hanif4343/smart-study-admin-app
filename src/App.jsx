@@ -185,6 +185,10 @@ export default function App(){
         return;
       }
 
+      // 3.5 Uploader hub-এ কোনো ক্যাটাগরি (Text Upload/AI Job/OCR Upload) খোলা থাকলে →
+      //     আগে সেটা বন্ধ করো (শুধু ক্যাটাগরি লাইনে ফিরে আসো), সরাসরি পেজ থেকে বের হয়ে যেও না
+      if(uploaderOpenCat){ setUploaderOpenCat(null); return; }
+
       // 4. Page back
       if(page!=="dashboard"){
         const stack=backStack.current;
@@ -219,7 +223,7 @@ export default function App(){
       window.removeEventListener("androidBackButton",handleBack);
       clearTimeout(exitTimer.current);
     };
-  },[loggedIn,page,searchDetail,exitConfirm]);
+  },[loggedIn,page,searchDetail,exitConfirm,uploaderOpenCat]);
 
   const refresh=useCallback(()=>{
     setSpin(true);invalidateAll();setTick(t=>t+1);
@@ -232,9 +236,10 @@ export default function App(){
     return()=>clearInterval(id);
   },[loggedIn]);
 
-  /* ── নতুন Report detect করে clickable notification দেখাও ── */
+  /* ── নতুন Report detect করে নাম-সহ clickable notification দেখাও ── */
   const seenReportKeys=useRef(new Set());
-  const[reportAlert,setReportAlert]=useState(null); // {count, keys[]}
+  const[reportAlert,setReportAlert]=useState(null); // {items:[{key,name,subject}]}
+  const[reportDeepLinkKey,setReportDeepLinkKey]=useState(null); // notification/banner ট্যাপ করলে ঠিক এই রিপোর্টটাই খুলে যাবে
   useEffect(()=>{
     if(!loggedIn)return;
     // প্রতি ৩০ সেকেন্ডে Reports চেক করো
@@ -243,12 +248,19 @@ export default function App(){
         const raw=await fbGet("Reports");
         if(!raw||typeof raw!=="object")return;
         const entries=Object.entries(raw);
-        const newKeys=entries
-          .map(([k])=>k)
-          .filter(k=>!seenReportKeys.current.has(k));
-        if(newKeys.length>0&&seenReportKeys.current.size>0){
+        const newEntries=entries.filter(([k])=>!seenReportKeys.current.has(k));
+        if(newEntries.length>0&&seenReportKeys.current.size>0){
           // প্রথমবার load হলে শুধু mark করো, notification দেখাবো না
-          setReportAlert({count:newKeys.length,keys:newKeys});
+          // ── প্রতিটা নতুন রিপোর্টের reporter-এর নাম Users থেকে (Phone মিলিয়ে) বের করি ──
+          let usersArr=[];
+          try{ usersArr=toArr(await fbGet("Users")); }catch(_){}
+          const items=newEntries.map(([k,r])=>{
+            const phone=(r.Phone||r.phone||"").toString().replace(/^'+/,"").trim();
+            const u=usersArr.find(x=>(x.Phone||x.phone||"").toString().replace(/^'+/,"").trim()===phone);
+            const name=(u?.Name||u?.name||"").toString()||"অজানা ইউজার";
+            return{key:k,name,subject:(r.Subject||r.subject||"").toString()};
+          });
+          setReportAlert({items});
         }
         entries.forEach(([k])=>seenReportKeys.current.add(k));
       }catch(_){}
@@ -285,7 +297,7 @@ export default function App(){
       }catch(e){ console.warn("FCM token save error",e); _LC.error("FCM",`FCM token save error: ${e?.message}`,{key}); }
     });
 
-    // ── Notification tap হলে সঠিক page-এ যাও ──
+    // ── Notification tap হলে সঠিক page-এ যাও (নির্দিষ্ট report হলে সেটাও deep-link করে খুলে যাবে) ──
     const handler=(event)=>{
       try{
         const data=event?.notification?.data||event?.data||{};
@@ -297,6 +309,7 @@ export default function App(){
           new_report:"reports", // type দিয়েও navigate
         };
         const target=pageMap[url]||pageMap[data.type]||null;
+        if(data.reportKey){ setReportDeepLinkKey(data.reportKey); }
         if(target) goPage(target);
       } catch(e){ console.warn("Push nav error",e); _LC.error("pushNav",`Push notification nav error: ${e?.message}`); }
     };
@@ -375,7 +388,7 @@ export default function App(){
               <button className={`atab${page==="techniques"?" on":""}`} onClick={()=>goPage("techniques")}>🧠 Techniques{techBadge>0?` (${techBadge})`:""}</button>
             </div>
           </div>
-          <div style={{display:page==="reports"   ?"block":"none"}}><ReportsPage   push={push} tick={tick}/></div>
+          <div style={{display:page==="reports"   ?"block":"none"}}><ReportsPage   push={push} tick={tick} deepLinkKey={reportDeepLinkKey} onDeepLinkHandled={()=>setReportDeepLinkKey(null)}/></div>
           <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
         </div>
       </div>
@@ -484,6 +497,32 @@ export default function App(){
           animation:"ti .2s ease",
         }}>
           আবার Back চাপুন বন্ধ করতে
+        </div>
+      )}
+      {/* ── নতুন Report এলে ভাসমান নোটিফিকেশন — reporter-এর নাম সহ, ট্যাপ করলে সরাসরি সেই রিপোর্টে deep-link ── */}
+      {reportAlert&&reportAlert.items&&reportAlert.items.length>0&&(
+        <div style={{position:"fixed",top:13,left:"50%",transform:"translateX(-50%)",
+          width:"calc(100% - 26px)",maxWidth:440,zIndex:1000,display:"flex",flexDirection:"column",gap:6}}>
+          {reportAlert.items.slice(0,3).map((it,i)=>(
+            <div key={it.key||i}
+              onClick={()=>{
+                setReportDeepLinkKey(it.key);
+                goPage("reports");
+                setReportAlert(p=>p?{items:p.items.filter(x=>x.key!==it.key)}:null);
+              }}
+              style={{background:C.card,border:`1px solid ${C.red}66`,borderRadius:11,padding:"10px 12px",
+                display:"flex",gap:8,alignItems:"flex-start",cursor:"pointer",
+                boxShadow:"0 8px 28px #00000080",animation:"ti .25s ease"}}>
+              <div style={{fontSize:18,lineHeight:1}}>🚨</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontWeight:800,fontSize:12,color:C.text}}>{it.name} রিপোর্ট করেছে</div>
+                {it.subject&&<div style={{fontSize:11,color:C.muted,marginTop:2}}>📚 {it.subject}</div>}
+                <div style={{fontSize:10,color:C.accent,marginTop:3,fontWeight:700}}>দেখতে ট্যাপ করুন →</div>
+              </div>
+              <button onClick={(e)=>{e.stopPropagation();setReportAlert(p=>p?{items:p.items.filter(x=>x.key!==it.key)}:null);}}
+                style={{background:"transparent",border:"none",color:C.muted,fontSize:15,cursor:"pointer",padding:"0 2px",lineHeight:1}}>✕</button>
+            </div>
+          ))}
         </div>
       )}
     </>
