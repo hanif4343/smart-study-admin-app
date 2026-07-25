@@ -1,15 +1,23 @@
 /* ══════════ REPORTS — hard delete ══════════ */
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { C } from "../core/config.js";
 import { useFB, invalidate } from "../core/dataCache.js";
 import { toArr } from "../core/utils.js";
 import { ReportEditModal } from "./ReportEditModal.jsx";
 
-function ReportsPage({push,tick}){
+function ReportsPage({push,tick,deepLinkKey,onDeepLinkHandled}){
   const{data:rRaw,loading}=useFB("Reports",tick);
   const[done,setDone]=useState(new Set());
   const[editing,setEditing]=useState(null);
   const reports=useMemo(()=>toArr(rRaw).filter(r=>!done.has(r._fbKey||r.row)).slice(-30).reverse(),[rRaw,done]);
+
+  /* ── নোটিফিকেশন/push থেকে deep-link এলে ঠিক সেই রিপোর্টটাই এডিট মোডালে খুলে দাও ── */
+  useEffect(()=>{
+    if(!deepLinkKey||!rRaw)return;
+    const match=reports.find(r=>(r._fbKey||r.row)===deepLinkKey);
+    if(match){ setEditing(match); onDeepLinkHandled&&onDeepLinkHandled(); }
+  },[deepLinkKey,rRaw,reports,onDeepLinkHandled]);
+
   return(
     <div className="page">
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:11}}>
