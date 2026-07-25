@@ -153,7 +153,7 @@ function MultiSubjectImportPage({push}){
   const stopRef=useRef(false);
 
   /* ── Long-press → বড় প্রিভিউ (হেডিং পড়ে বুঝে grouping সহজ করার জন্য) ── */
-  const LONG_PRESS_MS=3000;
+  const LONG_PRESS_MS=1500;
   const[previewId,setPreviewId]=useState(null);
   const[previewVisible,setPreviewVisible]=useState(false);
   const longPressTimerRef=useRef(null);
@@ -630,6 +630,7 @@ function MultiSubjectImportPage({push}){
                         <div key={pn} style={{position:"relative"}}>
                           <img src={src} draggable={false} loading="lazy" decoding="async"
                             onTouchStart={()=>startLongPress(im.id)}
+                            onTouchMove={cancelLongPress}
                             onTouchEnd={cancelLongPress}
                             onTouchCancel={cancelLongPress}
                             onMouseDown={()=>startLongPress(im.id)}
@@ -725,6 +726,9 @@ function MultiSubjectImportPage({push}){
                     <div style={{position:"relative"}}>
                       {src?(
                         <img src={src} draggable={false} loading="lazy" decoding="async"
+                          onContextMenu={e=>e.preventDefault()}
+                          onTouchStart={()=>startLongPress(img.id)}
+                          onTouchMove={cancelLongPress}
                           onTouchEnd={cancelLongPress}
                           onTouchCancel={cancelLongPress}
                           onMouseDown={()=>startLongPress(img.id)}
@@ -732,7 +736,7 @@ function MultiSubjectImportPage({push}){
                           onMouseLeave={cancelLongPress}
                           style={{width:"100%",maxHeight:260,minHeight:140,objectFit:"contain",background:"#000",
                           borderRadius:8,display:"block",
-                          WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none",touchAction:"none"}}/>
+                          WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none",touchAction:"pan-y"}}/>
                       ):(
                         <div style={{width:"100%",height:120,borderRadius:8,background:"#0a1628",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24}}>📷</div>
                       )}
