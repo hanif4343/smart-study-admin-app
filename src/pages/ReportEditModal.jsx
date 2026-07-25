@@ -41,7 +41,7 @@ function ReportEditModal({report,onClose,onDone,push}){
 
       // ── Firebase থেকে match করার চেষ্টা ──
       if(qid || qfbKey){
-        const sheetsToTry=qsheet?[qsheet]:["QBank","Quiz","Study"];
+        const sheetsToTry=qsheet?[qsheet]:["Quiz","QBank","Study"];
         for(const t of sheetsToTry){
           if(found) break;
           try{
@@ -83,7 +83,7 @@ function ReportEditModal({report,onClose,onDone,push}){
 
       // ── Firebase match না পেলে — Question text দিয়ে সব sheet search ──
       if(!found && reportQText && !cancelled){
-        const sheetsAll=["QBank","Quiz","Study"];
+        const sheetsAll=["Quiz","QBank","Study"];
         for(const t of sheetsAll){
           if(found) break;
           try{
