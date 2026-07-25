@@ -7,7 +7,7 @@ import { toArr, uploadImg, nowTs } from "../core/utils.js";
 import { ImageCropPicker } from "../components/shared/ImageCropPicker.jsx";
 
 function EntryPage({push}){
-  const[mode,setMode]=useState("QBank");
+  const[mode,setMode]=useState("Quiz");
   const[qtype,setQtype]=useState("MCQ");
   const[saving,setSaving]=useState(false);
   const[uploading,setUp]=useState(false);
@@ -64,7 +64,7 @@ function EntryPage({push}){
   };
   return(
     <div className="page">
-      <div className="ftabs">{["QBank","Quiz","Study"].map(m=><button key={m} className={`ftab${mode===m?" on":""}`} onClick={()=>setMode(m)}>{m}</button>)}</div>
+      <div className="ftabs">{["Quiz","QBank","Study"].map(m=><button key={m} className={`ftab${mode===m?" on":""}`} onClick={()=>setMode(m)}>{m}</button>)}</div>
       {mode!=="Study"&&<div style={{display:"flex",gap:7,marginBottom:11}}>{["MCQ","Written"].map(t=><button key={t} className={`tp2${qtype===t?" on":""}`} onClick={()=>setQtype(t)}>{t}</button>)}</div>}
       <div className="fld"><label>{mode==="Study"?"📝 প্রশ্ন":"❓ প্রশ্ন"}</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:80}}/></div>
       {mode==="Study"&&<div className="fld"><label>✅ উত্তর</label><textarea className="ta" value={correct} onChange={e=>setCorrect(e.target.value)} style={{minHeight:80}}/></div>}
