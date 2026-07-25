@@ -93,6 +93,7 @@ export default function App(){
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
   const[bulkPrefill,setBulkPrefill]=useState(null);
+  const[uploaderOpenCat,setUploaderOpenCat]=useState(null); // Uploader hub-এ কোন ক্যাটাগরি (Text Upload/AI Job/OCR Upload/Archive) খোলা আছে — accordion, একসাথে একটাই খোলা থাকে
   const[searchDetail,setSearchDetail]=useState(null);
   const backStack=useRef(["dashboard"]);
   const modalOpen=useRef(false);
@@ -379,32 +380,62 @@ export default function App(){
         </div>
       </div>
 
-      {/* Uploader hub — Text Upload / AI Job / OCR Upload / Archive গ্রুপে গোছানো, ট্যাব দিয়ে সুইচ */}
+      {/* Uploader hub — Text Upload / AI Job / OCR Upload / Archive: প্রথমে শুধু এই ৪টা ক্যাটাগরির
+          একটাই লাইন দেখা যায় (accordion), কোনোটায় ট্যাপ করলে শুধু সেটার ভিতরের অপশনগুলো খোলে —
+          বাকিগুলো হাইড থাকে। একসাথে সর্বোচ্চ একটাই ক্যাটাগরি খোলা থাকে। */}
       <div style={{display:(page==="bulkupload"||page==="joblauncher"||page==="qbankconv"||page==="questiongen"||page==="aiimport"||page==="multiimport"||page==="archive"||page==="typing")?"block":"none"}}>
         <div className="page" style={{paddingTop:0}}>
           <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
-            <div className="slb" style={{margin:"0 0 6px"}}>📝 Text Upload</div>
-            <div className="atabs" style={{marginBottom:10}}>
-              <button className={`atab${page==="bulkupload"?" on":""}`} onClick={()=>goPage("bulkupload")}>📝 Bulk Upload</button>
-              <button className={`atab${page==="typing"?" on":""}`} onClick={()=>goPage("typing")}>⌨️ Typing</button>
-            </div>
-
-            <div className="slb" style={{margin:"0 0 6px"}}>🚀 AI Job</div>
-            <div className="atabs" style={{marginBottom:10}}>
-              <button className={`atab${page==="joblauncher"?" on":""}`} onClick={()=>goPage("joblauncher")} style={{color:page==="joblauncher"?C.green:undefined}}>🚀 Exp Gen</button>
-              <button className={`atab${page==="qbankconv"?" on":""}`} onClick={()=>goPage("qbankconv")} style={{color:page==="qbankconv"?C.green:undefined}}>🔁 QBank→Quiz</button>
-              <button className={`atab${page==="questiongen"?" on":""}`} onClick={()=>goPage("questiongen")} style={{color:page==="questiongen"?C.purple:undefined}}>🧬 AI প্রশ্ন</button>
-            </div>
-
-            <div className="slb" style={{margin:"0 0 6px"}}>📸 OCR Upload</div>
-            <div className="atabs" style={{marginBottom:10}}>
-              <button className={`atab${page==="aiimport"?" on":""}`} onClick={()=>goPage("aiimport")}>📸 Single Subject</button>
-              <button className={`atab${page==="multiimport"?" on":""}`} onClick={()=>goPage("multiimport")} style={{color:page==="multiimport"?"#22d3ee":undefined}}>🗂️ Multi-Subject</button>
-            </div>
-
-            <div className="atabs">
-              <button className={`atab${page==="archive"?" on":""}`} onClick={()=>goPage("archive")} style={{color:page==="archive"?"#a78bfa":undefined}}>🗄️ Archive</button>
-            </div>
+            {(()=>{
+              const CATS=[
+                {key:"text",label:"📝 Text Upload",items:[
+                  {page:"bulkupload",label:"📝 Bulk Upload"},
+                  {page:"typing",label:"⌨️ Typing"},
+                ]},
+                {key:"aijob",label:"🚀 AI Job",items:[
+                  {page:"joblauncher",label:"🚀 Exp Gen",color:C.green},
+                  {page:"qbankconv",label:"🔁 QBank→Quiz",color:C.green},
+                  {page:"questiongen",label:"🧬 AI প্রশ্ন",color:C.purple},
+                ]},
+                {key:"ocr",label:"📸 OCR Upload",items:[
+                  {page:"aiimport",label:"📸 Single Subject"},
+                  {page:"multiimport",label:"🗂️ Multi-Subject",color:"#22d3ee"},
+                ]},
+                {key:"archive",label:"🗄️ Archive",items:[
+                  {page:"archive",label:"🗄️ Archive",color:"#a78bfa"},
+                ]},
+              ];
+              const openCat=CATS.find(c=>c.key===uploaderOpenCat);
+              return(
+                <>
+                  {/* ── ক্যাটাগরি লাইন — শুরুতে শুধু এইটাই দেখা যায় ── */}
+                  <div className="atabs" style={{marginBottom:openCat?10:0}}>
+                    {CATS.map(cat=>(
+                      <button key={cat.key}
+                        className={`atab${uploaderOpenCat===cat.key?" on":""}`}
+                        onClick={()=>{
+                          if(cat.items.length===1){ goPage(cat.items[0].page); setUploaderOpenCat(cat.key); }
+                          else{ setUploaderOpenCat(p=>p===cat.key?null:cat.key); }
+                        }}>
+                        {cat.label}
+                      </button>
+                    ))}
+                  </div>
+                  {/* ── খোলা ক্যাটাগরির ভিতরের অপশন — একটাই দেখা যায় বাকিগুলো হাইড ── */}
+                  {openCat&&openCat.items.length>1&&(
+                    <div className="atabs">
+                      {openCat.items.map(it=>(
+                        <button key={it.page} className={`atab${page===it.page?" on":""}`}
+                          onClick={()=>goPage(it.page)}
+                          style={{color:page===it.page?(it.color||undefined):undefined}}>
+                          {it.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
           <div style={{display:page==="bulkupload" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill(null)}/></div>
           <div style={{display:page==="joblauncher"?"block":"none"}}><JobLauncherTab push={push} tick={tick}/></div>
