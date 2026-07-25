@@ -162,9 +162,14 @@ function AIImportPage({push,onSendToBulk}){
       if(GalleryPicker){
         _LC.log("gallery","GalleryPicker.pickImages called");
         const res=await GalleryPicker.pickImages();
-        const imgs=(res.photos||[]).map(p=>({
-          webPath:`data:image/jpeg;base64,${p.base64String}`,base64:"",status:"pending",ocrText:"",id:Date.now()+Math.random()
-        }));
+        // ── নেটিভ প্লাগিন এখন base64 না পাঠিয়ে cache ফাইল-পাথ পাঠায় (bridge payload ছোট রাখতে,
+        //    বাল্ক সিলেক্টে বড় base64 payload ক্র্যাশ করাচ্ছিল) ──
+        const imgs=(res.photos||[]).map(p=>{
+          const webPath=p.path
+            ?(window.Capacitor?.convertFileSrc?.(p.path)||`file://${p.path}`)
+            :(p.base64String?`data:image/jpeg;base64,${p.base64String}`:""); // পুরনো plugin build ফলব্যাক
+          return{webPath,base64:"",status:"pending",ocrText:"",id:Date.now()+Math.random()};
+        }).filter(x=>x.webPath);
         _LC.log("gallery",`${imgs.length} image(s) selected (GalleryPicker)`);
         setImages(p=>[...p,...imgs]);
         return;
