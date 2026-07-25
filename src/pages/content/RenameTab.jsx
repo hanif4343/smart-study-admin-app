@@ -12,7 +12,7 @@ import { RenameModal } from "./RenameModal.jsx";
 const FIELD_MAP = { subject: "subject", topic: "topic", subtopic: "sub_topic" };
 
 function RenameTab({push,tick}){
-  const[sheet,setSheet]=useState("QBank");
+  const[sheet,setSheet]=useState("Quiz");
   const[type,setType]=useState("subject");
   // ⚡ সোর্স — 🔥 Firebase (আগের behavior) বা 📄 Google Sheet (নতুন — সরাসরি Sheet-এ রিনেম করে,
   // সাথে Firebase mirror-ও নিজে থেকে sync হয়ে যায়, GAS-এর renameField অ্যাকশন দিয়ে)।
@@ -132,7 +132,7 @@ function RenameTab({push,tick}){
         </div>
       )}
       <div style={{display:"flex",gap:6,marginBottom:8}}>
-        {["QBank","Quiz","Study"].map(s=>(
+        {["Quiz","QBank","Study"].map(s=>(
           <button key={s} className={`ftab${sheet===s?" on":""}`} onClick={()=>setSheet(s)}>{s}</button>
         ))}
       </div>
