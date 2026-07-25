@@ -32,6 +32,40 @@ import { ApiSettingsPage } from "./ApiSettingsPage.jsx";
 const SRC_NAME="Multi-Subject Bulk Import";
 const CACHE_QTYPE="MultiSubjectWritten"; // AIImportPage-এর ক্যাশ থেকে আলাদা রাখতে নিজস্ব qtype key
 
+/* ── ছবি সিলেক্ট করার পর ক্র্যাশ ফিক্স ──────────────────────────────────
+   এই পেজে একসাথে অনেকগুলো (বাল্ক) ছবি যোগ করা হয়, আর প্রতিটা ছবি নেটিভ
+   সাইডে আগে থেকেই ২০০০px পর্যন্ত বড় হতে পারে (GalleryPickerPlugin এর
+   MAX_DIM)। আগে লিস্টে প্রতিটা আইটেম সরাসরি সেই full-resolution base64
+   দিয়েই (object-fit:contain, full-width, ২৬০px পর্যন্ত উঁচু) রেন্ডার করা
+   হতো — অনেকগুলো ছবি একসাথে সিলেক্ট করলে WebView-কে একসাথে অনেকগুলো বড়
+   বিটম্যাপ ডিকোড করতে হতো, যা লো/মিড-এন্ড ফোনে মেমরি ফুরিয়ে (OOM) অ্যাপ
+   ক্র্যাশ করিয়ে দিত — বিশেষ করে ছবি সিলেক্ট করার সাথে সাথেই (list রেন্ডার
+   হওয়ার মুহূর্তে)।
+   সমাধান: প্রতিটা ছবি যোগ হওয়ার সাথে সাথে ছোট (max ৪৮০px) থাম্বনেইল আলাদা
+   করে বানিয়ে রাখি এবং লিস্টে সেটাই দেখাই — আসল/full base64 শুধু OCR/zoom
+   প্রিভিউ-এর জন্য অক্ষত থাকে (toBase64 এখনো img.webPath ব্যবহার করে)। ── */
+function makeThumbnail(src,maxDim=480){
+  return new Promise((resolve)=>{
+    if(!src){resolve(src);return;}
+    try{
+      const image=new Image();
+      image.onload=()=>{
+        const w=image.naturalWidth,h=image.naturalHeight;
+        if(!w||!h||(w<=maxDim&&h<=maxDim)){resolve(src);return;}
+        const scale=maxDim/Math.max(w,h);
+        const cw=Math.max(1,Math.round(w*scale)),ch=Math.max(1,Math.round(h*scale));
+        const canvas=document.createElement("canvas");
+        canvas.width=cw;canvas.height=ch;
+        canvas.getContext("2d").drawImage(image,0,0,cw,ch);
+        try{resolve(canvas.toDataURL("image/jpeg",0.72));}
+        catch(e){resolve(src);} // canvas taint ইত্যাদি হলেও অ্যাপ যেন ক্র্যাশ না করে
+      };
+      image.onerror=()=>resolve(src);
+      image.src=src;
+    }catch(e){resolve(src);}
+  });
+}
+
 /* ── AI prompt: header থেকে Designation/Institution + Written প্রশ্ন-উত্তর একসাথে বের করে JSON দেয় ── */
 function buildDetectPrompt(ocrText){
   return `তুমি একজন বাংলা সরকারি নিয়োগ পরীক্ষার প্রশ্নব্যাংক বিশ্লেষক (শুধু Written টাইপ)।
@@ -161,9 +195,10 @@ function MultiSubjectImportPage({push}){
         const res=await GalleryPicker.pickImages();
         const imgs=(res.photos||[]).map(p=>({
           webPath:`data:image/jpeg;base64,${p.base64String}`,base64:"",status:"pending",
-          designation:"",institution:"",entryCount:0,error:"",groupBreak:false,id:Date.now()+Math.random()
+          designation:"",institution:"",entryCount:0,error:"",groupBreak:false,id:Date.now()+Math.random(),thumb:null
         }));
         setImages(p=>[...p,...imgs]);
+        attachThumbnails(imgs);
         return;
       }
       const Camera=_getCamera();
@@ -171,9 +206,10 @@ function MultiSubjectImportPage({push}){
       const res=await Camera.pickImages({quality:90,limit:0});
       const imgs=(res.photos||[]).map(p=>({
         webPath:p.webPath,base64:"",status:"pending",
-        designation:"",institution:"",entryCount:0,error:"",groupBreak:false,id:Date.now()+Math.random()
+        designation:"",institution:"",entryCount:0,error:"",groupBreak:false,id:Date.now()+Math.random(),thumb:null
       }));
       setImages(p=>[...p,...imgs]);
+      attachThumbnails(imgs);
     }catch(e){
       if(e.message==="cancelled")return;
       push("error","Gallery error",e.message);
@@ -186,11 +222,24 @@ function MultiSubjectImportPage({push}){
       const allowed=await _ensureMediaPermission();
       if(!allowed) return;
       const res=await Camera.getPhoto({quality:90,resultType:"base64",source:"CAMERA"});
-      setImages(p=>[...p,{webPath:"",base64:res.base64String||"",status:"pending",
-        designation:"",institution:"",entryCount:0,error:"",groupBreak:false,id:Date.now()}]);
+      const newImg={webPath:"",base64:res.base64String||"",status:"pending",
+        designation:"",institution:"",entryCount:0,error:"",groupBreak:false,id:Date.now(),thumb:null};
+      setImages(p=>[...p,newImg]);
+      attachThumbnails([newImg]);
     }catch(e){
       if(!e.message?.includes("cancelled")) push("error","Camera error",e.message);
     }
+  };
+  /* ছবি যোগ হওয়ার পরপরই (ব্লকিং ছাড়া) প্রতিটার জন্য ছোট থাম্বনেইল বানিয়ে state আপডেট করে —
+     একসাথে অনেক বড় ছবি সিলেক্ট করার কারণে হওয়া মেমরি ক্র্যাশ ঠেকাতে (দেখুন makeThumbnail কমেন্ট) */
+  const attachThumbnails=(imgs)=>{
+    imgs.forEach((im)=>{
+      const fullSrc=im.webPath||(im.base64?`data:image/jpeg;base64,${im.base64}`:null);
+      if(!fullSrc)return;
+      makeThumbnail(fullSrc).then((t)=>{
+        setImages(p=>p.map(x=>x.id===im.id?{...x,thumb:t}:x));
+      });
+    });
   };
   const removeImg=(id)=>setImages(p=>p.filter(x=>x.id!==id));
   const moveImg=(id,dir)=>setImages(p=>{
@@ -529,7 +578,7 @@ function MultiSubjectImportPage({push}){
                     {g.pages.map(pn=>{
                       const im=imgByPageNo(pn);
                       if(!im)return null;
-                      const src=im.webPath||(im.base64?`data:image/jpeg;base64,${im.base64}`:null);
+                      const src=im.thumb||im.webPath||(im.base64?`data:image/jpeg;base64,${im.base64}`:null);
                       if(!src)return null;
                       return(
                         <div key={pn} style={{position:"relative"}}>
@@ -624,7 +673,8 @@ function MultiSubjectImportPage({push}){
             <div className="ss-scroll" style={{display:"flex",flexDirection:"column",gap:10,marginBottom:12,
               maxHeight:"62vh",overflowY:"auto",paddingRight:6}}>
               {images.map((img,i)=>{
-                const src=img.webPath||(img.base64?`data:image/jpeg;base64,${img.base64}`:null);
+                const fullSrc=img.webPath||(img.base64?`data:image/jpeg;base64,${img.base64}`:null);
+                const src=img.thumb||fullSrc; // লিস্টে ছোট থাম্বনেইল দেখানো হয় (মেমরি বাঁচাতে) — zoom preview-এ ফুল রেজ ব্যবহার হয়
                 const borderCol=img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#6366f1":img.groupBreak?"#f59e0b":C.border;
                 return(
                   <div key={img.id} style={{background:img.groupBreak?"#f59e0b14":C.panel,border:`1px solid ${borderCol}`,borderRadius:12,padding:8}}>
