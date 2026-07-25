@@ -84,7 +84,7 @@ function BulkQTypeTab({push,tick}){
     <div style={{padding:"0 4px"}}>
       {/* Sheet selector */}
       <div style={{display:"flex",gap:6,marginBottom:12}}>
-        {["QBank","Quiz","Study"].map(s=>(
+        {["Quiz","QBank","Study"].map(s=>(
           <button key={s} className={`ftab${sheet===s?" on":""}`} onClick={()=>setSheet(s)}>{s}</button>
         ))}
       </div>
