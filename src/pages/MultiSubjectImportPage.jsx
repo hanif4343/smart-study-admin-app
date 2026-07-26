@@ -16,7 +16,8 @@ import React, { useState, useRef } from "react";
 import { C } from "../core/config.js";
 import { _LC } from "../core/logger.js";
 import { fbPush, fbSet } from "../core/firebase.js";
-import { nowTs } from "../core/utils.js";
+import { nowTs, uploadImageSrcToImgbb } from "../core/utils.js";
+import { _BGM } from "../core/bgTasks.js";
 import { callAiProviderRotatingRaw, buildKeyPool, OCR_CORRECTION_RULES } from "../core/ocrProviders.js";
 import {
   buildBulkRecord, buildSheetRow,
@@ -375,6 +376,9 @@ function MultiSubjectImportPage({push}){
     if(!buildKeyPool().length){push("warn","⚠️ কোনো AI provider active নেই","⚙️ থেকে অন্তত একটা key active করো");return;}
     setPhase("processing"); stopRef.current=false; setResult(null); setDraftGroups([]);
     setImages(p=>p.map(x=>({...x,status:"pending",designation:"",institution:"",entryCount:0,error:"",rawOcr:""})));
+    // পুরো OCR+AI detection লুপটাও _BGM.guard দিয়ে মোড়ানো — অনেকগুলো ছবি হলে সময় লাগে,
+    // স্ক্রিন লক/মিনিমাইজ করলেও যেন কাজ থেমে না যায়
+    await _BGM.guard(async()=>{
 
     // ── প্রতিটা ছবিকে base64 unit-এ ভাঙা হয় (landscape হলে ২টা পাতা); manual group-break শুধু ছবির প্রথম unit-এ প্রযোজ্য ──
     const units=[]; // {imgId, base64, isImgFirstPart, manualBreak}
@@ -437,28 +441,58 @@ function MultiSubjectImportPage({push}){
     }
     setDraftGroups(nonEmpty);
     setPhase("confirm");
+
+    },"OCR প্রসেস হচ্ছে…").catch(e=>{
+      setPhase("idle");
+      push("error","প্রসেসিং ব্যর্থ",String(e?.message||e||"unknown"));
+    });
   };
 
   /* ── Confirm স্ক্রিনে group edit/exclude ── */
   const updateGroupField=(id,field,val)=>setDraftGroups(p=>p.map(g=>g.id===id?{...g,[field]:val}:g));
   const toggleGroupIncluded=(id)=>setDraftGroups(p=>p.map(g=>g.id===id?{...g,included:!g.included}:g));
 
-  /* ── ধাপ ২: Confirm করার পর — সব included group একসাথে Sheet/Firebase-এ Submit ── */
+  /* ── ধাপ ২: Confirm করার পর — সব included group একসাথে Sheet/Firebase-এ Submit ──
+     পুরো কাজটা (ছবি আপলোড + সেভ) _BGM.guard দিয়ে মোড়ানো — এতে WakeLock + Android
+     foreground service চালু হয়ে যায়, তাই স্ক্রিন লক করলে বা অ্যাপ মিনিমাইজ করলেও
+     Submit থেমে যায় না বা Android কর্তৃক kill হয় না। ধরে বসে থাকার দরকার নেই —
+     status bar-এ notification দেখাবে, শেষ হলে নিজে থেকেই সরে যাবে। ── */
   const confirmAndSubmit=async()=>{
     const included=draftGroups.filter(g=>g.included&&g.rows.length>0);
     if(!included.length){push("warn","⚠️ অন্তত একটা group রাখো","সব group বাদ দিলে সাবমিট করার কিছু নেই");return;}
     setSubmitting(true);
+    await _BGM.guard(async()=>{
+
+    // ── Question Paper: প্রতিটা group-এর পাতার আসল ছবি(গুলো) imgbb-তে আপলোড করে লিংক জোগাড় করি —
+    //    একই group-এর সব row-এ এই একই (কমা দিয়ে জোড়া) লিংক-স্ট্রিং বসবে, যাতে টেক্সটের পাশাপাশি
+    //    আসল প্রশ্নপত্রের পাতাও (একাধিক পাতা হলে সবগুলোই) সবসময় থাকে। একটা পাতা আপলোড ব্যর্থ হলেও
+    //    বাকি কাজ থেমে থাকে না (uploadImageSrcToImgbb ব্যর্থ হলে "" ফেরত দেয়)। ──
+    const groupQpaper={};
+    for(const g of included){
+      const urls=[];
+      for(const pn of (g.pages||[])){
+        const im=imgByPageNo(pn);
+        const src=im&&(im.webPath||(im.base64?`data:image/jpeg;base64,${im.base64}`:null));
+        if(!src)continue;
+        const url=await uploadImageSrcToImgbb(src);
+        if(url)urls.push(url);
+      }
+      groupQpaper[g.id]=urls.join(",");
+    }
+
     const allRows=[];
     included.forEach(g=>{
       const subject=(g.subject||"").trim()||"(অজানা বিষয়)";
       const subtopic=(g.subtopic||"").trim()||subject;
-      g.rows.forEach(r=>allRows.push({q:r.q,correct:r.correct,subject,subtopic}));
+      const mainQpaper=groupQpaper[g.id]||"";
+      g.rows.forEach(r=>allRows.push({q:r.q,correct:r.correct,subject,subtopic,mainQpaper}));
     });
 
     if(saveLoc==="sheet"){
       const rows=allRows.map(item=>buildSheetRow({
         item:{q:item.q,correct:item.correct,explanation:""},
-        subject:item.subject,subtopic:item.subtopic,qtype:"Written",audienceTags:[]
+        subject:item.subject,subtopic:item.subtopic,qtype:"Written",audienceTags:[],
+        mainQpaper:item.mainQpaper,
       }));
       const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
       if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
@@ -484,7 +518,7 @@ function MultiSubjectImportPage({push}){
         const rec=buildBulkRecord({
           item:{q:item.q,correct:item.correct,explanation:""},
           subject:item.subject,subtopic:item.subtopic,mode:targetMode,qtype:"Written",
-          audienceTags:[],ts,id
+          audienceTags:[],ts,id,mainQpaper:item.mainQpaper
         });
         try{
           const res=await fbPush(targetMode,rec);
@@ -502,6 +536,11 @@ function MultiSubjectImportPage({push}){
       const ids=included.flatMap(g=>g.archiveIds||[]);
       if(ids.length) archiveDeleteMany(ids);
     }
+
+    },"OCR প্রশ্ন Submit হচ্ছে…").catch(e=>{
+      setSubmitting(false);
+      push("error","Submit ব্যর্থ",String(e?.message||e||"unknown"));
+    });
   };
 
   const backToEdit=()=>{ setPhase("idle"); }; // ছবি/গ্রুপ-ব্রেক ঠিক করে আবার Process করা যাবে — cache থাকায় দ্রুত হবে
