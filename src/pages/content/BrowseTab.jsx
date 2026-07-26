@@ -73,8 +73,14 @@ function BrowseTab({push,tick}){
     return result;
   },[duplicateGroups]);
 
+  // "৬"-এর মতো stray/ভাঙা এন্ট্রি — প্রশ্নের টেক্সট থাকলেও ৩ অক্ষরের কম (বাজে OCR/parsing ইম্পোর্টের লক্ষণ)
+  const suspiciousQs=useMemo(()=>allQ.filter(q=>{
+    const len=(q.Question||q.question||"").trim().length;
+    return len>0&&len<4;
+  }),[allQ]);
+
   const filtered=useMemo(()=>{
-    let arr=viewMode==="duplicates"?duplicateQs:allQ;
+    let arr=viewMode==="duplicates"?duplicateQs:viewMode==="suspicious"?suspiciousQs:allQ;
     if(filterAudience!=="all"){
       arr=arr.filter(q=>{
         const tagRaw=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
@@ -115,7 +121,7 @@ function BrowseTab({push,tick}){
       const keys=qs.map(q=>q._fbKey).filter(Boolean);
       const deleted=await fbDeleteBatch(sheet, keys);
       invalidate(sheet);
-      push("success",`🗑️ ${deleted}টি duplicate ডিলিট!`,"");
+      push("success",`🗑️ ${deleted}টি এন্ট্রি ডিলিট!`,"");
       setBulkDelTargets(null);
     }catch(e){push("error","Bulk ডিলিট ব্যর্থ",String(e?.message||e||"unknown"));}
     setBulkDelLoading(false);
@@ -133,7 +139,30 @@ function BrowseTab({push,tick}){
           style={{marginLeft:"auto",fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="duplicates"?C.red:C.border}`,background:viewMode==="duplicates"?C.red+"22":"transparent",color:viewMode==="duplicates"?C.red:C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
           🔁 Duplicate {duplicateQs.length>0&&<span style={{fontSize:9,background:C.red,color:"#fff",borderRadius:10,padding:"1px 5px"}}>{duplicateQs.length}</span>}
         </button>
+        <button
+          onClick={()=>setViewMode(v=>v==="suspicious"?"all":"suspicious")}
+          style={{fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="suspicious"?"#f59e0b":C.border}`,background:viewMode==="suspicious"?"#f59e0b22":"transparent",color:viewMode==="suspicious"?"#f59e0b":C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+          ⚠️ সন্দেহজনক {suspiciousQs.length>0&&<span style={{fontSize:9,background:"#f59e0b",color:"#fff",borderRadius:10,padding:"1px 5px"}}>{suspiciousQs.length}</span>}
+        </button>
       </div>
+      {/* Suspicious mode header — বাজে OCR/parsing থেকে আসা ভাঙা এন্ট্রি বাল্কে ডিলিট করার জন্য */}
+      {viewMode==="suspicious"&&(
+        <div style={{background:"#f59e0b15",border:"1px solid #f59e0b33",borderRadius:10,padding:"8px 12px",marginBottom:8}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:6}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:"#f59e0b"}}>⚠️ সন্দেহজনক/ভাঙা এন্ট্রি</div>
+              <div style={{fontSize:10,color:C.muted,marginTop:2}}>{suspiciousQs.length}টি প্রশ্নের টেক্সট ৩ অক্ষরের কম — সাধারণত বাজে OCR/parsing-এর ফল, ভালো করে দেখে ডিলিট করে দিন</div>
+            </div>
+            {suspiciousQs.length>0&&(
+              <button
+                onClick={()=>setBulkDelTargets(suspiciousQs)}
+                style={{fontSize:11,padding:"5px 12px",borderRadius:8,background:"#f59e0b22",color:"#f59e0b",border:"1px solid #f59e0b44",fontWeight:700,cursor:"pointer"}}>
+                🗑️ সব সন্দেহজনক ডিলিট ({suspiciousQs.length}টি)
+              </button>
+            )}
+          </div>
+        </div>
+      )}
       {/* Duplicate mode header */}
       {viewMode==="duplicates"&&(
         <div style={{background:C.red+"15",border:`1px solid ${C.red}33`,borderRadius:10,padding:"8px 12px",marginBottom:8}}>
@@ -196,6 +225,8 @@ function BrowseTab({push,tick}){
        pageSlice.map((q,i)=>{
         const qid=(q.ID||q.id||"").toString();
         const qtext=(q.Question||q.question||"(নোট)").slice(0,80);
+        const qFullLen=(q.Question||q.question||"").trim().length;
+        const isSuspicious=qFullLen>0&&qFullLen<4; // "৬"-এর মতো stray/ভাঙা নয়েজ এন্ট্রি ধরার জন্য
         const sub=(q.Subject||q.subject||"—");
         const tp=(q.Sub_topic||q.sub_topic||"");
         const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
@@ -225,7 +256,10 @@ function BrowseTab({push,tick}){
               <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}33`}} onClick={()=>setEditing(q)}>✏️</button>
               <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`}} onClick={()=>setDelTarget(q)}>🗑️</button>
             </div>
-            <div className="qcard-q">{qtext}{qtext.length>=80?"…":""}</div>
+            <div className="qcard-q">
+              {isSuspicious&&<span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:"#f59e0b22",color:"#f59e0b",fontWeight:800,border:"1px solid #f59e0b44",marginRight:6}}>⚠️ সন্দেহজনক/ভাঙা এন্ট্রি</span>}
+              {qtext}{qtext.length>=80?"…":""}
+            </div>
             <div className="qcard-meta">
               <span className="qtag qtag-sub">📚 {sub}</span>
               {tp&&<span className="qtag qtag-tp">📌 {tp.slice(0,25)}</span>}
@@ -300,8 +334,10 @@ function BrowseTab({push,tick}){
         onConfirm={hardDelete} onCancel={()=>setDelTarget(null)} loading={delLoading}
       />}
       {bulkDelTargets&&<DeleteWarningModal
-        title={`🗑️ ${bulkDelTargets.length}টি Duplicate ডিলিট করবেন?`}
-        description={`এগুলো হলো duplicate কপি। Original গুলো রেখে বাকি ${bulkDelTargets.length}টি Firebase থেকে মুছে যাবে।`}
+        title={`🗑️ ${bulkDelTargets.length}টি ${viewMode==="suspicious"?"সন্দেহজনক":"Duplicate"} এন্ট্রি ডিলিট করবেন?`}
+        description={viewMode==="suspicious"
+          ?`এগুলোর প্রশ্নের টেক্সট ৩ অক্ষরের কম (ভাঙা/নয়েজ) — ${bulkDelTargets.length}টি Firebase থেকে মুছে যাবে।`
+          :`এগুলো হলো duplicate কপি। Original গুলো রেখে বাকি ${bulkDelTargets.length}টি Firebase থেকে মুছে যাবে।`}
         onConfirm={()=>bulkDeleteDuplicates(bulkDelTargets)} onCancel={()=>setBulkDelTargets(null)} loading={bulkDelLoading}
       />}
     </>
