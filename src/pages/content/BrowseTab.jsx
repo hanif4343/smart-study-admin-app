@@ -2,10 +2,38 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../../core/config.js";
 import { useFB, invalidate } from "../../core/dataCache.js";
-import { fbDelete, fbDeleteBatch } from "../../core/firebase.js";
-import { toArr } from "../../core/utils.js";
+import { fbDelete, fbDeleteBatch, fbPush, fbSet } from "../../core/firebase.js";
+import { toArr, nowTs } from "../../core/utils.js";
+import { callAiProviderRotatingRaw, buildKeyPool, OCR_SPLIT_RULES, OCR_NOISE_RULES, OCR_CORRECTION_RULES } from "../../core/ocrProviders.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
 import { InlineEditModal } from "./InlineEditModal.jsx";
+import { ReformatReviewModal } from "./ReformatReviewModal.jsx";
+
+/* ── পুরনো, একাধিক উপ-প্রশ্নের উত্তর এক জায়গায় বান্ডিল হয়ে-যাওয়া entry-কে
+   AI দিয়ে আলাদা আলাদা স্বতন্ত্র {q,a}-এ ভেঙে দেওয়ার প্রম্পট। প্রশ্নব্যাংক
+   (বিগত সালের প্রশ্ন) মুছে ফেলা ঠিক না — তাই ডিলিটের বদলে এই "রিফরম্যাট"
+   দিয়ে পুরনো ডেটা re-split করে সংরক্ষণ করা হয়। ── */
+function buildReformatPrompt(rawText){
+  return `তুমি একজন বাংলা প্রশ্নপত্র formatter। নিচের প্রশ্ন-উত্তরটা পুরনো, ভুলভাবে ইম্পোর্ট হওয়া ডেটা থেকে নেওয়া — একাধিক উপ-প্রশ্নের উত্তর ভুলবশত এক জায়গায় বান্ডিল হয়ে জোড়া লেগে গিয়েছিল। এটাকে প্রতিটা উপ-প্রশ্নে ভেঙে পরিষ্কার, স্বতন্ত্র entry বানাও — কোনো তথ্য বাদ দিও না, শুধু আলাদা করো।
+${OCR_SPLIT_RULES}
+${OCR_NOISE_RULES}
+${OCR_CORRECTION_RULES}
+শুধু নিচের বিশুদ্ধ JSON array ফরম্যাটে উত্তর দাও — কোনো markdown code fence (\`\`\`), কোনো ব্যাখ্যা, কোনো অতিরিক্ত টেক্সট ছাড়া:
+[{"q":"...","a":"..."}]
+যদি এই টেক্সটে আসলে ভাঙার মতো কিছুই না থাকে (এটা ইতিমধ্যে একটাই স্বতন্ত্র, সম্পূর্ণ প্রশ্ন), তাহলে একটামাত্র entry-ই ফেরত দাও, অক্ষত রেখে — জোর করে ভাঙার চেষ্টা করবে না।
+=== টেক্সট ===
+${rawText}`;
+}
+/* ── AI response → [{q,a}] ── */
+function parseReformatResponse(text){
+  let t=(text||"").trim();
+  t=t.replace(/^```json/i,"").replace(/^```/,"").replace(/```$/,"").trim();
+  const start=t.indexOf("["), end=t.lastIndexOf("]");
+  if(start===-1||end===-1) throw new Error("JSON array পাওয়া যায়নি — AI response format ঠিক নেই");
+  const arr=JSON.parse(t.slice(start,end+1));
+  if(!Array.isArray(arr)) throw new Error("AI response array না");
+  return arr.filter(e=>e&&e.q&&e.a).map(e=>({q:String(e.q).trim(),a:String(e.a).trim()})).filter(e=>e.q&&e.a);
+}
 
 function BrowseTab({push,tick}){
   const[sheet,setSheet]=useState("Quiz");
@@ -21,6 +49,11 @@ function BrowseTab({push,tick}){
   const[bulkDelLoading,setBulkDelLoading]=useState(false);
   const[page,setPage]=useState(0);
   const[expandedKeys,setExpandedKeys]=useState(()=>new Set()); // কোন কোন কার্ড "বিস্তারিত" খোলা আছে
+  const[selectMode,setSelectMode]=useState(false); // রিফরম্যাট করার জন্য একাধিক এন্ট্রি বাছাই মোড
+  const[selectedKeys,setSelectedKeys]=useState(()=>new Set());
+  const[reformatEntries,setReformatEntries]=useState(null); // AI থেকে ফেরত আসা প্রস্তাবিত [{q,a,sourceKeys}] — রিভিউ মোডালে দেখানোর জন্য
+  const[reformatLoading,setReformatLoading]=useState(false);
+  const[reformatSaving,setReformatSaving]=useState(false);
   const PAGE=20;
 
   const allQ=useMemo(()=>toArr(raw).reverse(),[raw]);
@@ -93,7 +126,7 @@ function BrowseTab({push,tick}){
       arr=arr.filter(q=>[(q.Question||q.question||""),(q.Subject||q.subject||""),(q.Sub_topic||q.sub_topic||""),(q.Correct||q.correct||"")].join(" ").toLowerCase().includes(qlo));
     }
     return arr;
-  },[allQ,filterSub,filterAudience,search]);
+  },[viewMode,duplicateQs,suspiciousQs,allQ,filterSub,filterAudience,search]);
 
   useEffect(()=>setPage(0),[sheet,filterSub,filterAudience,search]);
 
@@ -127,6 +160,72 @@ function BrowseTab({push,tick}){
     setBulkDelLoading(false);
   };
 
+  /* ── নির্বাচিত এন্ট্রিগুলো AI দিয়ে re-split করার প্রস্তাব বানায় — কোনো কিছু এখনো Firebase-এ লেখা হয় না,
+     শুধু রিভিউ মোডালের জন্য প্রস্তাবিত entries তৈরি হয়। প্রশ্নব্যাংক ডিলিট না করে সংরক্ষণের জন্যই এই ধাপ। ── */
+  const runReformat=async()=>{
+    if(!buildKeyPool().length){ push("warn","কোনো AI provider active নেই","API Settings-এ গিয়ে অন্তত একটা key active করো"); return; }
+    const targets=allQ.filter(q=>selectedKeys.has(q._fbKey));
+    if(targets.length===0)return;
+    setReformatLoading(true);
+    const collected=[];
+    const failed=[];
+    for(const q of targets){
+      const rawText=`প্রশ্ন: ${q.Question||q.question||""}\nউত্তর: ${q.Correct||q.correct||""}`;
+      try{
+        const aiText=await callAiProviderRotatingRaw(buildReformatPrompt(rawText));
+        const entries=parseReformatResponse(aiText);
+        entries.forEach(e=>collected.push({
+          ...e,include:true,
+          sourceKey:q._fbKey,
+          subject:q.Subject||q.subject||"",
+          sub_topic:q.Sub_topic||q.sub_topic||"",
+          audienceTags:q.AudienceTags||q.audienceTags||q.audience_tags||"",
+          qtype:q["Question Type"]||q.qtype||"Written",
+        }));
+      }catch(e){ failed.push(`#${q.ID||q.id||"?"}: ${e.message}`); }
+    }
+    setReformatLoading(false);
+    if(failed.length) push("error",`${failed.length}টি ব্যর্থ হয়েছে`,failed.slice(0,3).join(" | "));
+    if(collected.length===0){ push("warn","কিছুই পাওয়া যায়নি","AI থেকে কোনো বৈধ entry ফেরত আসেনি"); return; }
+    setReformatEntries(collected);
+  };
+
+  /* ── রিভিউ মোডাল থেকে "সেভ করুন" — নতুন entries লেখা হয়, তারপর পুরনো (বান্ডিল) entries ডিলিট হয় ── */
+  const saveReformat=async(finalEntries)=>{
+    const included=finalEntries.filter(e=>e.include&&e.q&&e.a);
+    if(included.length===0)return;
+    setReformatSaving(true);
+    try{
+      for(const e of included){
+        const ts=nowTs();
+        const id=Date.now()+Math.floor(Math.random()*9999);
+        const isStudy=sheet==="Study";
+        const isWritten=(e.qtype||"Written")==="Written";
+        const rec={
+          id,question:e.q,
+          ...(isStudy?{}:{option1:isWritten?"":"",option2:isWritten?"":"",option3:isWritten?"":"",option4:isWritten?"":""}),
+          correct:e.a,
+          subject:e.subject,sub_topic:e.sub_topic||e.subject,
+          explanation:"",
+          "Question Type":e.qtype||"Written",
+          AudienceTags:e.audienceTags||"",
+          Timestamp:ts,technique:"",
+        };
+        const res=await fbPush(sheet,rec);
+        if(res?.name) await fbSet(`${sheet}/${res.name}/id`,res.name);
+      }
+      // নতুন entries সফলভাবে লেখা হওয়ার পরই পুরনো বান্ডিল entries ডিলিট করা হয় — ডেটা হারানোর ঝুঁকি এড়াতে
+      const sourceKeys=[...new Set(included.map(e=>e.sourceKey).filter(Boolean))];
+      if(sourceKeys.length) await fbDeleteBatch(sheet,sourceKeys);
+      invalidate(sheet);
+      push("success",`✅ ${included.length}টি নতুন প্রশ্ন তৈরি হলো`,`${sourceKeys.length}টি পুরনো বান্ডিল এন্ট্রি বদলে গেল`);
+      setReformatEntries(null);
+      setSelectedKeys(new Set());
+      setSelectMode(false);
+    }catch(e){push("error","সেভ ব্যর্থ",String(e?.message||e||"unknown"));}
+    setReformatSaving(false);
+  };
+
   return(
     <>
       {/* Sheet tabs + Audience selector row */}
@@ -144,7 +243,29 @@ function BrowseTab({push,tick}){
           style={{fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="suspicious"?"#f59e0b":C.border}`,background:viewMode==="suspicious"?"#f59e0b22":"transparent",color:viewMode==="suspicious"?"#f59e0b":C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
           ⚠️ সন্দেহজনক {suspiciousQs.length>0&&<span style={{fontSize:9,background:"#f59e0b",color:"#fff",borderRadius:10,padding:"1px 5px"}}>{suspiciousQs.length}</span>}
         </button>
+        <button
+          onClick={()=>{setSelectMode(v=>!v);setSelectedKeys(new Set());}}
+          style={{fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${selectMode?"#6366f1":C.border}`,background:selectMode?"#6366f122":"transparent",color:selectMode?"#6366f1":C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+          🧩 রিফরম্যাট
+        </button>
       </div>
+      {/* Select mode হেডার — বান্ডিল-হয়ে-যাওয়া পুরনো এন্ট্রি বেছে AI দিয়ে re-split করে সংরক্ষণ করার জন্য (ডিলিট না করে) */}
+      {selectMode&&(
+        <div style={{background:"#6366f115",border:"1px solid #6366f133",borderRadius:10,padding:"8px 12px",marginBottom:8}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:6}}>
+            <div>
+              <div style={{fontSize:12,fontWeight:700,color:"#6366f1"}}>🧩 রিফরম্যাট মোড</div>
+              <div style={{fontSize:10,color:C.muted,marginTop:2}}>যেসব এন্ট্রিতে একাধিক উপ-প্রশ্নের উত্তর এক জায়গায় জোড়া লেগে গেছে, সেগুলো বেছে নিন — AI প্রতিটাকে আলাদা প্রশ্নে ভেঙে দেবে (মূল প্রশ্নব্যাংক ডিলিট হবে না)</div>
+            </div>
+            <button
+              disabled={selectedKeys.size===0||reformatLoading}
+              onClick={runReformat}
+              style={{fontSize:11,padding:"5px 12px",borderRadius:8,background:selectedKeys.size===0?C.border:"#6366f122",color:selectedKeys.size===0?C.muted:"#6366f1",border:`1px solid ${selectedKeys.size===0?C.border:"#6366f144"}`,fontWeight:700,cursor:selectedKeys.size===0?"default":"pointer"}}>
+              {reformatLoading?"⏳ AI চলছে...":`🧩 রিফরম্যাট করুন (${selectedKeys.size}টি)`}
+            </button>
+          </div>
+        </div>
+      )}
       {/* Suspicious mode header — বাজে OCR/parsing থেকে আসা ভাঙা এন্ট্রি বাল্কে ডিলিট করার জন্য */}
       {viewMode==="suspicious"&&(
         <div style={{background:"#f59e0b15",border:"1px solid #f59e0b33",borderRadius:10,padding:"8px 12px",marginBottom:8}}>
@@ -243,8 +364,13 @@ function BrowseTab({push,tick}){
         const technique=q.Technique||q.technique||"";
         const fullQ=q.Question||q.question||"(নোট)";
         return(
-          <div key={cardKey} className="qcard" style={isDup?{border:`1.5px solid ${isOriginal?C.green:C.red}44`,background:isOriginal?C.green+"08":C.red+"08"}:{}}>
+          <div key={cardKey} className="qcard" style={{...(isDup?{border:`1.5px solid ${isOriginal?C.green:C.red}44`,background:isOriginal?C.green+"08":C.red+"08"}:{}),...(selectMode&&selectedKeys.has(cardKey)?{border:"1.5px solid #6366f1aa",background:"#6366f10c"}:{})}}>
             <div style={{display:"flex",gap:6,marginBottom:5,alignItems:"flex-start"}}>
+              {selectMode&&(
+                <input type="checkbox" checked={selectedKeys.has(cardKey)}
+                  onChange={()=>setSelectedKeys(p=>{const n=new Set(p); n.has(cardKey)?n.delete(cardKey):n.add(cardKey); return n;})}
+                  style={{width:16,height:16,marginTop:1,accentColor:"#6366f1",cursor:"pointer"}}/>
+              )}
               <span className={`qtag ${qt==="written"?"qtag-wr":"qtag-mcq"}`}>{qt==="written"?"✍️":"❓"}</span>
               <span style={{fontSize:9,color:C.muted,marginTop:1}}>#{qid}</span>
               {isDup&&(
@@ -339,6 +465,12 @@ function BrowseTab({push,tick}){
           ?`এগুলোর প্রশ্নের টেক্সট ৩ অক্ষরের কম (ভাঙা/নয়েজ) — ${bulkDelTargets.length}টি Firebase থেকে মুছে যাবে।`
           :`এগুলো হলো duplicate কপি। Original গুলো রেখে বাকি ${bulkDelTargets.length}টি Firebase থেকে মুছে যাবে।`}
         onConfirm={()=>bulkDeleteDuplicates(bulkDelTargets)} onCancel={()=>setBulkDelTargets(null)} loading={bulkDelLoading}
+      />}
+      {reformatEntries&&<ReformatReviewModal
+        entries={reformatEntries}
+        onSave={saveReformat}
+        onCancel={()=>setReformatEntries(null)}
+        saving={reformatSaving}
       />}
     </>
   );
