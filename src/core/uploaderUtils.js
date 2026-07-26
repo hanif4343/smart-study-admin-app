@@ -55,7 +55,7 @@ function parseBulkEntry(entry, effectiveType){
 const getBulkEffectiveType=(m,qt)=> m==="Study"?"Study":qt;
 
 /* Build Firebase record — shared shape used by both direct-submit (OCR page) and BulkUploaderPage */
-function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id}){
+function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id,mainQpaper}){
   const tagStr=(audienceTags||[]).join(",");
   const isStudy=mode==="Study";
   const isWritten=qtype==="Written";
@@ -73,6 +73,7 @@ function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id}){
       AudienceTags:tagStr,
       Timestamp:ts,
       technique:"",Previous_Exam:"",
+      "Question Paper":mainQpaper||"",
     };
   }
   if(mode==="QBank"){
@@ -88,6 +89,7 @@ function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id}){
       "Question Type":isWritten?"Written":"MCQ",
       AudienceTags:tagStr,
       Timestamp:ts,technique:"",
+      "Question Paper":mainQpaper||"",
     };
   }
   /* Study */
@@ -98,12 +100,13 @@ function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id}){
     "Question Type":"Study",
     AudienceTags:tagStr,
     Timestamp:ts,technique:"",
+    "Question Paper":mainQpaper||"",
   };
 }
 
 /* Build Google-Sheet row — shared shape used by both direct-submit (OCR page) and BulkUploaderPage
    when saveLoc==="sheet". Same `item` shape as buildBulkRecord (from parseBulkEntry). */
-function buildSheetRow({item,subject,subtopic,qtype,audienceTags}){
+function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper}){
   const isWritten=qtype==="Written";
   return{
     question:item.q,
@@ -113,7 +116,7 @@ function buildSheetRow({item,subject,subtopic,qtype,audienceTags}){
     subject, sub_topic:subtopic||subject, topic:"",
     explanation:item.explanation||"",
     qType:isWritten?"Written":(qtype==="Study"?"Study":"MCQ"),
-    technique:"", prevExam:"", mainQpaper:"",
+    technique:"", prevExam:"", mainQpaper:mainQpaper||"",
     audienceTags:(audienceTags||[]).join(","),
   };
 }
