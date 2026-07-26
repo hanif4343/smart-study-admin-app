@@ -81,6 +81,19 @@ const OCR_CORRECTION_RULES=`
 - OCR টেক্সট ইতিমধ্যে একটা বৈধ/অর্থপূর্ণ বাংলা শব্দ হলে সেটা একদম স্পর্শ করবে না — তোমার কাছে অন্য কোনো শব্দ "বেশি প্রচলিত" বা "বেশি মানানসই" মনে হলেও বদলে দিও না। উদাহরণ: OCR-এ "মনমরা" থাকলে সেটাকে "মনমাঝি" বানিও না; "দুর্যোগ" থাকলে "সুযোগ" বানিও না; কারো নাম "আরমিনা" লেখা থাকলে "করিম" বানিও না। সন্দেহ হলে ডিফল্ট আচরণ: OCR-এ যা আছে অপরিবর্তিত রাখা।
 - সংক্ষিপ্ত রূপ (acronym) স্পষ্টভাবে ভাঙা/ভুল অক্ষরে থাকলে পরিচিত সঠিক রূপে ঠিক করো (যেমন "UNIR"→"UNHCR")।
 - প্রশ্নের শুরুর নির্দেশনা-অংশ (যেমন "ব্যাসবাক্য সহ") OCR-এ সম্পূর্ণ অনুপস্থিত থাকলে (কোনো টেক্সটই নেই) এবং বাকি context থেকে নিশ্চিতভাবে বোঝা গেলে সেটা যোগ করে দাও — কিন্তু ইতিমধ্যে থাকা কোনো টেক্সট পরিবর্তন করবে না।`;
+// ── ছবির নয়েজ (ফোনের ওয়াটারমার্ক, ক্যামেরা অ্যাপের সিগনেচার) বাদ দেওয়ার নিয়ম ──
+// কিছু ফোনে (যেমন Vivo, Oppo) ছবির কোণায় নিজে থেকেই ফোনের মডেল নাম, মালিকের নাম, তারিখ-সময়
+// বসিয়ে দেয় (যেমন "Vivo Y56 · Hanif Sarder", "Jul 25, 2026, 10:27") — OCR এটাকেও পড়ে ফেলে,
+// আর AI কখনো কখনো এটাকে ভুল করে উত্তরের অংশ ভেবে বসিয়ে দেয়। এটা স্পষ্টভাবে বাদ দেওয়ার নির্দেশ।
+const OCR_NOISE_RULES=`
+- ছবির কোণায় ফোন/ক্যামেরা অ্যাপ নিজে থেকে যা বসায় (ফোনের মডেল নাম যেমন "Vivo Y56", মালিকের নাম, তারিখ/সময় স্ট্যাম্প) — এগুলো প্রশ্ন-উত্তরের অংশ নয়, সম্পূর্ণ উপেক্ষা করো, কোনো entry-তে বসাবে না।`;
+// ── একাধিক উপ-প্রশ্নওয়ালা (ক/খ/গ/ঘ/ঙ, a/b/c/d/e) প্রশ্ন আলাদা entry-তে ভাগ করার নিয়ম ──
+// পরীক্ষার প্রশ্নপত্রে প্রায়ই এক নম্বরের নিচে ৪-৫টা উপ-প্রশ্ন থাকে (যেমন "৬. Fill in the blanks: a... b... c...")।
+// এগুলো একটা entry-তে জোড়া লাগিয়ে দিলে ডেটা এলোমেলো/অকার্যকর হয়ে যায় — প্রতিটাকে সম্পূর্ণ স্বতন্ত্র entry
+// বানানো বাধ্যতামূলক, প্রতিটাতেই মূল নির্দেশনা বাক্যটা পুনরাবৃত্তি করে দিতে হবে যাতে entry-টা একা দাঁড়ালেও বোঝা যায়।
+const OCR_SPLIT_RULES=`
+- কোনো নম্বরের নিচে একাধিক উপ-প্রশ্ন/ভাগ থাকলে (ক/খ/গ/ঘ/ঙ, a/b/c/d/e, ১/২/৩ ইত্যাদি দিয়ে চিহ্নিত) — প্রতিটা উপ-প্রশ্নকে সম্পূর্ণ আলাদা, স্বতন্ত্র entry হিসেবে দাও। কখনোই একাধিক উপ-প্রশ্ন একসাথে জোড়া লাগিয়ে একটা entry বানাবে না।
+- প্রতিটা উপ-প্রশ্নের entry-তে মূল নির্দেশনা বাক্যটাও (যেমন "সন্ধিবিচ্ছেদ করুন", "Fill in the blank with appropriate preposition") পুনরাবৃত্তি করে জুড়ে দাও, যাতে সেই entry-টা প্রসঙ্গ ছাড়াই একা পড়লেও বোঝা যায়। উদাহরণ: "৩. সন্ধিবিচ্ছেদ করুন: ক. বিদ্যালয় খ. নায়ক" থেকে দুটো আলাদা entry হবে — প্রশ্ন="সন্ধিবিচ্ছেদ করুন: বিদ্যালয়", প্রশ্ন="সন্ধিবিচ্ছেদ করুন: নায়ক" — একটাতে সব জোড়া লাগানো entry বানাবে না।`;
 const OCR_PROMPT_FORMATS={
   MCQ:`তুমি একজন বাংলা MCQ প্রশ্নপত্র formatter।
 নিচের OCR text থেকে সব MCQ প্রশ্ন বের করে নিচের format-এ দাও।
@@ -96,6 +109,7 @@ RULES:
 - Serial number বাদ দাও
 - 2-column হলে প্রশ্ন নম্বর অনুযায়ী sort করো
 - পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
+${OCR_NOISE_RULES}
 - সঠিক উত্তর ফিল্ডে সবসময় অপশনের আসল টেক্সট বসাবে (ক/খ/গ/ঘ বা A/B/C/D অক্ষর নয়)
 - field-এ ; থাকলে | দিয়ে replace করো
 - কোনো প্রশ্ন বাদ দিও না`,
@@ -103,21 +117,25 @@ RULES:
 নিচের OCR text থেকে সব প্রশ্ন-উত্তর বের করে নিচের format-এ দাও, প্রতিটি entry {} দিয়ে wrap করে:
 {প্রশ্ন;উত্তর}
 ${OCR_CORRECTION_RULES}
+${OCR_SPLIT_RULES}
 RULES:
 - শুধু formatted data দাও, কোনো label বা explanation নয়
 - Serial number বাদ দাও
 - পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
+${OCR_NOISE_RULES}
 - field-এ ; থাকলে | দিয়ে replace করো
 - কোনো প্রশ্ন বাদ দিও না`,
   Study:`তুমি একজন বাংলা প্রশ্নপত্র formatter।
 নিচের OCR text থেকে সব প্রশ্ন-উত্তর বের করে নিচের format-এ দাও, প্রতিটি entry {} দিয়ে wrap করে:
 {প্রশ্ন;উত্তর}
 ${OCR_CORRECTION_RULES}
+${OCR_SPLIT_RULES}
 RULES:
 - শুধু formatted data দাও, কোনো label বা explanation নয়
 - Serial number বাদ দাও
 - উত্তর একাধিক লাইনের হলেও একই entry-তে রাখো
 - পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
+${OCR_NOISE_RULES}
 - field-এ ; থাকলে | দিয়ে replace করো
 - কোনো প্রশ্ন বাদ দিও না`,
 };
@@ -139,7 +157,7 @@ async function callProviderOnce(p,prompt){
           const res=await fetch(url,{
             method:"POST",
             headers:{"Content-Type":"application/json","x-goog-api-key":p.key},
-            body:JSON.stringify({contents:[{parts:[{text:prompt}]}]}),
+            body:JSON.stringify({contents:[{parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:8192}}),
           });
           if(res.status===403){
             const errBody=await res.json().catch(()=>({}));
@@ -169,7 +187,7 @@ async function callProviderOnce(p,prompt){
   const headers={"Content-Type":"application/json","Authorization":"Bearer "+p.key};
   if(p.id==="openrouter") headers["HTTP-Referer"]="https://smartstudy.admin";
   const res=await fetch(p.url,{method:"POST",headers,
-    body:JSON.stringify({model:p.model,messages:[{role:"user",content:prompt}],max_tokens:4096})});
+    body:JSON.stringify({model:p.model,messages:[{role:"user",content:prompt}],max_tokens:8192})});
   if(!res.ok) throw new Error(p.name+" HTTP "+res.status);
   const d=await res.json();
   const text=d?.choices?.[0]?.message?.content?.trim();
