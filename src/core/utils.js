@@ -36,6 +36,20 @@ const uploadImg=async file=>{
   const r=await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB}`,{method:"POST",body:fd});
   return(await r.json())?.data?.url||"";
 };
+/* ── OCR-এর সময় স্ক্যান করা পাতার ছবিটা imgbb-তে আপলোড করে সেই লিংক পাওয়ার জন্য
+   (Question Paper কলাম — টেক্সট আকারে প্রশ্ন থাকার পাশাপাশি আসল ছবিও যেন থাকে,
+   পরে ইউজার অ্যাপ এই লিংক দিয়ে মূল প্রশ্নপত্রের পাতা দেখাতে পারবে)।
+   src হতে পারে: blob: URL, capacitor file src, অথবা data:...;base64 URL — যেকোনোটা
+   থেকেই fetch() দিয়ে raw bytes বের করে সরাসরি imgbb-তে ফাইল হিসেবে আপলোড করা হয়
+   (মাঝখানে base64 string বানানোর দরকার নেই, তাই মেমরি সাশ্রয়ী)। */
+const uploadImageSrcToImgbb=async src=>{
+  if(!src)return "";
+  try{
+    const fetched=await fetch(src);
+    const blob=await fetched.blob();
+    return await uploadImg(blob);
+  }catch(e){ return ""; } // একটা পাতা আপলোড ব্যর্থ হলেও বাকি কাজ যেন থেমে না যায়
+};
 
 // Legacy GAS no-ops — backend আর call হয় না, শুধু পুরনো call-site গুলো ভাঙা এড়াতে রাখা
 const gasBg  = ()=>{};
@@ -73,4 +87,4 @@ function buildSubjectMap(arr){
   return map;
 }
 
-export { fmt, pct, initials, nowTs, timeAgo, toArr, phoneKey, matchPhone, uploadImg, gasBg, gasPost, gasCall, loadSharedGasSecret, saveSharedGasSecret, buildSubjectMap };
+export { fmt, pct, initials, nowTs, timeAgo, toArr, phoneKey, matchPhone, uploadImg, uploadImageSrcToImgbb, gasBg, gasPost, gasCall, loadSharedGasSecret, saveSharedGasSecret, buildSubjectMap };
