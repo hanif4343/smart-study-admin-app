@@ -225,21 +225,25 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={setGasSecretP}/>
       <FailedQueuePanel push={push} sourceFilter="বাল্ক আপলোডার"/>
 
-      {/* Target Sheet */}
-      <div style={{display:"flex",gap:6,marginBottom:12}}>
-        {["Quiz","QBank","Study"].map(m=>(
-          <button key={m} className={`ftab${mode===m?" on":""}`} onClick={()=>handleMode(m)} style={{flex:1}}>{m}</button>
-        ))}
-      </div>
-
-      {/* Question Type */}
-      {mode!=="Study"&&(
-        <div style={{display:"flex",gap:6,marginBottom:12}}>
-          {["MCQ","Written"].map(t=>(
-            <button key={t} className={`tp2${qtype===t?" on":""}`} onClick={()=>handleQtype(t)}>{t}</button>
+      {/* Target Sheet + Question Type — একটাই গোছানো প্যানেলে (Save Location/Audience Tags প্যানেলের সাথে একই লুক) */}
+      <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+        <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:8}}>🎯 Target Sheet</div>
+        <div style={{display:"flex",gap:6,marginBottom:mode!=="Study"?10:0}}>
+          {["Quiz","QBank","Study"].map(m=>(
+            <button key={m} className={`ftab${mode===m?" on":""}`} onClick={()=>handleMode(m)} style={{flex:1}}>{m}</button>
           ))}
         </div>
-      )}
+        {mode!=="Study"&&(
+          <>
+            <div style={{fontSize:11,fontWeight:800,color:C.text,margin:"2px 0 8px"}}>❓ প্রশ্নের ধরন</div>
+            <div style={{display:"flex",gap:6}}>
+              {["MCQ","Written"].map(t=>(
+                <button key={t} className={`tp2${qtype===t?" on":""}`} onClick={()=>handleQtype(t)}>{t}</button>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Audience Tags */}
       <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12}}>
