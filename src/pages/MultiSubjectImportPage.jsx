@@ -518,6 +518,22 @@ function MultiSubjectImportPage({push}){
   const confirmAndSubmit=async()=>{
     const included=draftGroups.filter(g=>g.included&&g.rows.length>0);
     if(!included.length){push("warn","⚠️ অন্তত একটা group রাখো","সব group বাদ দিলে সাবমিট করার কিছু নেই");return;}
+
+    // ── Subject/Sub-topic ফাঁকা থাকলে সেই group কখনোই সাবমিট হবে না — আগে "(অজানা বিষয়)" বসিয়ে
+    //    চুপচাপ সাবমিট হয়ে যেত, এখন সম্পূর্ণ বন্ধ। ফাঁকা group-গুলো Confirm লিস্টেই থেকে যাবে
+    //    (আগে থেকেই থাকা কমলা রঙের হাইলাইট-সহ) যাতে Subject/Sub-topic পূরণ করে পরে আবার
+    //    Submit চাপা যায় — কিছু হারায় না, শুধু আটকে থাকে। ──
+    const readyGroups=included.filter(g=>g.subject.trim()&&g.subtopic.trim());
+    const blockedGroups=included.filter(g=>!g.subject.trim()||!g.subtopic.trim());
+
+    if(readyGroups.length===0){
+      push("warn","⚠️ কোনো group-ই Submit হয়নি","সবগুলোতে Subject/Sub-topic ফাঁকা — আগে পূরণ করো");
+      return;
+    }
+    if(blockedGroups.length>0){
+      push("warn",`⚠️ ${blockedGroups.length}টা group বাদ পড়েছে`,"Subject/Sub-topic ফাঁকা — পূরণ করে আবার Submit চাপো, এখন শুধু বাকিগুলো যাচ্ছে");
+    }
+
     setSubmitting(true);
     await _BGM.guard(async()=>{
 
@@ -526,7 +542,7 @@ function MultiSubjectImportPage({push}){
     //    আসল প্রশ্নপত্রের পাতাও (একাধিক পাতা হলে সবগুলোই) সবসময় থাকে। একটা পাতা আপলোড ব্যর্থ হলেও
     //    বাকি কাজ থেমে থাকে না (uploadImageSrcToImgbb ব্যর্থ হলে "" ফেরত দেয়)। ──
     const groupQpaper={};
-    for(const g of included){
+    for(const g of readyGroups){
       const urls=[];
       for(const pn of (g.pages||[])){
         const im=imgByPageNo(pn);
@@ -539,9 +555,9 @@ function MultiSubjectImportPage({push}){
     }
 
     const allRows=[];
-    included.forEach(g=>{
-      const subject=(g.subject||"").trim()||"(অজানা বিষয়)";
-      const subtopic=(g.subtopic||"").trim()||subject;
+    readyGroups.forEach(g=>{
+      const subject=g.subject.trim();
+      const subtopic=g.subtopic.trim();
       const mainQpaper=groupQpaper[g.id]||"";
       g.rows.forEach(r=>allRows.push({q:r.q,correct:r.correct,subject,subtopic,mainQpaper}));
     });
@@ -554,13 +570,18 @@ function MultiSubjectImportPage({push}){
       }));
       const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
       if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
-      setResult({added:res.added,skipped:res.skipped,failed:res.failedRows.length,groupCount:included.length});
-      setSubmitting(false); setPhase("done");
+      setResult({added:res.added,skipped:res.skipped,failed:res.failedRows.length,groupCount:readyGroups.length});
+      setSubmitting(false);
+      // ── যেসব group Submit হলো, শুধু ওগুলোই লিস্ট থেকে সরাও — Subject/Sub-topic ফাঁকা থাকা group-গুলো
+      //    Confirm স্ক্রিনেই থেকে যাবে, পূরণ করে আবার Submit চাপার জন্য ──
+      const readyIds=new Set(readyGroups.map(g=>g.id));
+      setDraftGroups(p=>p.filter(g=>!readyIds.has(g.id)));
+      setPhase(blockedGroups.length>0?"confirm":"done");
       if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,
-        `${included.length}টি subject/sub-topic গ্রুপ`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
+        `${readyGroups.length}টি subject/sub-topic গ্রুপ`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
       if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
       if(res.added>0||res.skipped>0){
-        const ids=included.flatMap(g=>g.archiveIds||[]);
+        const ids=readyGroups.flatMap(g=>g.archiveIds||[]);
         if(ids.length) archiveDeleteMany(ids);
       }
       return;
@@ -586,12 +607,15 @@ function MultiSubjectImportPage({push}){
       }));
     }
     if(failedRecs.length) pushFailedItems(SRC_NAME,"firebase",targetMode,failedRecs);
-    setResult({added:sent,skipped:0,failed,groupCount:included.length});
-    setSubmitting(false); setPhase("done");
-    if(sent>0) push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${included.length}টি subject/sub-topic গ্রুপ`);
+    setResult({added:sent,skipped:0,failed,groupCount:readyGroups.length});
+    setSubmitting(false);
+    const readyIds=new Set(readyGroups.map(g=>g.id));
+    setDraftGroups(p=>p.filter(g=>!readyIds.has(g.id)));
+    setPhase(blockedGroups.length>0?"confirm":"done");
+    if(sent>0) push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${readyGroups.length}টি subject/sub-topic গ্রুপ`);
     if(failed>0) push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if(sent>0){
-      const ids=included.flatMap(g=>g.archiveIds||[]);
+      const ids=readyGroups.flatMap(g=>g.archiveIds||[]);
       if(ids.length) archiveDeleteMany(ids);
     }
 
@@ -672,7 +696,7 @@ function MultiSubjectImportPage({push}){
           </div>
           <div className="ss-scroll" style={{maxHeight:"58vh",overflowY:"auto",paddingRight:6,marginBottom:4}}>
           {draftGroups.map(g=>{
-            const isEmpty=!g.subject.trim();
+            const isEmpty=!g.subject.trim()||!g.subtopic.trim();
             const imgsOpen=expandedGroupId===g.id;
             return(
               <div key={g.id} style={{background:g.included?C.panel:"#1a1a1a",opacity:g.included?1:.5,
@@ -760,10 +784,26 @@ function MultiSubjectImportPage({push}){
             );
           })}
           </div>
-          <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12,display:"flex",justifyContent:"space-between",fontSize:12}}>
-            <span style={{color:C.text,fontWeight:700}}>মোট Submit হবে</span>
-            <span style={{color:"#10b981",fontWeight:900}}>{totalIncludedQ}টি প্রশ্ন · {totalIncludedG}টি group</span>
-          </div>
+          {(()=>{
+            const incGroups=draftGroups.filter(g=>g.included);
+            const readyG=incGroups.filter(g=>g.subject.trim()&&g.subtopic.trim());
+            const blockedG=incGroups.filter(g=>!g.subject.trim()||!g.subtopic.trim());
+            const readyQ=readyG.reduce((s,g)=>s+g.rows.length,0);
+            return(
+              <div style={{background:C.panel,border:`1px solid ${blockedG.length>0?"#f59e0b":C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12}}>
+                  <span style={{color:C.text,fontWeight:700}}>✅ Submit হবে</span>
+                  <span style={{color:"#10b981",fontWeight:900}}>{readyQ}টি প্রশ্ন · {readyG.length}টি group</span>
+                </div>
+                {blockedG.length>0&&(
+                  <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginTop:6,paddingTop:6,borderTop:`1px dashed ${C.border}`}}>
+                    <span style={{color:"#f59e0b",fontWeight:700}}>⚠️ Subject/Sub-topic ফাঁকা — বাদ যাবে</span>
+                    <span style={{color:"#f59e0b",fontWeight:900}}>{blockedG.length}টি group</span>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
             <button className="btn bp bb" disabled={submitting||!totalIncludedG} onClick={confirmAndSubmit} style={{justifyContent:"center"}}>
               {submitting?"⏳ Submit হচ্ছে...":`✅ Confirm করে Submit করো (${targetMode} → ${saveLoc==="sheet"?"Sheet":"Firebase"})`}
