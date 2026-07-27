@@ -1226,3 +1226,4 @@ function pullFirebaseToSheet_(sheetName) {
 
   Logger.log("✅ " + sheetName + " ব্যাকআপ সম্পন্ন — " + rows.length + " রো (Firebase → Sheet, read-only)।");
 }
+ 
