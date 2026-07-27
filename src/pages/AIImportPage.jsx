@@ -19,6 +19,7 @@ import { ApiSettingsPage } from "./ApiSettingsPage.jsx";
 
 function AIImportPage({push,onSendToBulk}){
   const[images,setImages]=useState([]);   // [{uri,base64,status,ocrText}]
+  const[previewImg,setPreviewImg]=useState(null); // ট্যাপ করলে বড় করে দেখানোর জন্য (long-press না, সরাসরি ট্যাপ)
   const[ocrAll,setOcrAll]=useState("");
   const[ocrQtype,setOcrQtype]=useState("MCQ"); // MCQ | Written | Study — OCR অটো-পার্সের টার্গেট ফরম্যাট
   const[running,setRunning]=useState(false);
@@ -422,7 +423,7 @@ function AIImportPage({push,onSendToBulk}){
           {images.map((img,i)=>(
             <div key={img.id} style={{position:"relative",width:72,height:72}}>
               {img.webPath?(
-                <img src={img.webPath} style={{width:72,height:72,borderRadius:10,objectFit:"cover",
+                <img src={img.webPath} onClick={()=>setPreviewImg(img.webPath)} style={{width:72,height:72,borderRadius:10,objectFit:"cover",cursor:"pointer",
                   border:`2px solid ${img.status==="done"?"#10b981":img.status==="error"?"#ef4444":img.status==="running"?"#6366f1":C.border}`}}/>
               ):(
                 <div style={{width:72,height:72,borderRadius:10,background:C.panel,border:`2px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20}}>📷</div>
@@ -632,6 +633,17 @@ function AIImportPage({push,onSendToBulk}){
           </div>
         )}
       </div>
+      {/* ── ট্যাপ করলে ছবি বড় করে দেখানোর প্রিভিউ — long-press লাগে না, সরাসরি ট্যাপেই খোলে ── */}
+      {previewImg&&(
+        <div onClick={()=>setPreviewImg(null)} style={{position:"fixed",inset:0,background:"#000000ee",zIndex:9999,
+          display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+          <img src={previewImg} onClick={e=>e.stopPropagation()} style={{maxWidth:"92vw",maxHeight:"80vh",borderRadius:12,objectFit:"contain"}}/>
+          <button onClick={()=>setPreviewImg(null)}
+            style={{position:"absolute",top:24,right:20,width:40,height:40,borderRadius:999,
+              background:"#ffffff22",border:"1px solid #ffffff44",color:"#fff",fontSize:20,fontWeight:900,
+              display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer"}}>✕</button>
+        </div>
+      )}
     </div>
   );
 }
