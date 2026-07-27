@@ -85,6 +85,62 @@ async function dataUrlToObjectUrl(dataUrl){
 }
 const revokeIfObjectUrl=(url)=>{ if(url&&url.startsWith("blob:")){ try{URL.revokeObjectURL(url);}catch(e){} } };
 
+/* ── নির্ভরযোগ্য সেফটি-নেট (AI-নির্ভর না) ──────────────────────────────────
+   একাধিক ফ্রি AI provider ঘুরিয়ে ব্যবহার হয় (Gemini quota শেষ হলে Groq/Mistral
+   fallback), আর কখন কোনটা active থাকবে সেটা নিয়ন্ত্রণ করা যায় না। ছোট/দুর্বল
+   মডেলগুলো (Groq/Mistral-এর ফ্রি ৭-৮B মডেল) প্রম্পটের জটিল, বহু-ধাপের নির্দেশনা
+   (উপ-প্রশ্ন split করো, watermark বাদ দাও) নির্ভরযোগ্যভাবে মানতে পারে না — এটা
+   প্রম্পট আরও ভালো লিখে সমাধানযোগ্য না, তাই এখানে JS-এই deterministic (regex-
+   ভিত্তিক, কোনো AI লাগে না) দুটো ফিল্টার বসানো হলো — যেই provider-ই উত্তর দিক
+   না কেন, এই ফিল্টার দুটো সবসময় একইভাবে কাজ করবে। ── */
+
+// ফোনের ওয়াটারমার্ক/ক্যামেরা-অ্যাপ সিগনেচার (যেমন "Vivo Y56 Hanif Sarder", তারিখ-সময় স্ট্যাম্প)
+// ভুলবশত উত্তর/প্রশ্ন হিসেবে ঢুকে গেলে সেই entry-টাই বাদ দেওয়ার জন্য
+const DEVICE_BRAND_RE=/\b(vivo|oppo|realme|redmi|xiaomi|samsung|iphone|poco|itel|symphony|walton|tecno|infinix|huawei|honor|oneplus|nokia|asus|lenovo|motorola)\b/i;
+function isNoiseWatermark(text){
+  const t=(text||"").trim();
+  if(!t)return false;
+  const words=t.split(/\s+/);
+  if(DEVICE_BRAND_RE.test(t)&&words.length<=6)return true; // ছোট, ফোন-ব্র্যান্ড-উল্লেখ লাইন — নিশ্চিতভাবে ওয়াটারমার্ক
+  if(/\b(19|20)\d{2}\b/.test(t)&&/\d{1,2}[:.]\d{2}/.test(t)&&words.length<=8)return true; // তারিখ+সময় স্ট্যাম্প
+  return false;
+}
+
+// উত্তরের ভেতর ক./খ./গ./ঘ./ঙ. অথবা a./b./c./d./e. দিয়ে চিহ্নিত একাধিক লাইন থাকলে
+// (একাধিক উপ-প্রশ্নের উত্তর AI ভুলবশত এক জায়গায় বান্ডিল করে ফেলেছে), সেটাকে
+// এখানে জোর করে আলাদা আলাদা {q,a} entry-তে ভেঙে দেওয়া হয় — AI নিজে split
+// করুক বা না করুক, এই ধাপ সবসময় প্রয়োগ হবে।
+const BULLET_LINE_RE=/^\s*([কখগঘঙচছজঝঞটঠডঢণa-hA-H])[.।)]\s*(.+)$/;
+function splitBundledAnswer(q,a){
+  const lines=(a||"").split(/\n+/).map(s=>s.trim()).filter(Boolean);
+  if(lines.length<2)return[{q,a}];
+  const matches=lines.map(l=>l.match(BULLET_LINE_RE));
+  const matchCount=matches.filter(Boolean).length;
+  // অন্তত ২টা লাইন এবং বেশিরভাগ লাইনই বুলেট-প্যাটার্নে না মিললে অক্ষত রাখো (ভুলভাবে ভেঙে ফেলার ঝুঁকি এড়াতে)
+  if(matchCount<2||matchCount<lines.length*0.6)return[{q,a}];
+  const baseQ=(q||"").replace(/[:।]\s*$/,"").trim();
+  return lines.map((l,i)=>{
+    const m=matches[i];
+    const content=m?m[2].trim():l;
+    // "ক. বিদ্যালয় = বিদ্যা + আলয়" এর মতো হলে "=/ — / :" দিয়ে ভেঙে টার্গেট শব্দটাকেই প্রশ্নে বসাই
+    const sep=content.match(/^(.{1,40}?)\s*[=:—–]\s*(.+)$/);
+    if(sep) return{q:`${baseQ}: ${sep[1].trim()}`,a:sep[2].trim()};
+    return{q:`${baseQ} (${m?m[1]:i+1})`,a:content};
+  });
+}
+/* ── উপরের দুটো ফিল্টার প্রয়োগ করে raw AI entries থেকে চূড়ান্ত, পরিষ্কার entries বানায় ── */
+function sanitizeEntries(rawEntries){
+  const out=[];
+  (rawEntries||[]).forEach(e=>{
+    if(isNoiseWatermark(e.q)||isNoiseWatermark(e.a))return; // ওয়াটারমার্ক-দূষিত entry বাদ
+    splitBundledAnswer(e.q,e.a).forEach(s=>{
+      if(s.q&&s.a&&!isNoiseWatermark(s.a)) out.push(s);
+    });
+  });
+  return out;
+}
+
+
 
 /* ── AI prompt: header থেকে Designation/Institution + Written প্রশ্ন-উত্তর একসাথে বের করে JSON দেয় ── */
 function buildDetectPrompt(ocrText){
@@ -416,7 +472,9 @@ function MultiSubjectImportPage({push}){
         const grp=groups[gid];
         if(!grp.subject&&curSubject) grp.subject=curSubject;
         if(!grp.subtopic&&curSubtopic) grp.subtopic=curSubtopic;
-        detected.entries.forEach(e=>grp.rows.push({q:e.q,correct:e.a}));
+        // ── AI যতই বলুক, এখানে আবার নিশ্চিত করে নিচ্ছি: বান্ডিল উত্তর split + watermark noise বাদ ──
+        const cleanEntries=sanitizeEntries(detected.entries);
+        cleanEntries.forEach(e=>grp.rows.push({q:e.q,correct:e.a}));
         if(detected.archiveId&&!grp.archiveIds.includes(detected.archiveId)) grp.archiveIds.push(detected.archiveId);
         const pageNo=imgIndexOf[unit.imgId];
         if(pageNo&&!grp.pages.includes(pageNo)) grp.pages.push(pageNo);
@@ -424,7 +482,7 @@ function MultiSubjectImportPage({push}){
         setImages(p=>p.map(x=>x.id===unit.imgId?{
           ...x,status:"done",
           designation:x.designation||curSubject, institution:x.institution||curSubtopic,
-          entryCount:(x.entryCount||0)+detected.entries.length,
+          entryCount:(x.entryCount||0)+cleanEntries.length,
           rawOcr:(x.rawOcr?x.rawOcr+"\n---\n":"")+(detected.raw||"(OCR টেক্সট খালি এসেছে — ছবিতে লেখা স্পষ্ট পড়া যায়নি)"),
         }:x));
       }catch(e){
