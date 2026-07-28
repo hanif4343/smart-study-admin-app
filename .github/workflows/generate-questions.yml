@@ -51,8 +51,8 @@ jobs:
 
       - name: Run question generator
         env:
-          FIREBASE_URL: ${{ secrets.FIREBASE_URL }}
-          FIREBASE_SECRET: ${{ secrets.FIREBASE_SECRET }}
+          GAS_URL: ${{ secrets.VITE_GAS_URL }}
+          GAS_SECRET: ${{ secrets.GAS_SECRET }}
           GROQ_KEYS: ${{ secrets.GROQ_KEYS }}
           MISTRAL_KEYS: ${{ secrets.MISTRAL_KEYS }}
           GEMINI_KEYS: ${{ secrets.GEMINI_KEYS }}
@@ -63,6 +63,7 @@ jobs:
           DEEPSEEK_KEYS: ${{ secrets.DEEPSEEK_KEYS }}
           DELAY_MS: "1500"
           MAX_RUNTIME_MIN: "330"
+          SAVE_CHUNK_SIZE: "50"
           TARGET_SHEET: ${{ github.event.inputs.target_sheet }}
           QUESTION_TYPE: ${{ github.event.inputs.question_type }}
           SUBJECT: ${{ github.event.inputs.subject }}

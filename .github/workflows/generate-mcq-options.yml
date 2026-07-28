@@ -1,15 +1,13 @@
-name: Generate Explanations
+name: Generate MCQ Options
 
 on:
-  # ⚠️ Auto-schedule বন্ধ করা হলো (২০২৬-০৭-২১) — প্রতি ৩ ঘণ্টায় পুরো Quiz/QBank/Study
-  # node ডাউনলোড হয়ে RTDB no-cost limit শেষ করে দিচ্ছিল, এমনকি সব explanation
-  # যোগ হয়ে যাওয়ার পরও। দরকার হলে নিচের workflow_dispatch দিয়ে ম্যানুয়ালি চালাও।
-  # আবার schedule চালু করতে চাইলে নিচের লাইন দুটো uncomment করো, কিন্তু
-  # আগে স্ক্রিপ্ট fix করে নাও (পুরো node fetch না করে শুধু missing-explanation
-  # রেকর্ড টার্গেট করে আনা উচিত)।
+  # generate-explanations.yml-এর মতোই — auto-schedule বন্ধ রাখা হলো যাতে RTDB
+  # no-cost limit শেষ না হয়ে যায়। দরকার হলে Actions ট্যাব থেকে ম্যানুয়ালি চালাও,
+  # ফিল্টার বসিয়েও চালানো যাবে। ভবিষ্যতে schedule চালু করতে চাইলে নিচের দুই লাইন
+  # uncomment করো।
   # schedule:
   #   - cron: "0 */3 * * *"
-  workflow_dispatch: # GitHub-এর Actions ট্যাব থেকে "Run workflow" চেপে ম্যানুয়ালি চালানোও যাবে, ফিল্টার বসিয়েও চালানো যাবে
+  workflow_dispatch: # GitHub-এর Actions ট্যাব থেকে "Run workflow" চেপে ম্যানুয়ালি চালানো যাবে
     inputs:
       filter_audience:
         description: "Audience Tag(s), কমা দিয়ে একাধিক দেওয়া যায় (খালি রাখলে সব)"
@@ -38,11 +36,11 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Run explanation generator
+      - name: Run MCQ option generator
         env:
           GAS_URL: ${{ secrets.VITE_GAS_URL }}
           GAS_SECRET: ${{ secrets.GAS_SECRET }}
-          SHEETS: "Quiz,QBank,Study"
+          SHEETS: "Quiz,QBank"
           GROQ_KEYS: ${{ secrets.GROQ_KEYS }}
           MISTRAL_KEYS: ${{ secrets.MISTRAL_KEYS }}
           GEMINI_KEYS: ${{ secrets.GEMINI_KEYS }}
@@ -56,5 +54,4 @@ jobs:
           FILTER_AUDIENCE: ${{ github.event.inputs.filter_audience }}
           FILTER_SUBJECT: ${{ github.event.inputs.filter_subject }}
           FILTER_SUBTOPIC: ${{ github.event.inputs.filter_subtopic }}
-        run: node scripts/generate-explanations.mjs
-
+        run: node scripts/generate-mcq-options.mjs
