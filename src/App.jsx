@@ -38,12 +38,14 @@ import { AIImportPage } from "./pages/AIImportPage.jsx";
 import { MultiSubjectImportPage } from "./pages/MultiSubjectImportPage.jsx";
 import { ArchivePage } from "./pages/ArchivePage.jsx";
 import { TypingUploaderPage } from "./pages/TypingUploaderPage.jsx";
+import { SingleQuestionEntryPage } from "./pages/SingleQuestionEntryPage.jsx";
 
 /* Uploader hub-এর ক্যাটাগরি/সাব-অপশন গঠন — module-level রাখা হলো যাতে রেন্ডার আর sync effect দুই জায়গাতেই
    একই স্থিতিশীল রেফারেন্স ব্যবহার করা যায় (প্রতি রেন্ডারে নতুন array তৈরি না হয়) */
 const UPLOADER_CATS=[
   {key:"text",label:"📝 Text Upload",items:[
     {page:"bulkupload",label:"📝 Bulk Upload"},
+    {page:"singleentry",label:"✍️ Single প্রশ্ন",color:"#6366f1"},
     {page:"typing",label:"⌨️ Typing"},
   ]},
   {key:"aijob",label:"🚀 AI Job",items:[
@@ -422,7 +424,7 @@ export default function App(){
       {/* Uploader hub — Text Upload / AI Job / OCR Upload / Archive: প্রথমে শুধু এই ৪টা ক্যাটাগরির
           একটাই লাইন দেখা যায় (accordion), কোনোটায় ট্যাপ করলে শুধু সেটার ভিতরের অপশনগুলো খোলে —
           বাকিগুলো হাইড থাকে। একসাথে সর্বোচ্চ একটাই ক্যাটাগরি খোলা থাকে। */}
-      <div style={{display:(page==="bulkupload"||page==="joblauncher"||page==="qbankconv"||page==="questiongen"||page==="aiimport"||page==="multiimport"||page==="archive"||page==="typing")?"block":"none"}}>
+      <div style={{display:(page==="bulkupload"||page==="singleentry"||page==="joblauncher"||page==="qbankconv"||page==="questiongen"||page==="aiimport"||page==="multiimport"||page==="archive"||page==="typing")?"block":"none"}}>
         <div className="page" style={{paddingTop:0}}>
           <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
             {(()=>{
@@ -463,6 +465,7 @@ export default function App(){
             })()}
           </div>
           <div style={{display:page==="bulkupload" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill(null)}/></div>
+          <div style={{display:page==="singleentry"?"block":"none"}}><SingleQuestionEntryPage push={push}/></div>
           <div style={{display:page==="joblauncher"?"block":"none"}}><JobLauncherTab push={push} tick={tick}/></div>
           <div style={{display:page==="qbankconv"?"block":"none"}}><QBankConverterTab push={push} tick={tick}/></div>
           <div style={{display:page==="questiongen"?"block":"none"}}><QuestionGenTab push={push} tick={tick}/></div>
