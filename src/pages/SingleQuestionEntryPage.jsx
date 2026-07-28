@@ -44,15 +44,14 @@ function shuffle4(arr){
   return a;
 }
 
-/* ── ImgBB API key — রিপোর secret থেকে বিল্ড-টাইমে ইনজেক্ট হয় (Vite env var)।
-   GitHub secret-এর নাম VITE_IMGBB_API_KEY না হলে এখানের key-টা মিলিয়ে নাও। ── */
+/* ── ImgBB API key — রিপোর secret থেকে বিল্ড-টাইমে ইনজেক্ট হয় (Vite env var)। ── */
 const IMGBB_API_KEY = import.meta.env.VITE_IMGBB_API_KEY || "";
 
 /* ── ছবি ImgBB-তে আপলোড করে সরাসরি লিংক (url) রিটার্ন করে ── */
 async function uploadImageToImgbb(file, apiKey){
   const fd = new FormData();
   fd.append("image", file);
-  const res = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(apiKey)}`, {
+  const res = await fetch(`[https://api.imgbb.com/1/upload?key=$](https://api.imgbb.com/1/upload?key=$){encodeURIComponent(apiKey)}`, {
     method: "POST",
     body: fd,
   });
@@ -69,7 +68,7 @@ function SingleQuestionEntryPage({push}){
   const[gasSecret,setGasSecretState]=useState(loadSharedGasSecret());
   const setGasSecret=v=>{setGasSecretState(v);saveSharedGasSecret(v);};
 
-  // ── এই ফিল্ডগুলো একবার সেট হলে সেশনজুড়ে থাকে (একই বই/অধ্যায় থেকে অনেক প্রশ্ন টাইপ হয় বলে) ──
+  // ── এই ফিল্ডগুলো একবার সেট হলে সেশনজুড়ে থাকে ──
   const[subject,setSubject]=useState("");
   const[subtopic,setSubtopic]=useState("");
   const[audienceTags,setAudienceTags]=useState("");
@@ -87,22 +86,39 @@ function SingleQuestionEntryPage({push}){
   const[imgUploading,setImgUploading]=useState(false); // ছবি → imgbb আপলোড হচ্ছে কিনা
 
   const qRef=useRef(null);
+  const correctRef=useRef(null);
+  const explRef=useRef(null);
+  const activeInputRef=useRef("q"); // 'q' | 'correct' | 'expl' track করার জন্য
+
   const imgInputRef=useRef(null); // লুকানো <input type="file">, ছবি সিলেক্ট করার জন্য
   const isStudy=targetMode==="Study";
   const isMCQ=!isStudy&&qtype==="MCQ";
 
   useEffect(()=>{ qRef.current?.focus(); },[]);
 
-  /* ── প্রশ্ন-বক্সের কার্সর যেখানে ছিল ঠিক সেখানেই text বসিয়ে দেয় (আগের সিলেকশন replace করে) ── */
+  /* ── কার্সর যেখানে আছে ঠিক সেখানে টেক্সট ইনসার্ট করার গতিশীল ফাংশন ── */
   const insertAtCursor=useCallback((text)=>{
-    const el=qRef.current;
-    if(!el){ setQuestion(q=>q+text); return; }
+    let el = qRef.current;
+    let target = activeInputRef.current;
+
+    if (target === "correct" && correctRef.current) el = correctRef.current;
+    else if (target === "expl" && explRef.current) el = explRef.current;
+
+    if(!el) {
+      setQuestion(q=>q+text);
+      return;
+    }
+
     const start=el.selectionStart??el.value.length;
     const end=el.selectionEnd??el.value.length;
     const before=el.value.slice(0,start);
     const after=el.value.slice(end);
     const next=before+text+after;
-    setQuestion(next);
+
+    if (target === "correct") setCorrect(next);
+    else if (target === "expl") setExplanation(next);
+    else setQuestion(next);
+
     requestAnimationFrame(()=>{
       el.focus();
       const pos=start+text.length;
@@ -110,7 +126,7 @@ function SingleQuestionEntryPage({push}){
     });
   },[]);
 
-  /* ── 🖼️ ইমেজ আইকনে ট্যাপ → ফাইল পিকার খোলে → imgbb-তে আপলোড → লিংক কার্সরে বসে যায় ── */
+  /* ── 🖼️ ইমেজ আইকনে ট্যাপ → ফাইল পিকার খোলে ── */
   const pickImage=useCallback(()=>{ imgInputRef.current?.click(); },[]);
 
   const onImageSelected=useCallback(async(e)=>{
@@ -124,7 +140,7 @@ function SingleQuestionEntryPage({push}){
     try{
       const urls=await Promise.all(files.map(f=>uploadImageToImgbb(f,IMGBB_API_KEY)));
       insertAtCursor(urls.join(", "));
-      push("success",`🖼️ ${urls.length}টা ছবি আপলোড হয়েছে`,"লিংক প্রশ্নে বসানো হয়েছে");
+      push("success",`🖼️ ${urls.length}টা ছবি আপলোড হয়েছে`,"লিংক কার্সরে বসানো হয়েছে");
     }catch(err){
       push("error","ছবি আপলোড ব্যর্থ",err.message);
     }
@@ -142,7 +158,7 @@ function SingleQuestionEntryPage({push}){
       if(isMCQ){
         const distractors=(parsed.options||[]).slice(0,3);
         while(distractors.length<3) distractors.push("");
-        const [a,b,c,d]=shuffle4([correct,...distractors]); // সঠিক উত্তরটা এলোমেলো অবস্থানে বসে, সবসময় একই জায়গায় না
+        const [a,b,c,d]=shuffle4([correct,...distractors]); 
         setOpt1(a);setOpt2(b);setOpt3(c);setOpt4(d);
       }
       setExplanation(parsed.explanation||"");
@@ -155,11 +171,12 @@ function SingleQuestionEntryPage({push}){
     setQuestion("");setCorrect("");
     setOpt1("");setOpt2("");setOpt3("");setOpt4("");
     setExplanation("");
+    activeInputRef.current = "q";
     setSessionCount(c=>c+1);
     requestAnimationFrame(()=>qRef.current?.focus());
   };
 
-  /* ── Ctrl+S দিয়ে সাবমিট (Subject/Sub-topic ফাঁকা থাকলে কখনোই সাবমিট হবে না — OCR পেজের মতোই নিয়ম) ── */
+  /* ── Ctrl+S দিয়ে সাবমিট ── */
   const submit=useCallback(async()=>{
     if(saving||generating)return;
     if(!question.trim()){ push("warn","প্রশ্ন লিখো","");qRef.current?.focus();return; }
@@ -172,7 +189,6 @@ function SingleQuestionEntryPage({push}){
     const tagsArr=audienceTags.split(",").map(s=>s.trim()).filter(Boolean);
     const effQtype=isStudy?"Study":(isMCQ?"MCQ":"Written");
     try{
-      // ── এই পেজ এখন শুধুই Google Sheet-এ সেভ করে (GAS দিয়ে) — Firebase একদম ছোঁয়া হয় না ──
       const row=buildSheetRow({item,subject:subject.trim(),subtopic:subtopic.trim(),qtype:effQtype,audienceTags:tagsArr,mainQpaper:""});
       const res=await saveRowsToSheet({rows:[row],targetTab:targetMode,gasSecret,push});
       if(res.added>0){ push("success","✅ যোগ হয়েছে!",`এই সেশনে মোট ${sessionCount+1}টি`); resetForNext(); }
@@ -181,7 +197,7 @@ function SingleQuestionEntryPage({push}){
     setSaving(false);
   },[saving,generating,question,correct,subject,subtopic,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,sessionCount,push]);
 
-  /* ── গ্লোবাল Ctrl+S ক্যাচার — যেকোনো টেক্সটবক্সে ফোকাস থাকলেও কাজ করবে, ব্রাউজারের নিজের Save ডায়ালগ আটকাবে ── */
+  /* ── গ্লোবাল Ctrl+S ক্যাচার ── */
   useEffect(()=>{
     const onKey=e=>{
       if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){ e.preventDefault(); submit(); }
@@ -197,7 +213,7 @@ function SingleQuestionEntryPage({push}){
         <div style={{fontSize:11,color:C.green,fontWeight:700}}>এই সেশনে যোগ হয়েছে: {sessionCount}টি</div>
       </div>
 
-      {/* Target Sheet + Question Type — সেশনজুড়ে অক্ষত থাকে */}
+      {/* Target Sheet + Question Type */}
       <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:10}}>
         <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:8}}>🎯 Target Sheet</div>
         <div style={{display:"flex",gap:6,marginBottom:isStudy?0:10}}>
@@ -217,8 +233,6 @@ function SingleQuestionEntryPage({push}){
         )}
       </div>
 
-      {/* এই পেজ থেকে এখন শুধু Google Sheet-এ সেভ হয় — value চিরস্থায়ীভাবে "sheet", onChange no-op যাতে
-          Firebase অপশন বেছে নেওয়া না যায়। GAS Secret Key এডিট করার UI-টা এখান থেকেই থাকছে। */}
       <SaveLocationPicker value="sheet" onChange={()=>{}} gasSecret={gasSecret} onGasSecretChange={setGasSecret} compact/>
 
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
@@ -238,23 +252,29 @@ function SingleQuestionEntryPage({push}){
 
       <div style={{height:1,background:C.border,margin:"12px 0"}}/>
 
-      {/* ── দ্রুত টাইপিং লুপ: প্রশ্ন → উত্তর → (MCQ হলে অপশন) → ব্যাখ্যা → Ctrl+S ── */}
+      {/* ── প্রশ্ন বক্স ── */}
       <div className="fld">
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <label style={{margin:0}}>❓ প্রশ্ন</label>
-          <button type="button" onClick={pickImage} disabled={imgUploading} title="একটা বা একাধিক ছবি বেছে নাও (imgbb লিংকগুলো কমা দিয়ে কার্সরে বসবে)"
+          <button type="button" onClick={pickImage} disabled={imgUploading} title="একটা বা একাধিক ছবি বেছে নাও (কার্সরে ছবি লিংক বসবে)"
             style={{background:"transparent",border:"none",cursor:imgUploading?"default":"pointer",
               fontSize:18,lineHeight:1,padding:"2px 4px",opacity:imgUploading?.5:1}}>
             {imgUploading?"⏳":"🖼️"}
           </button>
           <input ref={imgInputRef} type="file" accept="image/*" multiple onChange={onImageSelected} style={{display:"none"}}/>
         </div>
-        <textarea ref={qRef} className="ta" value={question} onChange={e=>setQuestion(e.target.value)}
+        <textarea ref={qRef} className="ta" value={question} 
+          onFocus={()=>activeInputRef.current="q"}
+          onChange={e=>setQuestion(e.target.value)}
           placeholder="বই দেখে প্রশ্ন টাইপ করো..." style={{minHeight:80}} tabIndex={1}/>
       </div>
+
+      {/* ── উত্তর বক্স ── */}
       <div className="fld">
         <label>{isMCQ?"✅ সঠিক উত্তর":"✅ উত্তর"}</label>
-        <textarea className="ta" value={correct} onChange={e=>setCorrect(e.target.value)}
+        <textarea ref={correctRef} className="ta" value={correct} 
+          onFocus={()=>activeInputRef.current="correct"}
+          onChange={e=>setCorrect(e.target.value)}
           placeholder={isMCQ?"সঠিক উত্তরের টেক্সট...":"উত্তর লিখো..."} style={{minHeight:60}} tabIndex={2}/>
       </div>
 
@@ -269,9 +289,12 @@ function SingleQuestionEntryPage({push}){
         </div>
       )}
 
+      {/* ── ব্যাখ্যা বক্স ── */}
       <div className="fld">
         <label>📖 ব্যাখ্যা (ঐচ্ছিক)</label>
-        <textarea className="ta" value={explanation} onChange={e=>setExplanation(e.target.value)}
+        <textarea ref={explRef} className="ta" value={explanation} 
+          onFocus={()=>activeInputRef.current="expl"}
+          onChange={e=>setExplanation(e.target.value)}
           placeholder="ব্যাখ্যা লিখো, বা ✨ Generate চাপো..." style={{minHeight:60}} tabIndex={7}/>
       </div>
 
