@@ -44,6 +44,25 @@ function shuffle4(arr){
   return a;
 }
 
+/* ── ImgBB API key — রিপোর secret থেকে বিল্ড-টাইমে ইনজেক্ট হয় (Vite env var)।
+   GitHub secret-এর নাম VITE_IMGBB_API_KEY না হলে এখানের key-টা মিলিয়ে নাও। ── */
+const IMGBB_API_KEY = import.meta.env.VITE_IMGBB_API_KEY || "";
+
+/* ── ছবি ImgBB-তে আপলোড করে সরাসরি লিংক (url) রিটার্ন করে ── */
+async function uploadImageToImgbb(file, apiKey){
+  const fd = new FormData();
+  fd.append("image", file);
+  const res = await fetch(`https://api.imgbb.com/1/upload?key=${encodeURIComponent(apiKey)}`, {
+    method: "POST",
+    body: fd,
+  });
+  const data = await res.json().catch(()=>null);
+  if(!res.ok || !data || !data.success) {
+    throw new Error(data?.error?.message || "ImgBB আপলোড ব্যর্থ");
+  }
+  return data.data.url;
+}
+
 function SingleQuestionEntryPage({push}){
   const[targetMode,setTargetMode]=useState("Quiz"); // Quiz | QBank | Study
   const[qtype,setQtype]=useState("MCQ"); // MCQ | Written — Study হলে অপ্রাসঙ্গিক
@@ -65,12 +84,52 @@ function SingleQuestionEntryPage({push}){
   const[generating,setGenerating]=useState(false);
   const[saving,setSaving]=useState(false);
   const[sessionCount,setSessionCount]=useState(0);
+  const[imgUploading,setImgUploading]=useState(false); // ছবি → imgbb আপলোড হচ্ছে কিনা
 
   const qRef=useRef(null);
+  const imgInputRef=useRef(null); // লুকানো <input type="file">, ছবি সিলেক্ট করার জন্য
   const isStudy=targetMode==="Study";
   const isMCQ=!isStudy&&qtype==="MCQ";
 
   useEffect(()=>{ qRef.current?.focus(); },[]);
+
+  /* ── প্রশ্ন-বক্সের কার্সর যেখানে ছিল ঠিক সেখানেই text বসিয়ে দেয় (আগের সিলেকশন replace করে) ── */
+  const insertAtCursor=useCallback((text)=>{
+    const el=qRef.current;
+    if(!el){ setQuestion(q=>q+text); return; }
+    const start=el.selectionStart??el.value.length;
+    const end=el.selectionEnd??el.value.length;
+    const before=el.value.slice(0,start);
+    const after=el.value.slice(end);
+    const next=before+text+after;
+    setQuestion(next);
+    requestAnimationFrame(()=>{
+      el.focus();
+      const pos=start+text.length;
+      el.setSelectionRange(pos,pos);
+    });
+  },[]);
+
+  /* ── 🖼️ ইমেজ আইকনে ট্যাপ → ফাইল পিকার খোলে → imgbb-তে আপলোড → লিংক কার্সরে বসে যায় ── */
+  const pickImage=useCallback(()=>{ imgInputRef.current?.click(); },[]);
+
+  const onImageSelected=useCallback(async(e)=>{
+    const files=Array.from(e.target.files||[]);
+    e.target.value=""; // একই ছবি আবার সিলেক্ট করলেও onChange ফায়ার হবে
+    if(!files.length) return;
+
+    if(!IMGBB_API_KEY){ push("error","ImgBB key পাওয়া যায়নি","VITE_IMGBB_API_KEY env var সেট আছে কিনা চেক করো"); return; }
+
+    setImgUploading(true);
+    try{
+      const urls=await Promise.all(files.map(f=>uploadImageToImgbb(f,IMGBB_API_KEY)));
+      insertAtCursor(urls.join(", "));
+      push("success",`🖼️ ${urls.length}টা ছবি আপলোড হয়েছে`,"লিংক প্রশ্নে বসানো হয়েছে");
+    }catch(err){
+      push("error","ছবি আপলোড ব্যর্থ",err.message);
+    }
+    setImgUploading(false);
+  },[insertAtCursor,push]);
 
   /* ── ✨ AI দিয়ে অপশন/ব্যাখ্যা জেনারেট ── */
   const generate=useCallback(async()=>{
@@ -181,7 +240,15 @@ function SingleQuestionEntryPage({push}){
 
       {/* ── দ্রুত টাইপিং লুপ: প্রশ্ন → উত্তর → (MCQ হলে অপশন) → ব্যাখ্যা → Ctrl+S ── */}
       <div className="fld">
-        <label>❓ প্রশ্ন</label>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <label style={{margin:0}}>❓ প্রশ্ন</label>
+          <button type="button" onClick={pickImage} disabled={imgUploading} title="একটা বা একাধিক ছবি বেছে নাও (imgbb লিংকগুলো কমা দিয়ে কার্সরে বসবে)"
+            style={{background:"transparent",border:"none",cursor:imgUploading?"default":"pointer",
+              fontSize:18,lineHeight:1,padding:"2px 4px",opacity:imgUploading?.5:1}}>
+            {imgUploading?"⏳":"🖼️"}
+          </button>
+          <input ref={imgInputRef} type="file" accept="image/*" multiple onChange={onImageSelected} style={{display:"none"}}/>
+        </div>
         <textarea ref={qRef} className="ta" value={question} onChange={e=>setQuestion(e.target.value)}
           placeholder="বই দেখে প্রশ্ন টাইপ করো..." style={{minHeight:80}} tabIndex={1}/>
       </div>
