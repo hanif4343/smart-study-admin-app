@@ -2,14 +2,18 @@
  * generate-questions.mjs
  * ------------------------------------------------------------------
  * নির্দিষ্ট Subject/Sub-topic নিয়ে AI দিয়ে নতুন প্রশ্ন (MCQ/Written/Study)
- * তৈরি করে সরাসরি Firebase-এ push করে — ঠিক admin app-এর "বাল্ক আপলোড"
- * যে ফরম্যাটে রেকর্ড বানায়, সেই একই ফরম্যাটে।
+ * তৈরি করে GAS-এর bulk_save_rows endpoint দিয়ে সরাসরি Google Sheet-এ
+ * লিখে দেয় (qbank-to-quiz.mjs যেভাবে Quiz-এ লেখে ঠিক সেভাবেই)।
+ *
+ * ⚠️ সম্পূর্ণভাবে Firebase থেকে বিচ্ছিন্ন — এই স্ক্রিপ্ট আর কখনো Firebase
+ * RTDB ছোঁয় না, কোনো FIREBASE_URL/FIREBASE_SECRET লাগে না, GAS-কেও
+ * কখনো sync/bulkSyncDone কল করা হয় না। শুধু Google Sheet-এ লেখা হয়।
  *
  * ⚠️ AI নিজের জ্ঞান থেকে প্রশ্ন বানায় (কোনো সোর্স টেক্সট ছাড়া) — তাই ভুল
  * হওয়ার সম্ভাবনা থাকে। লাইভ করার আগে Browse ট্যাবে চেক করে নেওয়া ভালো।
  * ------------------------------------------------------------------
  * প্রয়োজনীয় ENV:
- *   FIREBASE_URL, FIREBASE_SECRET   — আগের মতোই
+ *   GAS_URL, GAS_SECRET  - qbank-to-quiz.mjs-এর মতোই (VITE_GAS_URL / GAS_SECRET)
  *   GROQ_KEYS, MISTRAL_KEYS, GEMINI_KEYS, OPENROUTER_KEYS, ...  — আগের মতোই (rotation)
  *   TARGET_SHEET      - "Quiz" | "QBank" | "Study"
  *   QUESTION_TYPE     - "MCQ" | "Written"  (Study সিটে সবসময় Study টাইপ হয়, এটা ইগনোর হবে)
@@ -18,15 +22,17 @@
  *   AUDIENCE_TAGS     - কমা-দেওয়া ট্যাগ (যেমন "Masters 1,Job")
  *   COUNT             - মোট কতগুলো প্রশ্ন বানাতে হবে
  *   BATCH_SIZE        - প্রতি AI কলে কতগুলো চাইবে (ডিফল্ট 6, বেশি দিলে JSON ভাঙার ঝুঁকি বাড়ে)
+ *   SAVE_CHUNK_SIZE   - GAS-এ একবারে কতগুলো রো পাঠানো হবে (ডিফল্ট 50)
  *   DELAY_MS, MAX_RUNTIME_MIN — আগের মতোই
  * ------------------------------------------------------------------
  */
 
-const FIREBASE_URL = (process.env.FIREBASE_URL || "").replace(/\/+$/, "");
-const FIREBASE_SECRET = process.env.FIREBASE_SECRET || "";
+const GAS_URL = process.env.GAS_URL || "";
+const GAS_SECRET = process.env.GAS_SECRET || "";
 const DELAY_MS = parseInt(process.env.DELAY_MS || "1500", 10);
 const MAX_RUNTIME_MS = (parseInt(process.env.MAX_RUNTIME_MIN || "330", 10)) * 60 * 1000;
 const START_TIME = Date.now();
+const SAVE_CHUNK_SIZE = parseInt(process.env.SAVE_CHUNK_SIZE || "50", 10);
 
 const TARGET_SHEET = (process.env.TARGET_SHEET || "Quiz").trim();
 const RAW_QTYPE = (process.env.QUESTION_TYPE || "MCQ").trim();
@@ -37,8 +43,8 @@ const AUDIENCE_TAGS = (process.env.AUDIENCE_TAGS || "").trim();
 const COUNT = Math.max(1, parseInt(process.env.COUNT || "10", 10));
 const BATCH_SIZE = Math.max(1, Math.min(10, parseInt(process.env.BATCH_SIZE || "6", 10)));
 
-if (!FIREBASE_URL || !FIREBASE_SECRET) {
-  console.error("❌ FIREBASE_URL / FIREBASE_SECRET সেট করা নেই।");
+if (!GAS_URL || !GAS_SECRET) {
+  console.error("❌ GAS_URL / GAS_SECRET সেট করা নেই। GitHub Secrets চেক করো (VITE_GAS_URL / GAS_SECRET)।");
   process.exit(1);
 }
 if (!SUBJECT) {
@@ -187,11 +193,13 @@ function validateItem(item) {
   return { ok: true, q, ans, explanation: (item.explanation || "").toString().trim() };
 }
 
-function buildRecord(v, ts, id) {
+// ── GAS/Sheet-এ id কলাম GAS নিজেই বসিয়ে দেয় (qbank-to-quiz.mjs-এর pending রো-গুলোর
+//    মতোই id ছাড়া পাঠানো হয়), তাই এখানে id প্যারামিটার লাগে না ──
+function buildRecord(v, ts) {
   const tagStr = AUDIENCE_TAGS;
   if (TARGET_SHEET === "Quiz") {
     return {
-      id, question: v.q,
+      question: v.q,
       option1: v.o1 || "", option2: v.o2 || "", option3: v.o3 || "", option4: v.o4 || "",
       correct: v.correct || v.ans || "",
       subject: SUBJECT, sub_topic: SUBTOPIC,
@@ -203,7 +211,7 @@ function buildRecord(v, ts, id) {
   }
   if (TARGET_SHEET === "QBank") {
     return {
-      id, question: v.q,
+      question: v.q,
       option1: v.o1 || "", option2: v.o2 || "", option3: v.o3 || "", option4: v.o4 || "",
       correct: v.correct || v.ans || "",
       subject: SUBJECT, sub_topic: SUBTOPIC, topic: "",
@@ -214,7 +222,7 @@ function buildRecord(v, ts, id) {
   }
   // Study
   return {
-    id, question: v.q, correct: v.ans || "",
+    question: v.q, correct: v.ans || "",
     subject: SUBJECT, sub_topic: SUBTOPIC,
     explanation: v.explanation || "",
     "Question Type": "Study",
@@ -222,23 +230,18 @@ function buildRecord(v, ts, id) {
   };
 }
 
-async function fbPush(path, data) {
-  const r = await fetch(`${FIREBASE_URL}/${path}.json?auth=${FIREBASE_SECRET}`, {
+// ── GAS-এর bulk_save_rows endpoint দিয়ে সরাসরি Google Sheet-এ ব্যাচ সেভ —
+//    qbank-to-quiz.mjs-এর gasBulkSave-এর হুবহু কপি, কিন্তু targetTab ডাইনামিক
+//    (TARGET_SHEET) কারণ এখানে Quiz/QBank/Study যেকোনোটাতেই লেখা হতে পারে।
+//    sync ফ্ল্যাগ পাঠানো হয় না, তাই GAS কখনো Firebase-এ sync করে না ──
+async function gasBulkSave(rows) {
+  const resp = await fetch(GAS_URL, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
+    headers: { "Content-Type": "text/plain" },
+    body: JSON.stringify({ secret: GAS_SECRET, type: "bulk_save_rows", targetTab: TARGET_SHEET, rows }),
   });
-  if (!r.ok) throw new Error(`Firebase push ব্যর্থ: HTTP ${r.status}`);
-  return r.json(); // {name: pushKey}
-}
-async function fbSet(path, data) {
-  const r = await fetch(`${FIREBASE_URL}/${path}.json?auth=${FIREBASE_SECRET}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-  if (!r.ok) throw new Error(`Firebase set ব্যর্থ: HTTP ${r.status}`);
-  return r.json();
+  const data = await resp.json().catch(() => ({}));
+  return data;
 }
 
 function nowTs() {
@@ -255,9 +258,22 @@ async function main() {
   console.log(`🔑 মোট ${pool.length} টা key রেডি (providers: ${[...new Set(pool.map(p => p.id))].join(", ")})`);
   console.log(`🎯 টার্গেট: ${TARGET_SHEET} / ${QUESTION_TYPE} — বিষয়: "${SUBJECT}" / উপ-বিষয়: "${SUBTOPIC}" — মোট ${COUNT}টা প্রশ্ন`);
 
-  let done = 0, failedItems = 0, cursor = 0;
+  let done = 0, failedItems = 0, cursor = 0, saveFailed = 0;
   const maxAttempts = Math.ceil(COUNT / BATCH_SIZE) * 3 + 3; // অতিরিক্ত রিট্রাই বাফার
   let attempts = 0;
+  let pending = []; // GAS-এ পাঠানোর জন্য জমা হওয়া রো — SAVE_CHUNK_SIZE ছুঁলেই ফ্লাশ হবে
+
+  async function flush() {
+    if (!pending.length) return;
+    const chunk = pending; pending = [];
+    const data = await gasBulkSave(chunk);
+    if (data.result === "error") {
+      saveFailed += chunk.length;
+      console.log(`❌ GAS সেভ ব্যর্থ (${chunk.length} টা রো): ${data.error || "unknown error"}`);
+      return;
+    }
+    console.log(`💾 GAS-এ সেভ: +${data.added ?? chunk.length} যোগ${data.skipped ? `, ${data.skipped} duplicate বাদ` : ""}`);
+  }
 
   while (done < COUNT && attempts < maxAttempts) {
     if (Date.now() - START_TIME > MAX_RUNTIME_MS) {
@@ -274,26 +290,21 @@ async function main() {
         if (done >= COUNT) break;
         const v = validateItem(raw);
         if (!v.ok) { failedItems++; console.log(`⚠️ বাদ (${v.reason}): "${(raw.question || "").toString().slice(0, 50)}"`); continue; }
-        try {
-          const ts = nowTs();
-          const res = await fbPush(TARGET_SHEET, buildRecord(v, ts, ""));
-          if (res?.name) await fbSet(`${TARGET_SHEET}/${res.name}/id`, res.name);
-          done++;
-          console.log(`✅ [${done}/${COUNT}] (${providerId}) "${v.q.slice(0, 50)}"`);
-        } catch (e) {
-          failedItems++;
-          console.log(`❌ Firebase push ব্যর্থ: ${e.message}`);
-        }
+        pending.push(buildRecord(v, nowTs()));
+        done++;
+        console.log(`✅ [${done}/${COUNT}] (${providerId}) "${v.q.slice(0, 50)}"`);
       }
+      if (pending.length >= SAVE_CHUNK_SIZE) await flush();
     } catch (e) {
       console.log(`❌ ব্যাচ ব্যর্থ (attempt ${attempts}): ${e.message}`);
       cursor = (cursor + 1) % pool.length;
     }
     if (done < COUNT) await sleep(DELAY_MS);
   }
+  await flush(); // বাকি থাকা সব রো Sheet-এ সেভ
 
-  console.log(`\n🎯 শেষ — সফলভাবে যোগ হয়েছে: ${done}/${COUNT}, বাদ পড়েছে/ব্যর্থ: ${failedItems}`);
-  if (done < COUNT) console.log(`ℹ️ বাকি ${COUNT - done}টা — আবার একই ফিল্টার দিয়ে Run করলে বাকিটা যোগ হবে (ডুপ্লিকেট এড়াতে count কমিয়ে চালাতে পারো)।`);
+  console.log(`\n🎯 শেষ — সফলভাবে যোগ হয়েছে: ${done - saveFailed}/${COUNT}, বাদ পড়েছে/ব্যর্থ: ${failedItems + saveFailed}`);
+  if (done - saveFailed < COUNT) console.log(`ℹ️ বাকিটা — আবার একই ফিল্টার দিয়ে Run করলে বাকিটা যোগ হবে (ডুপ্লিকেট এড়াতে count কমিয়ে চালাতে পারো)।`);
 }
 
 main().catch(e => { console.error("💥 মূল এরর:", e); process.exit(1); });

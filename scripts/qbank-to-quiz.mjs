@@ -3,7 +3,9 @@
  * ------------------------------------------------------------------
  * QBank-এ আছে কিন্তু Quiz-এ এখনো নেই এমন প্রশ্নগুলো খুঁজে বের করে, AI দিয়ে
  * Quiz ফরম্যাটে কনভার্ট করে, GAS-এর bulk_save_rows endpoint দিয়ে সরাসরি
- * Google Sheet-এ (+ শেষে একবার Firebase sync) লিখে দেয়।
+ * Google Sheet-এ লিখে দেয়।
+ * ⚠️ সম্পূর্ণভাবে Firebase থেকে বিচ্ছিন্ন — GAS-কে কখনো sync ফ্ল্যাগ বা
+ * bulkSyncDone কল করা হয় না, তাই Firebase RTDB কোনোভাবেই ছোঁয়া হয় না।
  * GitHub Actions থেকে চলে — ফোন/অ্যাপ/ইউজার ইনপুট কোনোটার উপরই নির্ভর করে না।
  * অ্যাপের "AI দিয়ে কনভার্ট করো" ফিচারের মতোই dedup + prompt লজিক ব্যবহার করে,
  * তাই একই প্রশ্ন বারবার AI-তে পাঠানো হবে না।
@@ -176,12 +178,13 @@ async function callRotating(pool, startIdx, prompt) {
   throw new Error("সব key ব্যর্থ: " + errors.slice(0, 3).join(" | "));
 }
 
-// ── GAS-এর bulk_save_rows endpoint-এ ব্যাচ সেভ (অ্যাপ যেভাবে সেভ করে হুবহু সেভাবেই) ──
-async function gasBulkSave(rows, sync) {
+// ── GAS-এর bulk_save_rows endpoint-এ ব্যাচ সেভ — শুধু Google Sheet-এ লেখে,
+//    sync ফ্ল্যাগ পাঠানো হয় না তাই GAS কখনো Firebase-এ কিছু sync করে না ──
+async function gasBulkSave(rows) {
   const resp = await fetch(GAS_URL, {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
-    body: JSON.stringify({ secret: GAS_SECRET, type: "bulk_save_rows", targetTab: "Quiz", rows, sync }),
+    body: JSON.stringify({ secret: GAS_SECRET, type: "bulk_save_rows", targetTab: "Quiz", rows }),
   });
   const data = await resp.json().catch(() => ({}));
   return data;
@@ -199,7 +202,7 @@ async function main() {
   }
   console.log(`🔑 মোট ${pool.length} টা key রেডি (providers: ${[...new Set(pool.map(p => p.id))].join(", ")})`);
 
-  // ── QBank ও Quiz দুটোই Firebase থেকে পড়া ──
+  // ── QBank ও Quiz দুটোই Google Sheet থেকে পড়া (GAS দিয়ে) ──
   const [qbankRaw, quizRaw] = await Promise.all([gasGetSheetRows("QBank"), gasGetSheetRows("Quiz")]);
   const existingQuizKeys = new Set(
     quizRaw.map(r => normalizeQbankQ(r.question || r.Question || "")).filter(Boolean)
@@ -252,10 +255,10 @@ async function main() {
   let explFallbackOk = 0, explFallbackFail = 0;
   let pending = []; // GAS-এ পাঠানোর জন্য জমা হওয়া রো — SAVE_CHUNK_SIZE ছুঁলেই ফ্লাশ হবে
 
-  async function flush(sync) {
+  async function flush() {
     if (!pending.length) return;
     const chunk = pending; pending = [];
-    const data = await gasBulkSave(chunk, sync);
+    const data = await gasBulkSave(chunk);
     if (data.result === "error") {
       totalSaveFailed += chunk.length;
       console.log(`❌ GAS সেভ ব্যর্থ (${chunk.length} টা রো): ${data.error || "unknown error"}`);
@@ -263,9 +266,6 @@ async function main() {
     }
     totalAdded += (data.added || 0);
     totalSkipped += (data.skipped || 0);
-    if (sync && data.firebaseSynced === false) {
-      console.log("⚠️ Sheet-এ সেভ হয়েছে কিন্তু Firebase sync ব্যর্থ হয়েছে (GAS Executions log চেক করো)।");
-    }
     console.log(`💾 GAS-এ সেভ: +${data.added || 0} যোগ, ${data.skipped || 0} duplicate বাদ`);
   }
 
@@ -313,10 +313,10 @@ async function main() {
       console.log(`❌ [ব্যাচ ${aiOk + aiFail}/${Math.ceil(pool2.length / BATCH_SIZE)}] ব্যর্থ: ${e.message}`);
       cursor = (cursor + 1) % pool.length;
     }
-    if (pending.length >= SAVE_CHUNK_SIZE) await flush(false);
+    if (pending.length >= SAVE_CHUNK_SIZE) await flush();
     if (i + BATCH_SIZE < pool2.length) await sleep(DELAY_MS);
   }
-  await flush(true); // শেষবার — এটাতেই Firebase sync হবে
+  await flush(); // শেষবার — বাকি থাকা সব রো Sheet-এ সেভ
 
   console.log(`\n🎯 এই রান শেষ — AI ব্যাচ সফল: ${aiOk}, ব্যর্থ: ${aiFail} | Sheet-এ যোগ: ${totalAdded}, duplicate বাদ: ${totalSkipped}, সেভ-ব্যর্থ: ${totalSaveFailed} | ব্যাখ্যা ফলব্যাক — সফল: ${explFallbackOk}, ব্যর্থ: ${explFallbackFail}`);
 }
