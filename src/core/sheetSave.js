@@ -125,4 +125,38 @@ async function deleteIdsInSheet({sheet,ids,gasSecret}){
   }catch(e){ return{ok:false,deleted:0,error:e?.message||String(e)}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet };
+/* ── Phase 5 (নতুন schema v2) ──────────────────────────────────────────────
+   Subjects/Topics/SubTopics/Tags/Posts/Institutions রেফারেন্স-টেবিলের জন্য।
+   এখন rename একটা ছোট রেফারেন্স-টেবিলের ১ রো বদলায় — Quiz/QBank/Study-র
+   হাজার হাজার রো আর টাচ হয় না (আগের renameFieldInSheet-এর cascade সমস্যা
+   এখানেই সমাধান হলো)। ────────────────────────────────────────────────── */
+
+/* ── সব রেফারেন্স-টেবিল (Subjects/Topics/SubTopics/Tags/Posts/Institutions)
+   একসাথে fetch — এগুলো ছোট বলে বাল্ক-ফেচ নিরাপদ। ── */
+async function fetchReferenceData({gasSecret}){
+  if(!GAS||!gasSecret) return null;
+  try{
+    const url=`${GAS}?action=getReferenceData&secret=${encodeURIComponent(gasSecret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json();
+    if(data?.status!=="success"||!data.data) return null;
+    return data.data; // {subjects:[],topics:[],subtopics:[],tags:[],posts:[],institutions:[]}
+  }catch(_){ return null; }
+}
+
+/* ── refType (subjects/topics/subtopics/tags/posts/institutions) + id দিয়ে
+   ঠিক ১টা রেফারেন্স-রো রিনেম — GAS-এর নতুন "renameReferenceItem" action। ── */
+async function renameReferenceItem({refType,id,newName,gasSecret,push}){
+  if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{ok:false}; }
+  if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","উপরে Secret Key বসাও"); return{ok:false}; }
+  try{
+    const url=`${GAS}?action=renameReferenceItem&secret=${encodeURIComponent(gasSecret)}`+
+      `&refType=${encodeURIComponent(refType)}&id=${encodeURIComponent(id)}&newName=${encodeURIComponent(newName)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status!=="success"){ push?.("error","❌ Rename ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    return{ok:true,rowsChanged:data.rowsChanged||1,firebaseSynced:data.firebaseSynced!==false};
+  }catch(e){ push?.("error","❌ Rename ব্যর্থ",e.message); return{ok:false}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem };
