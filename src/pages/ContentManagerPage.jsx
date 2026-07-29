@@ -1,6 +1,14 @@
-/* ══════════ CONTENT MANAGER (shell) ══════════ */
+/* ══════════ CONTENT MANAGER (shell) ══════════
+   Phase ৫ রিডিজাইন: আগে Browse/Rename/Audience/QType/Model Test/Delete — ৬টা সমান-ওজনের
+   ট্যাব একলাইনে গুঁজে দেওয়া ছিল। এখন Browse-ই ডিফল্ট/প্রাইমারি ভিউ, বাকি ৫টা টুল
+   "Tools" বাটনে ট্যাপ করলে একটা লঞ্চার-গ্রিডে (Uploader hub-এর মতোই, একই শেয়ার্ড
+   LauncherGrid কম্পোনেন্ট রিইউজ করে) দেখা যায়। Delete-কে আলাদা "বিপজ্জনক" সেকশনে
+   রাখা হয়েছে যেহেতু এটাই একমাত্র destructive অ্যাকশন এখানে।
+   নিচের ৬টা সাব-কম্পোনেন্টের (BrowseTab/RenameTab/AudienceTagRenameTab/BulkQTypeTab/
+   ModelTestTab/DeleteTab) একটারও ভেতরের কোড ছোঁয়া হয়নি। */
 import React, { useState, useCallback } from "react";
 import { C } from "../core/config.js";
+import { LauncherGrid } from "../components/shared/LauncherGrid.jsx";
 import { BrowseTab } from "./content/BrowseTab.jsx";
 import { RenameTab } from "./content/RenameTab.jsx";
 import { AudienceTagRenameTab } from "./content/AudienceTagRenameTab.jsx";
@@ -8,38 +16,77 @@ import { BulkQTypeTab } from "./BulkQTypeTab.jsx";
 import { ModelTestTab } from "./content/ModelTestTab.jsx";
 import { DeleteTab } from "./content/DeleteTab.jsx";
 
-function ContentManagerPage({push,tick,pushLayer}){
-  const[tab,setTab]=useState("browse");
+const CONTENT_TOOL_SECTIONS=[
+  {key:"edit",title:"✏️ কন্টেন্ট এডিট",color:C.info,items:[
+    {page:"rename",    icon:"✏️",label:"Rename",     desc:"Subject/Sub-topic নাম পরিবর্তন"},
+    {page:"audience",  icon:"🎯",label:"Audience",   desc:"Audience ট্যাগ রিনেম"},
+    {page:"qtype",     icon:"🏷️",label:"QType",      desc:"বাল্ক প্রশ্নের ধরন বদলান"},
+    {page:"modeltest", icon:"🧪",label:"Model Test", desc:"মডেল টেস্ট জেনারেট করুন"},
+  ]},
+  {key:"danger",title:"⚠️ বিপজ্জনক",color:C.danger,items:[
+    {page:"delete", icon:"🗑️",label:"Delete", desc:"বাল্ক কনটেন্ট ডিলিট — সতর্কভাবে ব্যবহার করুন"},
+  ]},
+];
+const TOOL_LABELS={
+  rename:{icon:"✏️",label:"Rename"},
+  audience:{icon:"🎯",label:"Audience"},
+  qtype:{icon:"🏷️",label:"QType"},
+  modeltest:{icon:"🧪",label:"Model Test"},
+  delete:{icon:"🗑️",label:"Delete"},
+};
 
-  const goTab=useCallback((t)=>{
-    if(t==="browse"){ setTab(t); return; }
+function ContentManagerPage({push,tick,pushLayer}){
+  const[tab,setTab]=useState("browse"); // "browse" | "tools" | rename/audience/qtype/modeltest/delete
+
+  /* Browse → Tools: layer push করা হয় যাতে Android system-back চাপলে সরাসরি Browse-এ ফিরে যায় */
+  const goTools=useCallback(()=>{
+    setTab("tools");
+    if(pushLayer){ const pop=pushLayer(()=>setTab("browse")); return pop; }
+  },[pushLayer]);
+
+  /* Tools grid → নির্দিষ্ট টুল: back করলে (system-back বা টপ-হেডারের ← বাটন) Tools গ্রিডেই ফেরত আসবে,
+     সরাসরি Browse-এ চলে যাবে না — এটাই সেই ফিক্স যা Uploader hub-এও করা হয়েছিল (Phase ৪) */
+  const goTool=useCallback((t)=>{
     setTab(t);
-    // sub-tab খুললে layer push — back চাপলে browse এ ফিরবে
-    if(pushLayer){
-      const pop=pushLayer(()=>setTab("browse"));
-      // tab change হলে layer remove
-      return pop;
-    }
+    if(pushLayer){ const pop=pushLayer(()=>setTab("tools")); return pop; }
   },[pushLayer]);
 
   return(
-    <div className="page" style={{paddingTop:0}}>
-      <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
-        <div className="atabs">
-          <button className={`atab${tab==="browse"?" on":""}`} onClick={()=>setTab("browse")}>📋 Browse</button>
-          <button className={`atab${tab==="rename"?" on":""}`} onClick={()=>goTab("rename")}>✏️ Rename</button>
-          <button className={`atab${tab==="audience"?" on":""}`} onClick={()=>goTab("audience")}>🎯 Audience</button>
-          <button className={`atab${tab==="qtype"?" on":""}`} onClick={()=>goTab("qtype")} style={{color:tab==="qtype"?C.green:undefined}}>🏷️ QType</button>
-          <button className={`atab${tab==="modeltest"?" on":""}`} onClick={()=>goTab("modeltest")} style={{color:tab==="modeltest"?C.purple:undefined}}>🧪 Model Test</button>
-          <button className={`atab${tab==="delete"?" on":""}`} onClick={()=>goTab("delete")}>🗑️ Delete</button>
-        </div>
-      </div>
-      {tab==="browse"&&<BrowseTab push={push} tick={tick}/>}
-      {tab==="rename"&&<RenameTab push={push} tick={tick}/>}
-      {tab==="audience"&&<AudienceTagRenameTab push={push} tick={tick}/>}
-      {tab==="qtype"&&<BulkQTypeTab push={push} tick={tick}/>}
-      {tab==="modeltest"&&<ModelTestTab push={push} tick={tick}/>}
-      {tab==="delete"&&<DeleteTab push={push} tick={tick}/>}
+    <div className="page">
+
+      {tab==="browse"&&(
+        <>
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12}}>
+            <button className="tools-btn" onClick={goTools}>🧰 Tools</button>
+          </div>
+          <BrowseTab push={push} tick={tick}/>
+        </>
+      )}
+
+      {tab==="tools"&&(
+        <>
+          <div className="sub-head">
+            <button className="icon-btn" onClick={()=>setTab("browse")}>←</button>
+            <div className="sub-head-title">🧰 Content Tools</div>
+          </div>
+          <LauncherGrid sections={CONTENT_TOOL_SECTIONS} onSelect={goTool}/>
+        </>
+      )}
+
+      {TOOL_LABELS[tab]&&(
+        <>
+          <div className="sub-head">
+            <button className="icon-btn" onClick={()=>setTab("tools")}>←</button>
+            <div className="sub-head-title">{TOOL_LABELS[tab].icon} {TOOL_LABELS[tab].label}</div>
+          </div>
+          {tab==="rename"    && <RenameTab push={push} tick={tick}/>}
+          {tab==="audience"  && <AudienceTagRenameTab push={push} tick={tick}/>}
+          {tab==="qtype"     && <BulkQTypeTab push={push} tick={tick}/>}
+          {tab==="modeltest" && <ModelTestTab push={push} tick={tick}/>}
+          {tab==="delete"    && <DeleteTab push={push} tick={tick}/>}
+        </>
+      )}
+
     </div>
   );
 }
