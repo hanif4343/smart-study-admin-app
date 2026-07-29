@@ -2,19 +2,33 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../core/config.js";
 import { useFB, loadPath } from "../core/dataCache.js";
-import { fmt, toArr, buildSubjectMap } from "../core/utils.js";
+import { fmt, toArr, buildSubjectMap, pct } from "../core/utils.js";
 import { Bar, Tree } from "../components/shared/MiniComponents.jsx";
+
+/* ── কনটেন্ট-লাইব্রেরি কার্ডের একটা সারি (Quiz/QBank/Study) — আগে এগুলো ৪টা আলাদা
+   stat-card ছিল, এখন একটাই কার্ডে ব্রেকডাউন হিসেবে দেখানো হচ্ছে ── */
+function LibRow({label,value,total,color}){
+  return(
+    <div style={{marginBottom:8}}>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:10.5,marginBottom:3}}>
+        <span style={{color:C.muted,fontWeight:600}}>{label}</span>
+        <span style={{color:C.text,fontWeight:700}}>{fmt(value)}</span>
+      </div>
+      <div className="sbar"><div className="sbar-f" style={{width:pct(value,total)+"%",background:color}}/></div>
+    </div>
+  );
+}
 
 function DashboardPage({push,tick}){
   const{data:users,loading:uL}  = useFB("Users",tick);
   const{data:qbank}             = useFB("QBank",tick);
   const{data:study}             = useFB("Study",tick);
   const{data:reports}           = useFB("Reports",tick);
-  // Quiz loaded lazily — not blocking
+  // Quiz লোড হয় lazily — blocking না
   const[quizData,setQuizData]   = useState(null);
   const[atab,setAtab]           = useState("qbank");
 
-  // load quiz only when analytics tab selected
+  // analytics ট্যাব সিলেক্ট হলেই শুধু quiz লোড হয়
   useEffect(()=>{
     if(atab==="quiz"&&!quizData){
       loadPath("Quiz").then(d=>setQuizData(d)).catch(()=>{});
@@ -30,6 +44,7 @@ function DashboardPage({push,tick}){
   const stT        = useMemo(()=>toArr(study).length,[study]);
   const rptT       = useMemo(()=>toArr(reports).length,[reports]);
   const quizT      = useMemo(()=>toArr(quizData).length,[quizData]);
+  const libTotal   = quizT+qbT+stT;
 
   const qbankMap   = useMemo(()=>buildSubjectMap(qbankArr),[qbankArr]);
   const quizMap    = useMemo(()=>buildSubjectMap(toArr(quizData)),[quizData]);
@@ -43,24 +58,61 @@ function DashboardPage({push,tick}){
 
   return(
     <div className="page">
+
+      {/* ── এই মুহূর্তে: স্টুডেন্ট-সম্পর্কিত মূল ২টা সংখ্যা। "পেন্ডিং" আলাদা কার্ড না —
+          Active-এর derived complement মাত্র, তাই সাব-টেক্সট হিসেবে দেখানো হচ্ছে ── */}
+      <div className="slb" style={{marginTop:0}}>এই মুহূর্তে</div>
       <div className="sg">
-        <div className="sc tb" data-icon="👥"><div className="sl">স্টুডেন্ট</div><div className="sv sv-b">{fmt(total)}</div></div>
-        <div className="sc tg" data-icon="✅"><div className="sl">অ্যাক্টিভ</div><div className="sv sv-g">{fmt(active)}</div></div>
-        <div className="sc ty" data-icon="⏳"><div className="sl">পেন্ডিং</div><div className="sv sv-y">{fmt(total-active)}</div></div>
-        <div className="sc tr" data-icon="🚨"><div className="sl">রিপোর্ট</div><div className="sv sv-r">{fmt(rptT)}</div></div>
+        <div className="sc tb" data-icon="👥">
+          <div className="sl">স্টুডেন্ট</div>
+          <div className="sv sv-b">{fmt(total)}</div>
+        </div>
+        <div className="sc tg" data-icon="✅">
+          <div className="sl">অ্যাক্টিভ</div>
+          <div className="sv sv-g">{fmt(active)}</div>
+          <div style={{fontSize:9,color:C.muted,marginTop:3,fontWeight:600}}>{fmt(total-active)} পেন্ডিং</div>
+        </div>
       </div>
-      <div className="sg">
-        <div className="sc tb" data-icon="❓"><div className="sl">Quiz</div><div className="sv sv-b">{uL?"…":fmt(quizT)}</div></div>
-        <div className="sc tg" data-icon="📚"><div className="sl">QBank</div><div className="sv sv-g">{fmt(qbT)}</div></div>
-        <div className="sc ty" data-icon="📖"><div className="sl">Study</div><div className="sv sv-y">{fmt(stT)}</div></div>
-        <div className="sc tp" data-icon="📊"><div className="sl">মোট</div><div className="sv sv-p">{fmt(quizT+qbT+stT)}</div></div>
+
+      {/* ── রিপোর্ট: একমাত্র "action needed" ডেটা, তাই আলাদা হাইলাইট কার্ডে —
+          বাকি রুটিন স্ট্যাটের সাথে সমান ওজনে গুঁজে রাখা হয়নি ── */}
+      {rptT>0 ? (
+        <div className="card" style={{borderColor:`${C.danger}40`,background:`linear-gradient(180deg,${C.danger}0d,${C.card})`,marginBottom:20}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+            <div>
+              <div className="sl" style={{color:C.danger,marginBottom:5}}>🚨 নতুন রিপোর্ট — মনোযোগ প্রয়োজন</div>
+              <div className="sv" style={{color:C.danger,fontSize:20}}>{fmt(rptT)}টি</div>
+            </div>
+            <div style={{fontSize:11,fontWeight:700,color:C.danger,whiteSpace:"nowrap"}}>দেখুন →</div>
+          </div>
+        </div>
+      ) : (
+        <div className="card" style={{padding:"12px 16px",marginBottom:20}}>
+          <div style={{fontSize:11,color:C.muted,fontWeight:600}}>✅ কোনো পেন্ডিং রিপোর্ট নেই</div>
+        </div>
+      )}
+
+      {/* ── কনটেন্ট লাইব্রেরি: আগে Quiz/QBank/Study/মোট — ৪টা আলাদা stat-card ছিল,
+          এখন একটা কার্ডে ব্রেকডাউন হিসেবে ── */}
+      <div className="slb">কনটেন্ট লাইব্রেরি</div>
+      <div className="card">
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:12}}>
+          <span style={{fontSize:10.5,color:C.muted,fontWeight:600,textTransform:"uppercase",letterSpacing:.5}}>মোট কনটেন্ট</span>
+          <span style={{fontSize:17,fontWeight:700,fontFamily:"'Space Grotesk'"}}>{uL?"…":fmt(libTotal)}</span>
+        </div>
+        <LibRow label="❓ Quiz"  value={quizT} total={libTotal||1} color={C.info}/>
+        <LibRow label="📚 QBank" value={qbT}   total={libTotal||1} color={C.success}/>
+        <LibRow label="📖 Study" value={stT}   total={libTotal||1} color={C.warning}/>
       </div>
+
+      <div className="slb">সাপ্তাহিক অ্যাক্টিভিটি</div>
       <div className="card">
         <div className="ct">📈 Daily Active (৭ দিন)</div>
         <Bar data={days} color={C.accent}/>
       </div>
+
+      <div className="slb">বিস্তারিত ব্রাউজ</div>
       <div className="card">
-        <div className="ct">📊 Analytics</div>
         <div className="atabs">
           {[["quiz","❓ Quiz"],["qbank","📚 QBank"],["study","📖 Study"]].map(([v,l])=>(
             <button key={v} className={`atab${atab===v?" on":""}`} onClick={()=>setAtab(v)}>{l}</button>
