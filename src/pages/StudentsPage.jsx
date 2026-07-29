@@ -135,7 +135,7 @@ function StudentsPage({push,tick,pushLayer}){
             const nm=u.Name||u.name||"অজানা",ph=u.Phone||u.phone||"—";
             const fkey=u._fbKey||phoneKey(ph);
             return(
-              <div key={i} className="card" style={{padding:12}}>
+              <div key={i} className="card">
                 <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
                   <div className="av">{initials(nm)}</div>
                   <div style={{flex:1,minWidth:0}}>
@@ -185,7 +185,7 @@ function StudentsPage({push,tick,pushLayer}){
             const acc=tot?Math.round(c/tot*100):0;
             const mins=parseInt(u.totalMinutes||u.studyMinutes||u.totalTime||0);
             return(
-              <div key={fkey||i} className="card" style={{padding:11}}>
+              <div key={fkey||i} className="card">
                 <div style={{cursor:"pointer",display:"flex",alignItems:"center",gap:9,marginBottom:8}} onClick={()=>openDetail(u)}>
                   <div className="av">{initials(nm)}</div>
                   <div style={{flex:1,minWidth:0}}>
