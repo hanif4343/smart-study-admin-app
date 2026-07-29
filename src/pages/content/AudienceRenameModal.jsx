@@ -11,12 +11,11 @@ function AudienceRenameModal({target,newName,setNewName,onCancel,onRename,renami
         <div className="mh"/>
         <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>🎯 Audience Tag Rename</div>
 
-        {/* Warning */}
-        <div style={{background:`${C.yellow}12`,border:`1px solid ${C.yellow}30`,borderRadius:9,padding:"8px 11px",marginBottom:12,fontSize:11}}>
-          <span style={{color:C.yellow,fontWeight:700}}>⚠️ </span>
+        {/* Info */}
+        <div style={{background:`${C.green}12`,border:`1px solid ${C.green}30`,borderRadius:9,padding:"8px 11px",marginBottom:12,fontSize:11}}>
+          <span style={{color:C.green,fontWeight:700}}>✅ </span>
           <span style={{color:C.muted}}>
-            <b style={{color:C.text}}>{target.count}টি</b> কন্টেন্টে Firebase-এ আপডেট হবে।
-            <br/>ব্যবহারকারীর <b style={{color:C.text}}>classLevel</b>-এর সাথে মিল রাখুন।
+            শুধু <b style={{color:C.text}}>১টা</b> Tags রেফারেন্স-এন্ট্রি বদলাবে — এটা ব্যবহার করা <b style={{color:C.text}}>{target.count}টি</b> প্রশ্নের কোনো রো টাচ হবে না।
           </span>
         </div>
 
