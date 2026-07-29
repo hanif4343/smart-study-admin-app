@@ -1,9 +1,18 @@
-/* ══════════ AUDIENCE TAG RENAME TAB ══════════ */
+/* ══════════ AUDIENCE TAG RENAME TAB ══════════
+   ⚠️ Phase 5 rewrite (RENAME অংশ): আগে rename করলে Quiz+QBank+Study মিলিয়ে matching
+   সব রো-তে Firebase PATCH যেত (O(N))। এখন AudienceTags প্রশ্নের রো-তে literal নাম না,
+   Tag ID (যেমন "TAG01") হিসেবে থাকে — তাই rename মানে শুধু Tags রেফারেন্স-টেবিলের
+   ১টা রো বদলানো, প্রশ্নের কোনো রো টাচ হয় না।
+   ⚠️ "Bulk Add Audience Tag" অংশ (নিচে) এখনো Firebase (useFB) থেকে Subject/Topic লিস্ট
+   পড়ে — Phase 4 (Firebase content sync) deferred থাকায় এই অংশ আপাতত stale/অকার্যকর
+   হতে পারে যদি Firebase-এ নতুন schema sync করা না থাকে। এটা future rework আইটেম
+   (master plan-এ নোট করা আছে) — Sheet-ভিত্তিক bulk-tag GAS action লাগবে। ── */
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { C } from "../../core/config.js";
 import { useFB, invalidate } from "../../core/dataCache.js";
 import { fbPatch, fbPatchBatch } from "../../core/firebase.js";
-import { toArr } from "../../core/utils.js";
+import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
+import { fetchReferenceData, renameReferenceItem } from "../../core/sheetSave.js";
 import { AudienceRenameModal } from "./AudienceRenameModal.jsx";
 
 function AudienceTagRenameTab({push,tick}){
@@ -101,53 +110,36 @@ function AudienceTagRenameTab({push,tick}){
     setBulkAdding(false);
   };
 
-  // Collect all unique AudienceTags across all sheets with count & which sheets they appear in
+  // Collect all Tags from the reference table (Phase 5 — না আর Firebase স্ক্যান করে না)
+  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
+  const[refData,setRefData]=useState(null);
+  const[refTick,setRefTick]=useState(0);
+  const refreshTags=useCallback(()=>setRefTick(t=>t+1),[]);
+  useEffect(()=>{
+    if(!gasSecret){ setRefData(null); return; }
+    let cancelled=false;
+    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled) setRefData(d); });
+    return()=>{ cancelled=true; };
+  },[gasSecret,refTick]);
+
   const tagList=useMemo(()=>{
-    const map={}; // tag -> {count, sheets: {QBank:n, Quiz:n, Study:n}}
-    [[qbRaw,"QBank"],[qzRaw,"Quiz"],[stRaw,"Study"]].forEach(([raw,sheet])=>{
-      toArr(raw).forEach(q=>{
-        const tag=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
-        if(!tag)return;
-        if(!map[tag])map[tag]={count:0,sheets:{}};
-        map[tag].count++;
-        map[tag].sheets[sheet]=(map[tag].sheets[sheet]||0)+1;
-      });
-    });
-    return Object.entries(map).sort((a,b)=>b[1].count-a[1].count);
-  },[qbRaw,qzRaw,stRaw]);
+    return (refData?.tags||[]).map(t=>[t.tag_name,{id:t.tag_id}]);
+  },[refData]);
 
   const doRename=async()=>{
     if(!newName.trim()||!renameTarget){push("warn","নতুন নাম দিন","");return;}
     if(newName.trim()===renameTarget.tag){push("info","একই নাম","");return;}
     setRenaming(true);
     try{
-      const oldTag=renameTarget.tag;
-      const nTag=newName.trim();
-      let totalUpdated=0;
-
-      for(const sheet of SHEETS){
-        const raw=sheet==="QBank"?qbRaw:sheet==="Quiz"?qzRaw:stRaw;
-        const allQ=toArr(raw);
-        const affected=allQ.filter(q=>{
-          const t=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
-          return t===oldTag;
-        });
-        if(affected.length===0)continue;
-
-        // ⚡ Parallel batch PATCH (20 concurrent)
-        const patchItems=affected.map(q=>{
-          const fkey=q._fbKey;if(!fkey)return null;
-          const fieldKey=q.AudienceTags!=null?"AudienceTags":q.audienceTags!=null?"audienceTags":"audience_tags";
-          return {path:`${sheet}/${fkey}`,data:{[fieldKey]:nTag}};
-        }).filter(Boolean);
-        const sheetDone=await fbPatchBatch(patchItems);
-        totalUpdated+=sheetDone;
-        invalidate(sheet);
+      const res=await renameReferenceItem({refType:"tags",id:renameTarget.id,newName:newName.trim(),gasSecret,push});
+      if(res.ok){
+        push("success","✅ Tag Rename সম্পন্ন!",
+          `শুধু ১টা reference row বদলেছে — "${renameTarget.tag}" → "${newName.trim()}" · প্রশ্নের কোনো রো টাচ হয়নি`);
+        refreshTags();
+        setRenameTarget(null);
+        setNewName("");
       }
-
-      push("success","✅ Audience Tag Rename সম্পন্ন!",`"${oldTag}" → "${nTag}" · ${totalUpdated}টি কন্টেন্ট`);
-      setRenameTarget(null);
-      setNewName("");
     }catch(e){push("error","Rename ব্যর্থ",e.message);}
     setRenaming(false);
   };
@@ -265,18 +257,25 @@ function AudienceTagRenameTab({push,tick}){
       <div style={{background:`${C.accent}12`,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11}}>
         <div style={{fontWeight:700,color:C.accent,marginBottom:3}}>✏️ Audience Tag Rename</div>
         <div style={{color:C.muted,lineHeight:1.6}}>
-          QBank, Quiz ও Study — তিনটি শিটে একসাথে AudienceTags আপডেট হবে।
+          শুধু Tags রেফারেন্স-টেবিলের ১টা রো বদলাবে — Quiz/QBank/Study-এর প্রশ্নের রো টাচ হবে না।
         </div>
       </div>
 
+      <div className="fld" style={{marginBottom:10}}>
+        <label style={{display:"flex",justifyContent:"space-between"}}>
+          <span>GAS Secret Key</span>
+          <span onClick={refreshTags} style={{color:C.accent,cursor:"pointer",fontWeight:600}}>🔄 রিফ্রেশ</span>
+        </label>
+        <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}/>
+      </div>
+
       <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
-        {loading?"⏳ লোড হচ্ছে...":`${tagList.length}টি Audience Tag পাওয়া গেছে`}
+        {!gasSecret?"⚠️ GAS Secret Key বসাও":`${tagList.length}টি Audience Tag পাওয়া গেছে`}
       </div>
 
       {/* Tag list */}
-      {loading?[...Array(4)].map((_,i)=><div key={i} className="sk" style={{height:56,marginBottom:7}}/>):
-       tagList.length===0?
-        <div className="empty"><div className="ei">🎯</div><p>কোনো AudienceTags নেই</p></div>:
+      {tagList.length===0?
+        <div className="empty"><div className="ei">🎯</div><p>কোনো Tag নেই</p></div>:
         tagList.map(([tag,info])=>(
           <div key={tag} style={{
             background:C.panel,border:`1px solid ${C.border}`,borderRadius:11,
@@ -284,23 +283,13 @@ function AudienceTagRenameTab({push,tick}){
             display:"flex",alignItems:"center",gap:10
           }}>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontWeight:700,fontSize:13,marginBottom:3}}>{tag}</div>
-              <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                {Object.entries(info.sheets).map(([sh,n])=>(
-                  <span key={sh} style={{
-                    fontSize:9,fontWeight:700,padding:"1px 6px",borderRadius:6,
-                    background:sh==="QBank"?`${C.green}20`:sh==="Quiz"?`${C.accent}20`:`${C.yellow}20`,
-                    color:sh==="QBank"?C.green:sh==="Quiz"?C.accent:C.yellow,
-                    border:`1px solid ${sh==="QBank"?C.green:sh==="Quiz"?C.accent:C.yellow}40`
-                  }}>{sh}: {n}টি</span>
-                ))}
-              </div>
+              <div style={{fontWeight:700,fontSize:13}}>{tag}</div>
+              <div style={{fontSize:9,color:C.muted,marginTop:2}}>{info.id}</div>
             </div>
-            <div style={{fontWeight:700,fontSize:15,color:C.muted,minWidth:28,textAlign:"right"}}>{info.count}</div>
             <button
               className="btn"
               style={{padding:"5px 11px",fontSize:11,background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}33`,flexShrink:0}}
-              onClick={()=>{setRenameTarget({tag,count:info.count});setNewName(tag);}}
+              onClick={()=>{setRenameTarget({tag,id:info.id,count:"?"});setNewName(tag);}}
             >✏️ Rename</button>
           </div>
         ))
