@@ -4,6 +4,7 @@ import { C } from "../core/config.js";
 import { BrowseTab } from "./content/BrowseTab.jsx";
 import { RenameTab } from "./content/RenameTab.jsx";
 import { AudienceTagRenameTab } from "./content/AudienceTagRenameTab.jsx";
+import { ReferenceManagerTab } from "./content/ReferenceManagerTab.jsx";
 import { BulkQTypeTab } from "./BulkQTypeTab.jsx";
 import { ModelTestTab } from "./content/ModelTestTab.jsx";
 import { DeleteTab } from "./content/DeleteTab.jsx";
@@ -28,6 +29,7 @@ function ContentManagerPage({push,tick,pushLayer}){
         <div className="atabs">
           <button className={`atab${tab==="browse"?" on":""}`} onClick={()=>setTab("browse")}>📋 Browse</button>
           <button className={`atab${tab==="rename"?" on":""}`} onClick={()=>goTab("rename")}>✏️ Rename</button>
+          <button className={`atab${tab==="reference"?" on":""}`} onClick={()=>goTab("reference")} style={{color:tab==="reference"?C.green:undefined}}>🗂️ Reference</button>
           <button className={`atab${tab==="audience"?" on":""}`} onClick={()=>goTab("audience")}>🎯 Audience</button>
           <button className={`atab${tab==="qtype"?" on":""}`} onClick={()=>goTab("qtype")} style={{color:tab==="qtype"?C.green:undefined}}>🏷️ QType</button>
           <button className={`atab${tab==="modeltest"?" on":""}`} onClick={()=>goTab("modeltest")} style={{color:tab==="modeltest"?C.purple:undefined}}>🧪 Model Test</button>
@@ -36,6 +38,7 @@ function ContentManagerPage({push,tick,pushLayer}){
       </div>
       {tab==="browse"&&<BrowseTab push={push} tick={tick}/>}
       {tab==="rename"&&<RenameTab push={push} tick={tick}/>}
+      {tab==="reference"&&<ReferenceManagerTab push={push}/>}
       {tab==="audience"&&<AudienceTagRenameTab push={push} tick={tick}/>}
       {tab==="qtype"&&<BulkQTypeTab push={push} tick={tick}/>}
       {tab==="modeltest"&&<ModelTestTab push={push} tick={tick}/>}
