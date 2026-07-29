@@ -10,19 +10,20 @@ html,body,#root{background:${C.bg};color:${C.text};font-family:'Noto Sans Bengal
 .nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 2px 6px;cursor:pointer;border:none;background:transparent;color:${C.muted};font-family:inherit;font-size:9px;font-weight:500;transition:color .15s;position:relative}
 .nav-btn.active{color:${C.accent}}.nav-icon{font-size:18px;line-height:1}
 .nav-badge{position:absolute;top:5px;right:calc(50% - 16px);background:${C.red};color:#fff;font-size:8px;font-weight:700;width:14px;height:14px;border-radius:50%;display:flex;align-items:center;justify-content:center}
-.topbar{background:${C.card};border-bottom:1px solid ${C.border};padding:12px 16px 10px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
+.nav-dot{position:absolute;bottom:-2px;right:-5px;width:6px;height:6px;border-radius:50%;background:${C.info};box-shadow:0 0 0 2px ${C.navBg}}
+.topbar{background:${C.card};border-bottom:1px solid ${C.border};padding:14px 16px 12px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:50}
 .topbar-title{font-size:15px;font-weight:700}.topbar-sub{font-size:10px;color:${C.muted};margin-top:1px}
 .icon-btn{width:34px;height:34px;border-radius:9px;background:${C.panel};border:1px solid ${C.border};color:${C.text};font-size:16px;display:flex;align-items:center;justify-content:center;cursor:pointer}
 .icon-btn.spin{animation:spin 1s linear infinite}
-.page{padding:13px;padding-bottom:82px;min-height:100dvh}
-.sg{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
-.sc{background:${C.card};border:1px solid ${C.border};border-radius:13px;padding:12px;position:relative;overflow:hidden}
+.page{padding:16px;padding-bottom:88px;min-height:100dvh}
+.sg{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+.sc{background:${C.card};border:1px solid ${C.border};border-radius:14px;padding:14px;position:relative;overflow:hidden}
 .sc::after{content:attr(data-icon);position:absolute;right:8px;bottom:6px;font-size:24px;opacity:.12}
 .sl{font-size:10px;color:${C.muted};font-weight:600;margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
 .sv{font-size:24px;font-weight:700;line-height:1}
 .sv-b{color:${C.accent}}.sv-g{color:${C.green}}.sv-r{color:${C.red}}.sv-y{color:${C.yellow}}.sv-p{color:${C.purple}}
 .tb{border-top:2px solid ${C.accent}}.tg{border-top:2px solid ${C.green}}.tr{border-top:2px solid ${C.red}}.ty{border-top:2px solid ${C.yellow}}.tp{border-top:2px solid ${C.purple}}
-.card{background:${C.card};border:1px solid ${C.border};border-radius:13px;padding:13px;margin-bottom:10px}
+.card{background:${C.card};border:1px solid ${C.border};border-radius:14px;padding:16px;margin-bottom:12px}
 .ct{font-size:11px;font-weight:700;color:${C.muted};text-transform:uppercase;letter-spacing:.8px;margin-bottom:11px}
 .av{width:38px;height:38px;border-radius:50%;background:linear-gradient(135deg,${C.accent},${C.purple});display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;color:#fff;flex-shrink:0}
 .av.sm{width:30px;height:30px;font-size:11px}
@@ -59,7 +60,27 @@ html,body,#root{background:${C.bg};color:${C.text};font-family:'Noto Sans Bengal
 .toast{background:${C.card};border:1px solid ${C.border};border-radius:11px;padding:10px 12px;display:flex;gap:8px;align-items:flex-start;animation:ti .25s ease;box-shadow:0 8px 28px #00000080;pointer-events:all}
 .toast.success{border-left:3px solid ${C.green}}.toast.error{border-left:3px solid ${C.red}}.toast.warn{border-left:3px solid ${C.yellow}}.toast.info{border-left:3px solid ${C.accent}}
 .t-icon{font-size:16px}.t-body{flex:1}.t-title{font-size:12px;font-weight:700}.t-msg{font-size:11px;color:${C.muted};margin-top:1px}
-.atabs{display:flex;background:${C.panel};border-radius:10px;padding:3px;margin-bottom:11px;gap:3px}
+.atabs{display:flex;background:${C.panel};border-radius:11px;padding:4px;margin-bottom:12px;gap:3px}
+
+/* ══ launcher grid — শেয়ার্ড কম্পোনেন্ট (components/shared/LauncherGrid.jsx)
+   Uploader hub (Phase ৪) ও Content Manager-এর Tools শিট (Phase ৫) দুটোতেই এই একই ক্লাসগুলো ব্যবহার হয় ══ */
+.launch-sec{margin-bottom:20px}
+.launch-sec:last-child{margin-bottom:0}
+.launch-sec-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+.launch-sec-bar{width:3px;height:14px;border-radius:3px;flex-shrink:0}
+.launch-sec-title{font-size:12.5px;font-weight:700;color:${C.text}}
+.launch-sec-sub{font-size:10px;color:${C.muted};margin-left:auto}
+.tile-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+.tile{background:${C.card};border:1px solid ${C.border};border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px;text-align:left;cursor:pointer;font-family:inherit;transition:transform .12s;color:inherit}
+.tile:active{transform:scale(.97)}
+.tile .tico{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px}
+.tile .tname{font-size:12px;font-weight:700;color:${C.text}}
+.tile .tdesc{font-size:9.5px;color:${C.muted};line-height:1.4}
+
+/* ══ ছোট ইউটিলিটি — Content Manager-এর Browse(primary)/Tools(secondary) স্প্লিটে ব্যবহৃত (Phase ৫) ══ */
+.tools-btn{display:inline-flex;align-items:center;gap:6px;background:${C.panel};border:1px solid ${C.border};border-radius:20px;padding:7px 14px;font-size:11.5px;font-weight:700;color:${C.text};cursor:pointer;font-family:inherit}
+.sub-head{display:flex;align-items:center;gap:8px;margin-bottom:16px}
+.sub-head-title{font-size:14px;font-weight:700;color:${C.text}}
 .atab{flex:1;text-align:center;padding:7px 3px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;border:none;background:transparent;color:${C.muted};font-family:inherit;transition:all .2s}
 .atab.on{background:${C.card};color:${C.text};box-shadow:0 2px 6px #00000040}
 .srow{display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid ${C.border}40;font-size:12px}.srow:last-child{border-bottom:none}
