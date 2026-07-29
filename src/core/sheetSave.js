@@ -159,4 +159,36 @@ async function renameReferenceItem({refType,id,newName,gasSecret,push}){
   }catch(e){ push?.("error","❌ Rename ব্যর্থ",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem };
+/* ── refType + name (+ parentId/sheet) দিয়ে নতুন রেফারেন্স-এন্ট্রি যোগ — GAS-এর
+   "addReferenceItem" action। id GAS নিজে থেকেই generate করে (parent-scoped prefix)। ── */
+async function addReferenceItem({refType,name,parentId,sheet,gasSecret,push}){
+  if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই",""); return{ok:false}; }
+  if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও",""); return{ok:false}; }
+  try{
+    let url=`${GAS}?action=addReferenceItem&secret=${encodeURIComponent(gasSecret)}`+
+      `&refType=${encodeURIComponent(refType)}&name=${encodeURIComponent(name)}`;
+    if(parentId) url+=`&parentId=${encodeURIComponent(parentId)}`;
+    if(sheet) url+=`&sheet=${encodeURIComponent(sheet)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status!=="success"){ push?.("error","❌ যোগ ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    return{ok:true,id:data.id};
+  }catch(e){ push?.("error","❌ যোগ ব্যর্থ",e.message); return{ok:false}; }
+}
+
+/* ── refType + id দিয়ে একটা রেফারেন্স-এন্ট্রি ডিলিট — GAS-এর "deleteReferenceItem"।
+   ⚠️ শুধু reference-রো মোছে, ব্যবহারকারী প্রশ্ন মোছে না (তাদের subject_id/topic_id
+   orphan হয়ে যাবে) — কল করার আগে UI-তে সতর্ক করা উচিত। ── */
+async function deleteReferenceItem({refType,id,gasSecret,push}){
+  if(!GAS||!gasSecret) return{ok:false};
+  try{
+    const url=`${GAS}?action=deleteReferenceItem&secret=${encodeURIComponent(gasSecret)}`+
+      `&refType=${encodeURIComponent(refType)}&id=${encodeURIComponent(id)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status!=="success"){ push?.("error","❌ ডিলিট ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    return{ok:true};
+  }catch(e){ push?.("error","❌ ডিলিট ব্যর্থ",e.message); return{ok:false}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem };
