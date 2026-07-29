@@ -21,6 +21,7 @@ import { useToasts } from "./hooks/useToasts.js";
 
 import { Toasts } from "./components/shared/Toasts.jsx";
 import { BgTaskIndicator } from "./components/shared/BgTaskIndicator.jsx";
+import { LauncherGrid } from "./components/shared/LauncherGrid.jsx";
 
 import { LoginScreen } from "./pages/LoginScreen.jsx";
 import { StudentDetail } from "./pages/StudentDetail.jsx";
@@ -40,27 +41,29 @@ import { ArchivePage } from "./pages/ArchivePage.jsx";
 import { TypingUploaderPage } from "./pages/TypingUploaderPage.jsx";
 import { SingleQuestionEntryPage } from "./pages/SingleQuestionEntryPage.jsx";
 
-/* Uploader hub-এর ক্যাটাগরি/সাব-অপশন গঠন — module-level রাখা হলো যাতে রেন্ডার আর sync effect দুই জায়গাতেই
-   একই স্থিতিশীল রেফারেন্স ব্যবহার করা যায় (প্রতি রেন্ডারে নতুন array তৈরি না হয়) */
-const UPLOADER_CATS=[
-  {key:"text",label:"📝 Text Upload",items:[
-    {page:"bulkupload",label:"📝 Bulk Upload"},
-    {page:"singleentry",label:"✍️ Single প্রশ্ন",color:"#6366f1"},
-    {page:"typing",label:"⌨️ Typing"},
+/* Uploader hub-এর সেকশন/টুল গঠন — module-level রাখা হলো যাতে রেন্ডারে প্রতিবার নতুন array
+   তৈরি না হয়। প্রতিটা সেকশনের রঙ Phase ১-এর সিমান্টিক টোকেন থেকে (C.info=টেক্সট, C.ai=AI
+   জেনারেশন, C.ocr=স্ক্যান) — এলোমেলো ইনডেক্স-ভিত্তিক রঙ না। */
+const UPLOADER_SECTIONS=[
+  {key:"text",title:"📝 টেক্সট আপলোড",color:C.info,items:[
+    {page:"bulkupload",  icon:"📝",label:"Bulk Upload",   desc:"একসাথে অনেক প্রশ্ন পেস্ট করে আপলোড"},
+    {page:"singleentry", icon:"✍️",label:"Single প্রশ্ন",  desc:"একটি একটি করে সরাসরি এন্ট্রি"},
+    {page:"typing",      icon:"⌨️",label:"Typing মোড",    desc:"টাইপ করে দ্রুত এন্ট্রি"},
   ]},
-  {key:"aijob",label:"🚀 AI Job",items:[
-    {page:"joblauncher",label:"🚀 Exp Gen",color:C.green},
-    {page:"qbankconv",label:"🔁 QBank→Quiz",color:C.green},
-    {page:"questiongen",label:"🧬 AI প্রশ্ন",color:C.purple},
+  {key:"aijob",title:"🚀 AI জব",color:C.ai,items:[
+    {page:"joblauncher", icon:"🚀",label:"Exp Gen",       desc:"ব্যাখ্যা তৈরির জব চালু করুন"},
+    {page:"qbankconv",   icon:"🔁",label:"QBank→Quiz",    desc:"প্রশ্ন ব্যাংক থেকে কুইজ বানান"},
+    {page:"questiongen", icon:"🧬",label:"AI প্রশ্ন",      desc:"টপিক দিয়ে প্রশ্ন জেনারেট"},
   ]},
-  {key:"ocr",label:"📸 OCR Upload",items:[
-    {page:"aiimport",label:"📸 Single Subject"},
-    {page:"multiimport",label:"🗂️ Multi-Subject",color:"#22d3ee"},
+  {key:"ocr",title:"📸 OCR আপলোড",color:C.ocr,items:[
+    {page:"aiimport",    icon:"📸",label:"Single Subject", desc:"এক বিষয়ের ছবি স্ক্যান"},
+    {page:"multiimport", icon:"🗂️",label:"Multi-Subject",  desc:"একসাথে একাধিক বিষয় স্ক্যান"},
   ]},
-  {key:"archive",label:"🗄️ Archive",items:[
-    {page:"archive",label:"🗄️ Archive",color:"#a78bfa"},
+  {key:"archive",title:"🗄️ আর্কাইভ",color:"#a78bfa",items:[
+    {page:"archive", icon:"🗄️",label:"Archive", desc:"সংরক্ষিত পুরনো কন্টেন্ট দেখুন"},
   ]},
 ];
+const UPLOADER_LEAF_PAGES=UPLOADER_SECTIONS.flatMap(s=>s.items.map(it=>it.page));
 
 export default function App(){
   // ── Android system back button — modal থাকলে close, নইলে double-back-to-exit ──
@@ -116,12 +119,6 @@ export default function App(){
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
   const[bulkPrefill,setBulkPrefill]=useState(null);
-  const[uploaderOpenCat,setUploaderOpenCat]=useState(null); // Uploader hub-এ কোন ক্যাটাগরি (Text Upload/AI Job/OCR Upload/Archive) খোলা আছে — accordion, একসাথে একটাই খোলা থাকে
-  useEffect(()=>{
-    // পেজ অন্য কোনো উপায়ে (যেমন archive/AI import থেকে "Send to Bulk") বদলে গেলেও সঠিক ক্যাটাগরিটাই খোলা/হাইলাইট থাকুক
-    const cat=UPLOADER_CATS.find(c=>c.items.some(it=>it.page===page));
-    if(cat) setUploaderOpenCat(cat.key);
-  },[page]);
   const[searchDetail,setSearchDetail]=useState(null);
   const backStack=useRef(["dashboard"]);
   const modalOpen=useRef(false);
@@ -213,9 +210,10 @@ export default function App(){
         return;
       }
 
-      // 3.5 Uploader hub-এ কোনো ক্যাটাগরি (Text Upload/AI Job/OCR Upload) খোলা থাকলে →
-      //     আগে সেটা বন্ধ করো (শুধু ক্যাটাগরি লাইনে ফিরে আসো), সরাসরি পেজ থেকে বের হয়ে যেও না
-      if(uploaderOpenCat){ setUploaderOpenCat(null); return; }
+      // 3.5 Uploader hub-এর কোনো টুল (leaf page, যেমন Bulk Upload/OCR/AI Job) খোলা থাকলে সিস্টেম-ব্যাক
+      //     চাপলে আগে লঞ্চার-গ্রিডে (uploaderhub) ফিরে আসবে, সরাসরি dashboard/আগের পেজে চলে যাবে না —
+      //     ঠিক topbar-এর ← বাটনের মতোই আচরণ, শুধু hardware back button থেকে ট্রিগার হচ্ছে
+      if(UPLOADER_LEAF_PAGES.includes(page)){ goPage("uploaderhub"); return; }
 
       // 4. Page back
       if(page!=="dashboard"){
@@ -251,7 +249,7 @@ export default function App(){
       window.removeEventListener("androidBackButton",handleBack);
       clearTimeout(exitTimer.current);
     };
-  },[loggedIn,page,searchDetail,exitConfirm,uploaderOpenCat]);
+  },[loggedIn,page,searchDetail,exitConfirm,goPage]);
 
   const refresh=useCallback(()=>{
     setSpin(true);invalidateAll();setTick(t=>t+1);
@@ -366,8 +364,9 @@ export default function App(){
   },[techRawBadge]);
 
   const badgeMap={students:signupBadge,reports:reportBadge,techniques:techBadge,approval:reportBadge+techBadge};
-  const pageLabel=NAV.find(n=>n.id===page) ||
+  const pageLabel=NAV.find(n=>n.id===page||n.landingId===page) ||
     NAV.flatMap(n=>n.children||[]).find(c=>c.id===page);
+  const inUploaderLeaf=UPLOADER_LEAF_PAGES.includes(page);
 
   // ── Render ──
   if(!loggedIn) return(
@@ -392,9 +391,14 @@ export default function App(){
       <>
       <style>{css}</style>
       <div className="topbar">
-        <div>
-          <div className="topbar-title">{pageLabel?.icon} {pageLabel?.label}</div>
-          <div className="topbar-sub">Smart Study Admin</div>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          {inUploaderLeaf&&(
+            <button className="icon-btn" title="Uploader হাবে ফিরে যান" onClick={()=>goPage("uploaderhub")}>←</button>
+          )}
+          <div>
+            <div className="topbar-title">{pageLabel?.icon} {pageLabel?.label}</div>
+            <div className="topbar-sub">Smart Study Admin</div>
+          </div>
         </div>
         <div style={{display:"flex",gap:6}}>
           <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
@@ -407,84 +411,58 @@ export default function App(){
       <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick} pushLayer={pushLayer}/></div>
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push} tick={tick}/></div>
 
-      {/* Approval hub — Reports / Techniques, একটার আন্ডারে, ট্যাব দিয়ে সুইচ */}
+      {/* Approval hub — Reports / Techniques, একটার আন্ডারে, ট্যাব দিয়ে সুইচ (structure অপরিবর্তিত,
+          এখানে মাত্র ২টা ট্যাব থাকায় launcher-grid দরকার নেই, শুধু টোকেন/স্পেসিং পলিশ হলো —
+          ReportsPage/TechniquesPage নিজেরাই নিজেদের ".page" wrapper রাখে (Uploader-এর মতোই),
+          তাই বাইরে থেকে আর দ্বিতীয়বার ".page"-এ মোড়ানো হচ্ছে না — Phase ৪-এর একই ফিক্স এখানেও) */}
       <div style={{display:(page==="reports"||page==="techniques")?"block":"none"}}>
-        <div className="page" style={{paddingTop:0}}>
-          <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
-            <div className="atabs">
-              <button className={`atab${page==="reports"?" on":""}`} onClick={()=>goPage("reports")}>🚨 Reports{reportBadge>0?` (${reportBadge})`:""}</button>
-              <button className={`atab${page==="techniques"?" on":""}`} onClick={()=>goPage("techniques")}>🧠 Techniques{techBadge>0?` (${techBadge})`:""}</button>
-            </div>
+        <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,padding:"16px 16px 12px"}}>
+          <div className="atabs">
+            <button className={`atab${page==="reports"?" on":""}`} onClick={()=>goPage("reports")}>🚨 Reports{reportBadge>0?` (${reportBadge})`:""}</button>
+            <button className={`atab${page==="techniques"?" on":""}`} onClick={()=>goPage("techniques")}>🧠 Techniques{techBadge>0?` (${techBadge})`:""}</button>
           </div>
-          <div style={{display:page==="reports"   ?"block":"none"}}><ReportsPage   push={push} tick={tick} deepLinkKey={reportDeepLinkKey} onDeepLinkHandled={()=>setReportDeepLinkKey(null)}/></div>
-          <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
+        </div>
+        <div style={{display:page==="reports"   ?"block":"none"}}><ReportsPage   push={push} tick={tick} deepLinkKey={reportDeepLinkKey} onDeepLinkHandled={()=>setReportDeepLinkKey(null)}/></div>
+        <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
+      </div>
+
+      {/* Uploader hub — লঞ্চার গ্রিড (Phase ৪): ৪টা কালার-কোডেড সেকশন, প্রতিটা টুল একটা টাইল।
+          কোনো নেস্টেড accordion/ট্যাব-স্টেট নেই — গ্রিড থেকে ট্যাপ করলে সেই টুল ফুল-স্ক্রিনে খোলে,
+          topbar-এর ← বাটনে (বা সিস্টেম ব্যাক-এ) সরাসরি এই গ্রিডেই ফেরত আসে। */}
+      <div style={{display:page==="uploaderhub"?"block":"none"}}>
+        <div className="page">
+          <LauncherGrid sections={UPLOADER_SECTIONS} onSelect={goPage}/>
         </div>
       </div>
 
-      {/* Uploader hub — Text Upload / AI Job / OCR Upload / Archive: প্রথমে শুধু এই ৪টা ক্যাটাগরির
-          একটাই লাইন দেখা যায় (accordion), কোনোটায় ট্যাপ করলে শুধু সেটার ভিতরের অপশনগুলো খোলে —
-          বাকিগুলো হাইড থাকে। একসাথে সর্বোচ্চ একটাই ক্যাটাগরি খোলা থাকে। */}
-      <div style={{display:(page==="bulkupload"||page==="singleentry"||page==="joblauncher"||page==="qbankconv"||page==="questiongen"||page==="aiimport"||page==="multiimport"||page==="archive"||page==="typing")?"block":"none"}}>
-        <div className="page" style={{paddingTop:0}}>
-          <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,paddingTop:13,paddingBottom:8}}>
-            {(()=>{
-              const openCat=UPLOADER_CATS.find(c=>c.key===uploaderOpenCat);
-              return(
-                <>
-                  {/* ── ক্যাটাগরি লাইন — শুরুতে শুধু এইটাই দেখা যায় ── */}
-                  <div className="atabs" style={{marginBottom:openCat?10:0}}>
-                    {UPLOADER_CATS.map(cat=>(
-                      <button key={cat.key}
-                        className={`atab${uploaderOpenCat===cat.key?" on":""}`}
-                        onClick={()=>{
-                          if(cat.items.length===1){ goPage(cat.items[0].page); setUploaderOpenCat(cat.key); return; }
-                          const opening=uploaderOpenCat!==cat.key;
-                          setUploaderOpenCat(opening?cat.key:null);
-                          // ── ক্যাটাগরি খোলার সাথে সাথে সেটার নিজের কনটেন্টেও চলে যাও — নাহলে আগের
-                          //    ক্যাটাগরির পেজই স্ক্রিনে থেকে যায় (এই বাগটাই "OCR-এ আছি বোঝা যাচ্ছে না" সমস্যা ছিল) ──
-                          if(opening&&!cat.items.some(it=>it.page===page)) goPage(cat.items[0].page);
-                        }}>
-                        {cat.label}
-                      </button>
-                    ))}
-                  </div>
-                  {/* ── খোলা ক্যাটাগরির ভিতরের অপশন — একটাই দেখা যায় বাকিগুলো হাইড ── */}
-                  {openCat&&openCat.items.length>1&&(
-                    <div className="atabs">
-                      {openCat.items.map(it=>(
-                        <button key={it.page} className={`atab${page===it.page?" on":""}`}
-                          onClick={()=>goPage(it.page)}
-                          style={{color:page===it.page?(it.color||undefined):undefined}}>
-                          {it.label}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </>
-              );
-            })()}
-          </div>
-          <div style={{display:page==="bulkupload" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill(null)}/></div>
-          <div style={{display:page==="singleentry"?"block":"none"}}><SingleQuestionEntryPage push={push}/></div>
-          <div style={{display:page==="joblauncher"?"block":"none"}}><JobLauncherTab push={push} tick={tick}/></div>
-          <div style={{display:page==="qbankconv"?"block":"none"}}><QBankConverterTab push={push} tick={tick}/></div>
-          <div style={{display:page==="questiongen"?"block":"none"}}><QuestionGenTab push={push} tick={tick}/></div>
-          <div style={{display:page==="aiimport"?"block":"none"}}><AIImportPage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
-          <div style={{display:page==="multiimport"?"block":"none"}}><MultiSubjectImportPage push={push}/></div>
-          <div style={{display:page==="archive"?"block":"none"}}><ArchivePage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
-          <div style={{display:page==="typing"?"block":"none"}}><TypingUploaderPage push={push}/></div>
-        </div>
-      </div>
+      {/* নিচের ৯টা টুল-পেজের একটাও ছোঁয়া হয়নি — শুধু কীভাবে দেখানো হচ্ছে (wrapper) তা বদলেছে।
+          Bulk/Single/Typing/AIImport/MultiImport/Archive নিজেরাই নিজেদের ভিতরে ".page" wrapper
+          রাখে (আগে এখানে আরেকটা বাইরের ".page"-এ মোড়ানো থাকায় ডাবল-নেস্টেড prox প্যাডিং তৈরি হতো,
+          সেটাও এখানে ঠিক হয়ে গেল)। JobLauncher/QBankConverter/QuestionGen ফ্র্যাগমেন্ট-অনলি,
+          তাই প্রতিটাকে নিজের একটা করে ".page" দেওয়া হলো। */}
+      <div style={{display:page==="bulkupload" ?"block":"none"}}><BulkUploaderPage push={push} prefillText={bulkPrefill} onClearPrefill={()=>setBulkPrefill(null)}/></div>
+      <div style={{display:page==="singleentry"?"block":"none"}}><SingleQuestionEntryPage push={push}/></div>
+      <div style={{display:page==="typing"     ?"block":"none"}}><TypingUploaderPage push={push}/></div>
+      <div style={{display:page==="joblauncher"?"block":"none"}}><div className="page"><JobLauncherTab push={push} tick={tick}/></div></div>
+      <div style={{display:page==="qbankconv"  ?"block":"none"}}><div className="page"><QBankConverterTab push={push} tick={tick}/></div></div>
+      <div style={{display:page==="questiongen"?"block":"none"}}><div className="page"><QuestionGenTab push={push} tick={tick}/></div></div>
+      <div style={{display:page==="aiimport"   ?"block":"none"}}><AIImportPage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
+      <div style={{display:page==="multiimport"?"block":"none"}}><MultiSubjectImportPage push={push}/></div>
+      <div style={{display:page==="archive"    ?"block":"none"}}><ArchivePage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
 
       <nav className="bottom-nav">
         {NAV.map(n=>{
           const cnt=badgeMap[n.id]||0;
-          const isActive=n.children?n.children.some(c=>c.id===page):page===n.id;
+          const isActive=n.children?(n.children.some(c=>c.id===page)||page===n.landingId):page===n.id;
           return(
             <button key={n.id} className={`nav-btn${isActive?" active":""}`}
-              onClick={()=>goPage(n.children ? n.children[0].id : n.id)}>
+              onClick={()=>goPage(n.landingId ?? (n.children ? n.children[0].id : n.id))}>
               <span className="nav-icon" style={{position:"relative",display:"inline-block"}}>
                 {n.icon}
+                {/* hub-dot: এই আইটেমে children আছে মানে ট্যাপ করলে একটা হাব খুলবে (একাধিক সাব-পেজ) —
+                    ব্যবহারকারী আগেভাগেই বুঝবে এটা একটা সাধারণ পেজ না। badge count-এর বিপরীত কোণে (bottom-right)
+                    বসানো হয়েছে যাতে দুটো একসাথে থাকলেও ওভারল্যাপ না করে। */}
+                {n.children&&<span className="nav-dot"/>}
                 {cnt>0&&(
                   <span style={{position:"absolute",top:-5,right:-7,background:"#ef4444",color:"#fff",
                     fontSize:8,fontWeight:900,borderRadius:999,minWidth:14,height:14,
