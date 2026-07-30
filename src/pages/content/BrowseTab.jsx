@@ -3,7 +3,8 @@ import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../../core/config.js";
 import { useFB, invalidate } from "../../core/dataCache.js";
 import { fbDelete, fbDeleteBatch, fbPush, fbSet } from "../../core/firebase.js";
-import { toArr, nowTs } from "../../core/utils.js";
+import { toArr, nowTs, loadSharedGasSecret } from "../../core/utils.js";
+import { deleteIdsInSheet } from "../../core/sheetSave.js";
 import { callAiProviderRotatingRaw, buildKeyPool, OCR_SPLIT_RULES, OCR_NOISE_RULES, OCR_CORRECTION_RULES } from "../../core/ocrProviders.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
 import { InlineEditModal } from "./InlineEditModal.jsx";
@@ -133,6 +134,14 @@ function BrowseTab({push,tick}){
   const pageSlice=useMemo(()=>filtered.slice(page*PAGE,(page+1)*PAGE),[filtered,page]);
   const totalPages=Math.ceil(filtered.length/PAGE);
 
+  // ── FIX: আগে এখানে শুধু Firebase-এ delete হতো (fbDelete), Sheet একদমই টাচ
+  // হতো না — মানে GAS/Sheet মোডে যারা ডেটা পড়ে তাদের কাছে "ডিলিট করা" প্রশ্নটা
+  // থেকেই যেত। এখন Sheet delete-ও (GAS deleteByIds) সাথে হচ্ছে।
+  // ⚠️ group_id-aware warning (multi-part প্রশ্ন গ্রুপ একসাথে ডিলিট) এখনো যোগ
+  // করা যায়নি — কারণ এই ট্যাব এখনো Firebase (useFB) থেকে ডেটা পড়ে, যেটাতে
+  // নতুন schema-র subject_id/topic_id/group_id ফিল্ড নেই (Phase 4 deferred)।
+  // এই ট্যাবের ডেটা-সোর্স Sheet/GAS-এ migrate করাটা একটা বড় আলাদা কাজ —
+  // master plan-এ future task হিসেবে নোট করা আছে। ──
   const hardDelete=async()=>{
     if(!delTarget)return;
     setDelLoading(true);
@@ -140,7 +149,15 @@ function BrowseTab({push,tick}){
       const fkey=delTarget._fbKey;
       const qid=(delTarget.ID||delTarget.id||"").toString();
       if(fkey){await fbDelete(`${sheet}/${fkey}`);invalidate(sheet);}
-      push("success","🗑️ ডিলিট!",`#${qid}`);
+      const gasSecret=loadSharedGasSecret();
+      let sheetMsg="";
+      if(gasSecret&&qid){
+        const sres=await deleteIdsInSheet({sheet,ids:[qid],gasSecret});
+        sheetMsg=sres.ok?` · Sheet থেকেও মুছেছে`:` · ⚠️ Sheet delete ব্যর্থ (${sres.error||"?"})`;
+      } else {
+        sheetMsg=" · ⚠️ GAS Secret না থাকায় শুধু Firebase-এ মুছেছে, Sheet-এ না";
+      }
+      push("success","🗑️ ডিলিট!",`#${qid}${sheetMsg}`);
       setDelTarget(null);
     }catch(e){push("error","ডিলিট ব্যর্থ",String(e?.message||e||"unknown"));}
     setDelLoading(false);
