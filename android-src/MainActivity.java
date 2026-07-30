@@ -1,3 +1,7 @@
+/* ✅ এটাই একমাত্র MainActivity — লাইভ, কনফার্মড।
+   আগে এই রিপোতে আরও ২টা ডুপ্লিকেট কপি ছিল (./MainActivity.kt, ./android-src/MainActivity.kt)
+   একই package+class name-এর, যেগুলো আসল Android প্রজেক্টে স্টেল/অব্যবহৃত ছিল বলে নিশ্চিত হয়ে
+   মুছে ফেলা হয়েছে। এখন থেকে এই একটাই ফাইল — কোনো ডুপ্লিকেট-কনফিউশন নেই। */
 package com.smartstudy.admin;
 
 import android.content.BroadcastReceiver;
