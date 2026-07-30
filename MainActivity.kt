@@ -7,12 +7,10 @@ import android.content.IntentFilter
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.widget.Toast
 import com.getcapacitor.BridgeActivity
 import com.capacitorjs.plugins.camera.CameraPlugin
 
 class MainActivity : BridgeActivity() {
-    private var backPressedOnce = false
 
     // FCM token refresh receiver
     private val tokenReceiver = object : BroadcastReceiver() {
@@ -60,12 +58,14 @@ class MainActivity : BridgeActivity() {
     }
 
     override fun onBackPressed() {
-        val handled = bridge?.triggerWindowJSEvent("androidBackButton", "{}") ?: false
-        if (!handled) {
-            if (backPressedOnce) { super.onBackPressed(); return }
-            backPressedOnce = true
-            Toast.makeText(this, "আবার Back চাপুন বন্ধ করতে", Toast.LENGTH_SHORT).show()
-            Handler(Looper.getMainLooper()).postDelayed({ backPressedOnce = false }, 2000)
-        }
+        // ⚠️ আগে এখানে backPressedOnce/Toast/exitApp দিয়ে native-এর নিজের একটা
+        // "২বার চাপলে বন্ধ" সিস্টেম ছিল, আর triggerWindowJSEvent()-এর রিটার্ন ভ্যালু
+        // ("handled") দিয়ে বোঝার চেষ্টা হতো JS আসলে navigate করেছে কিনা — কিন্তু
+        // triggerWindowJSEvent() fire-and-forget (JS-এর উত্তরের জন্য অপেক্ষা করে না),
+        // তাই "handled" নির্ভরযোগ্য ছিল না। এই native fallback আর JS-এর নিজের
+        // exit-confirm লজিক (App.jsx-এর handleBack, ধাপ ৫) — দুটো সিস্টেম একসাথে
+        // চলায় অসঙ্গতিপূর্ণ ব্যাক-বাটন আচরণ হচ্ছিল। এখন native শুধু event ফরওয়ার্ড
+        // করে, সিদ্ধান্ত সম্পূর্ণভাবে JS-এর — single source of truth।
+        bridge?.triggerWindowJSEvent("androidBackButton", "{}")
     }
 }
