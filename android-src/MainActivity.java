@@ -7,12 +7,10 @@ import android.content.IntentFilter;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.widget.Toast;
 import com.getcapacitor.BridgeActivity;
 import com.capacitorjs.plugins.camera.CameraPlugin;
 
 public class MainActivity extends BridgeActivity {
-    private boolean backPressedOnce = false;
 
     private final BroadcastReceiver tokenReceiver = new BroadcastReceiver() {
         @Override
@@ -69,11 +67,10 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onBackPressed() {
+        // দেখুন MainActivity.kt-এর একই মেথডের কমেন্ট — এই native double-back-exit
+        // fallback (backPressedOnce/Toast) সরানো হলো, এখন সিদ্ধান্ত সম্পূর্ণভাবে
+        // JS-এর (App.jsx handleBack) — single source of truth।
         if (getBridge() != null)
             getBridge().triggerWindowJSEvent("androidBackButton", "{}");
-        if (backPressedOnce) { super.onBackPressed(); return; }
-        backPressedOnce = true;
-        Toast.makeText(this, "আবার Back চাপুন বন্ধ করতে", Toast.LENGTH_SHORT).show();
-        new Handler(Looper.getMainLooper()).postDelayed(() -> backPressedOnce = false, 2000);
     }
 }
