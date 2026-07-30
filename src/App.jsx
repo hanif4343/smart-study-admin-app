@@ -66,24 +66,14 @@ const UPLOADER_SECTIONS=[
 const UPLOADER_LEAF_PAGES=UPLOADER_SECTIONS.flatMap(s=>s.items.map(it=>it.page));
 
 export default function App(){
-  // ── Android system back button — modal থাকলে close, নইলে double-back-to-exit ──
-  useEffect(()=>{
-    let _depth=0;
-    const inc=()=>_depth++;
-    const dec=()=>{_depth=Math.max(0,_depth-1);};
-    window.addEventListener("modal-open",inc);
-    window.addEventListener("modal-close",dec);
-    const onBack=()=>{
-      if(_depth>0) window.dispatchEvent(new Event("back-press"));
-      // depth===0 হলে MainActivity এর double-back-to-exit কাজ করবে
-    };
-    window.addEventListener("androidBackButton",onBack);
-    return()=>{
-      window.removeEventListener("modal-open",inc);
-      window.removeEventListener("modal-close",dec);
-      window.removeEventListener("androidBackButton",onBack);
-    };
-  },[]);
+  /* ⚠️ ব্যাক-বাটন আর্কিটেকচার নোট (এখানে আগে যা ছিল):
+     আগে এখানে একটা আলাদা effect ছিল যেটা নিজের মতো "modal-open"/"modal-close" গুনে
+     (_depth কাউন্টার) androidBackButton ইভেন্টে "back-press" ডিসপ্যাচ করত — ঠিক নিচের
+     handleBack effect-ও (modalOpen.current ref দিয়ে) হুবহু একই কাজ করে। ফলে একটাই
+     হার্ডওয়্যার ব্যাক-প্রেসে "back-press" কাস্টম ইভেন্ট দুইবার ডিসপ্যাচ হতো — এটাই
+     ছিল ব্যাক-বাটনের অসঙ্গতিপূর্ণ (inconsistent) আচরণের মূল কারণ। এখন নিচের একটাই
+     handleBack effect পুরো priority chain-এর (modal → sub-layer → uploader-leaf →
+     page-back → exit-confirm) একমাত্র মালিক — single source of truth। */
 
   const[loggedIn,setLoggedIn]=useState(()=>{
     // ⚡ ফিক্স: আগে এখানে সবসময় false দিয়ে শুরু হতো — মানে অ্যাপ ব্যাকগ্রাউন্ডে গিয়ে Android
