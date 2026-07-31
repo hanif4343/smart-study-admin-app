@@ -1,3 +1,7 @@
+/* ✅ এটাই একমাত্র MainActivity — লাইভ, কনফার্মড।
+   আগে এই রিপোতে আরও ২টা ডুপ্লিকেট কপি ছিল (./MainActivity.kt, ./android-src/MainActivity.kt)
+   একই package+class name-এর, যেগুলো আসল Android প্রজেক্টে স্টেল/অব্যবহৃত ছিল বলে নিশ্চিত হয়ে
+   মুছে ফেলা হয়েছে। এখন থেকে এই একটাই ফাইল — কোনো ডুপ্লিকেট-কনফিউশন নেই। */
 package com.smartstudy.admin;
 
 import android.content.BroadcastReceiver;
@@ -7,12 +11,10 @@ import android.content.IntentFilter;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.widget.Toast;
 import com.getcapacitor.BridgeActivity;
 import com.capacitorjs.plugins.camera.CameraPlugin;
 
 public class MainActivity extends BridgeActivity {
-    private boolean backPressedOnce = false;
 
     private final BroadcastReceiver tokenReceiver = new BroadcastReceiver() {
         @Override
@@ -69,11 +71,10 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onBackPressed() {
+        // দেখুন MainActivity.kt-এর একই মেথডের কমেন্ট — এই native double-back-exit
+        // fallback (backPressedOnce/Toast) সরানো হলো, এখন সিদ্ধান্ত সম্পূর্ণভাবে
+        // JS-এর (App.jsx handleBack) — single source of truth।
         if (getBridge() != null)
             getBridge().triggerWindowJSEvent("androidBackButton", "{}");
-        if (backPressedOnce) { super.onBackPressed(); return; }
-        backPressedOnce = true;
-        Toast.makeText(this, "আবার Back চাপুন বন্ধ করতে", Toast.LENGTH_SHORT).show();
-        new Handler(Looper.getMainLooper()).postDelayed(() -> backPressedOnce = false, 2000);
     }
 }
