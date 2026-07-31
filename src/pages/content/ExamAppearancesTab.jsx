@@ -4,20 +4,23 @@
    ⚠️ এখন question_id ম্যানুয়ালি বসাতে হয় (Browse ট্যাব এখনো Sheet/GAS-এ migrate
    হয়নি, তাই সরাসরি "এই প্রশ্নে appearance যোগ করো" বাটন এখনো নেই — future task,
    master plan-এ নোট করা আছে)। */
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
-import { fetchReferenceData, getExamAppearances, addExamAppearance } from "../../core/sheetSave.js";
+import { fetchReferenceData, getExamAppearances, addExamAppearance, addReferenceItem } from "../../core/sheetSave.js";
+import { TypeaheadCombo } from "../../components/shared/TypeaheadCombo.jsx";
+
+const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
 
 function ExamAppearancesTab({push}){
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[refData,setRefData]=useState(null);
-
-  useEffect(()=>{
+  const loadRefData=useCallback(()=>{
     if(!gasSecret) return;
     fetchReferenceData({gasSecret}).then(setRefData);
   },[gasSecret]);
+  useEffect(()=>{ loadRefData(); },[loadRefData]);
 
   const[questionId,setQuestionId]=useState("");
   const[appearances,setAppearances]=useState(null);
@@ -34,18 +37,39 @@ function ExamAppearancesTab({push}){
   const postMap=useMemo(()=>{const m={};(refData?.posts||[]).forEach(p=>{m[p.post_id]=p.post_name;});return m;},[refData]);
   const instMap=useMemo(()=>{const m={};(refData?.institutions||[]).forEach(i=>{m[i.institution_id]=i.institution_name;});return m;},[refData]);
 
-  const[postId,setPostId]=useState("");
-  const[institutionId,setInstitutionId]=useState("");
+  const postOptions=useMemo(()=>(refData?.posts||[]).map(p=>({id:p.post_id,name:p.post_name})),[refData]);
+  const instOptions=useMemo(()=>(refData?.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})),[refData]);
+
+  // {id,name} — id ফাঁকা মানে টাইপ-করা নাম বিদ্যমান তালিকায় নেই, সাবমিটের সময় নতুন করে যোগ হবে
+  const[postSel,setPostSel]=useState({id:"",name:""});
+  const[instSel,setInstSel]=useState({id:"",name:""});
   const[year,setYear]=useState("");
   const[adding,setAdding]=useState(false);
 
+  // টাইপ করা নাম বিদ্যমান তালিকায় (case/space-insensitive) থাকলে সেই id রিটার্ন করে,
+  // না থাকলে addReferenceItem দিয়ে নতুন এন্ট্রি বানিয়ে সেই নতুন id রিটার্ন করে
+  const resolveOrCreate=async(sel,refType,options)=>{
+    const name=sel.name.trim();
+    if(!name) return{ok:false};
+    if(sel.id) return{ok:true,id:sel.id};
+    const hit=options.find(o=>norm(o.name)===norm(name));
+    if(hit) return{ok:true,id:hit.id};
+    const res=await addReferenceItem({refType,name,gasSecret,push});
+    return res.ok?{ok:true,id:res.id,created:true}:{ok:false};
+  };
+
   const doAdd=async()=>{
-    if(!postId||!institutionId||!year.trim()){push("warn","পদ, প্রতিষ্ঠান ও সাল — সবগুলো দিন","");return;}
+    if(!postSel.name.trim()||!instSel.name.trim()||!year.trim()){push("warn","পদ, প্রতিষ্ঠান ও সাল — সবগুলো দিন","");return;}
     setAdding(true);
-    const res=await addExamAppearance({questionId:questionId.trim(),postId,institutionId,year:year.trim(),gasSecret,push});
+    const postRes=await resolveOrCreate(postSel,"posts",postOptions);
+    if(!postRes.ok){ push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); setAdding(false); return; }
+    const instRes=await resolveOrCreate(instSel,"institutions",instOptions);
+    if(!instRes.ok){ push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); setAdding(false); return; }
+    const res=await addExamAppearance({questionId:questionId.trim(),postId:postRes.id,institutionId:instRes.id,year:year.trim(),gasSecret,push});
     if(res.ok){
       push("success","✅ Appearance যোগ হয়েছে!","প্রশ্নের মূল রো টাচ হয়নি");
-      setPostId("");setInstitutionId("");setYear("");
+      setPostSel({id:"",name:""});setInstSel({id:"",name:""});setYear("");
+      if(postRes.created||instRes.created) loadRefData(); // নতুন পদ/প্রতিষ্ঠান তৈরি হলে তালিকা রিফ্রেশ
       load();
     }
     setAdding(false);
@@ -90,24 +114,30 @@ function ExamAppearancesTab({push}){
           <div style={{fontSize:11,color:C.muted,margin:"16px 0 8px",fontWeight:700}}>➕ নতুন Appearance যোগ করো</div>
           <div className="fld" style={{marginBottom:8}}>
             <label>পদ (Post)</label>
-            <select className="inp" value={postId} onChange={e=>setPostId(e.target.value)}>
-              <option value="">— বাছাই করো —</option>
-              {(refData?.posts||[]).map(p=>(<option key={p.post_id} value={p.post_id}>{p.post_name}</option>))}
-            </select>
+            <TypeaheadCombo
+              options={postOptions}
+              value={postSel}
+              onChange={setPostSel}
+              placeholder="টাইপ করো... যেমন: সহকারী শিক্ষক"
+              newLabel={`🆕 "${postSel.name.trim()}" নতুন পদ হিসেবে যোগ হবে`}
+            />
           </div>
           <div className="fld" style={{marginBottom:8}}>
             <label>প্রতিষ্ঠান (Institution)</label>
-            <select className="inp" value={institutionId} onChange={e=>setInstitutionId(e.target.value)}>
-              <option value="">— বাছাই করো —</option>
-              {(refData?.institutions||[]).map(i=>(<option key={i.institution_id} value={i.institution_id}>{i.institution_name}</option>))}
-            </select>
+            <TypeaheadCombo
+              options={instOptions}
+              value={instSel}
+              onChange={setInstSel}
+              placeholder="টাইপ করো... যেমন: প্রাথমিক বিদ্যালয়"
+              newLabel={`🆕 "${instSel.name.trim()}" নতুন প্রতিষ্ঠান হিসেবে যোগ হবে`}
+            />
           </div>
           <div className="fld" style={{marginBottom:10}}>
             <label>সাল</label>
             <input className="inp" placeholder="যেমন: 2025" value={year} onChange={e=>setYear(e.target.value)}/>
           </div>
           <div style={{fontSize:10,color:C.muted,marginBottom:8}}>
-            পদ/প্রতিষ্ঠান তালিকায় না থাকলে আগে "🗂️ Reference" ট্যাব থেকে Posts/Institutions-এ যোগ করে নাও।
+            পদ/প্রতিষ্ঠান টাইপ করলে মিল থাকলে বিদ্যমানটাই বাছাই হবে, না থাকলে "যোগ করো"-তে চাপলে নতুন করেই যোগ হয়ে যাবে — আলাদা করে Reference ট্যাবে গিয়ে যোগ করার দরকার নেই।
           </div>
           <button className="btn bp" style={{width:"100%",justifyContent:"center"}} onClick={doAdd} disabled={adding}>{adding?"⏳ যোগ হচ্ছে...":"➕ যোগ করো"}</button>
         </>
