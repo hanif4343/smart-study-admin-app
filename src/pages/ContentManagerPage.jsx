@@ -1,27 +1,31 @@
 /* ══════════ CONTENT MANAGER (shell) ══════════
    Phase ৫ রিডিজাইন: আগে Browse/Rename/Audience/QType/Model Test/Delete — ৬টা সমান-ওজনের
-   ট্যাব একলাইনে গুঁজে দেওয়া ছিল। এখন Browse-ই ডিফল্ট/প্রাইমারি ভিউ, বাকি ৫টা টুল
+   ট্যাব একলাইনে গুঁজে দেওয়া ছিল। এখন Browse-ই ডিফল্ট/প্রাইমারি ভিউ, বাকি টুলগুলো
    "Tools" বাটনে ট্যাপ করলে একটা লঞ্চার-গ্রিডে (Uploader hub-এর মতোই, একই শেয়ার্ড
    LauncherGrid কম্পোনেন্ট রিইউজ করে) দেখা যায়। Delete-কে আলাদা "বিপজ্জনক" সেকশনে
    রাখা হয়েছে যেহেতু এটাই একমাত্র destructive অ্যাকশন এখানে।
-   নিচের ৬টা সাব-কম্পোনেন্টের (BrowseTab/RenameTab/AudienceTagRenameTab/BulkQTypeTab/
-   ModelTestTab/DeleteTab) একটারও ভেতরের কোড ছোঁয়া হয়নি। */
+   db-migration-v2 থেকে যোগ হওয়া Reference ও Appearances টুল দুটোও এই একই গ্রিড-ডিজাইনে
+   "edit" সেকশনে যোগ করা হয়েছে। নিচের সাব-কম্পোনেন্টগুলোর ভেতরের কোড ছোঁয়া হয়নি। */
 import React, { useState, useCallback } from "react";
 import { C } from "../core/config.js";
 import { LauncherGrid } from "../components/shared/LauncherGrid.jsx";
 import { BrowseTab } from "./content/BrowseTab.jsx";
 import { RenameTab } from "./content/RenameTab.jsx";
 import { AudienceTagRenameTab } from "./content/AudienceTagRenameTab.jsx";
+import { ReferenceManagerTab } from "./content/ReferenceManagerTab.jsx";
+import { ExamAppearancesTab } from "./content/ExamAppearancesTab.jsx";
 import { BulkQTypeTab } from "./BulkQTypeTab.jsx";
 import { ModelTestTab } from "./content/ModelTestTab.jsx";
 import { DeleteTab } from "./content/DeleteTab.jsx";
 
 const CONTENT_TOOL_SECTIONS=[
   {key:"edit",title:"✏️ কন্টেন্ট এডিট",color:C.info,items:[
-    {page:"rename",    icon:"✏️",label:"Rename",     desc:"Subject/Sub-topic নাম পরিবর্তন"},
-    {page:"audience",  icon:"🎯",label:"Audience",   desc:"Audience ট্যাগ রিনেম"},
-    {page:"qtype",     icon:"🏷️",label:"QType",      desc:"বাল্ক প্রশ্নের ধরন বদলান"},
-    {page:"modeltest", icon:"🧪",label:"Model Test", desc:"মডেল টেস্ট জেনারেট করুন"},
+    {page:"rename",      icon:"✏️",label:"Rename",      desc:"Subject/Sub-topic নাম পরিবর্তন"},
+    {page:"reference",   icon:"🗂️",label:"Reference",   desc:"রেফারেন্স-এন্ট্রি ম্যানেজ করুন"},
+    {page:"appearances", icon:"🎓",label:"Appearances",  desc:"পদ+প্রতিষ্ঠান+সাল অনুযায়ী প্রশ্নের appearance"},
+    {page:"audience",    icon:"🎯",label:"Audience",     desc:"Audience ট্যাগ রিনেম"},
+    {page:"qtype",       icon:"🏷️",label:"QType",       desc:"বাল্ক প্রশ্নের ধরন বদলান"},
+    {page:"modeltest",   icon:"🧪",label:"Model Test",   desc:"মডেল টেস্ট জেনারেট করুন"},
   ]},
   {key:"danger",title:"⚠️ বিপজ্জনক",color:C.danger,items:[
     {page:"delete", icon:"🗑️",label:"Delete", desc:"বাল্ক কনটেন্ট ডিলিট — সতর্কভাবে ব্যবহার করুন"},
@@ -29,6 +33,8 @@ const CONTENT_TOOL_SECTIONS=[
 ];
 const TOOL_LABELS={
   rename:{icon:"✏️",label:"Rename"},
+  reference:{icon:"🗂️",label:"Reference"},
+  appearances:{icon:"🎓",label:"Appearances"},
   audience:{icon:"🎯",label:"Audience"},
   qtype:{icon:"🏷️",label:"QType"},
   modeltest:{icon:"🧪",label:"Model Test"},
@@ -36,7 +42,7 @@ const TOOL_LABELS={
 };
 
 function ContentManagerPage({push,tick,pushLayer}){
-  const[tab,setTab]=useState("browse"); // "browse" | "tools" | rename/audience/qtype/modeltest/delete
+  const[tab,setTab]=useState("browse"); // "browse" | "tools" | rename/reference/appearances/audience/qtype/modeltest/delete
 
   /* Browse → Tools: layer push করা হয় যাতে Android system-back চাপলে সরাসরি Browse-এ ফিরে যায় */
   const goTools=useCallback(()=>{
@@ -79,11 +85,13 @@ function ContentManagerPage({push,tick,pushLayer}){
             <button className="icon-btn" onClick={()=>setTab("tools")}>←</button>
             <div className="sub-head-title">{TOOL_LABELS[tab].icon} {TOOL_LABELS[tab].label}</div>
           </div>
-          {tab==="rename"    && <RenameTab push={push} tick={tick}/>}
-          {tab==="audience"  && <AudienceTagRenameTab push={push} tick={tick}/>}
-          {tab==="qtype"     && <BulkQTypeTab push={push} tick={tick}/>}
-          {tab==="modeltest" && <ModelTestTab push={push} tick={tick}/>}
-          {tab==="delete"    && <DeleteTab push={push} tick={tick}/>}
+          {tab==="rename"      && <RenameTab push={push} tick={tick}/>}
+          {tab==="reference"   && <ReferenceManagerTab push={push}/>}
+          {tab==="appearances" && <ExamAppearancesTab push={push}/>}
+          {tab==="audience"    && <AudienceTagRenameTab push={push} tick={tick}/>}
+          {tab==="qtype"       && <BulkQTypeTab push={push} tick={tick}/>}
+          {tab==="modeltest"   && <ModelTestTab push={push} tick={tick}/>}
+          {tab==="delete"      && <DeleteTab push={push} tick={tick}/>}
         </>
       )}
 

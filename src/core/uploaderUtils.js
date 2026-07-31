@@ -106,18 +106,24 @@ function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id,ma
 
 /* Build Google-Sheet row — shared shape used by both direct-submit (OCR page) and BulkUploaderPage
    when saveLoc==="sheet". Same `item` shape as buildBulkRecord (from parseBulkEntry). */
-function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper}){
+function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subjectId,topicId,subtopicId,tagIds,groupId,subIndex,topicName}){
   const isWritten=qtype==="Written";
   return{
     question:item.q,
     opt1:isWritten?"":item.opt1||"", opt2:isWritten?"":item.opt2||"",
     opt3:isWritten?"":item.opt3||"", opt4:isWritten?"":item.opt4||"",
     correct:item.correct||"",
-    subject, sub_topic:subtopic||subject, topic:"",
+    // ── লিগেসি নাম-ভিত্তিক কলাম (backward-compat, পুরনো duplicate-check ও
+    // Sheet readability এখনো এগুলো ব্যবহার করে) ──
+    subject, sub_topic:subtopic||subject, topic:topicName||"",
     explanation:item.explanation||"",
     qType:isWritten?"Written":(qtype==="Study"?"Study":"MCQ"),
     technique:"", prevExam:"", mainQpaper:mainQpaper||"",
     audienceTags:(audienceTags||[]).join(","),
+    // ── নতুন schema fields (Phase 2+) ──
+    subject_id:subjectId||"", topic_id:topicId||"", subtopic_id:subtopicId||"",
+    audienceTagsIds:(tagIds||[]).join(","),
+    group_id:groupId||"", sub_index:subIndex!=null?String(subIndex):"",
   };
 }
 

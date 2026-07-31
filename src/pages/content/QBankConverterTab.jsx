@@ -6,7 +6,7 @@ import { C } from "../../core/config.js";
 import { useFB, invalidate, loadPath } from "../../core/dataCache.js";
 import { toArr, nowTs, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { callAiProviderRotatingRaw } from "../../core/ocrProviders.js";
-import { saveRowsToSheet, saveRowsToFirebaseBulk } from "../../core/sheetSave.js";
+import { saveRowsToSheet, saveRowsToFirebaseBulk, fetchReferenceData } from "../../core/sheetSave.js";
 import { pushFailedItems } from "../../core/uploaderUtils.js";
 import { JOB_NONE_TAG } from "../../core/ghConfig.js";
 import {
@@ -19,6 +19,31 @@ import { JumpButton } from "../../components/shared/JumpButton.jsx";
 import { FailedQueuePanel } from "../../components/shared/FailedQueuePanel.jsx";
 
 function QBankConverterTab({push,tick}){
+  // ── Phase 5: এই কনভার্টার AI দিয়ে QBank প্রশ্নকে Quiz ফরম্যাটে বদলায়, subject/sub_topic
+  // নাম "canonical taxonomy" থেকে বেছে নেয়। কিন্তু নতুন schema-তে Quiz-এর প্রশ্ন
+  // subject_id/topic_id দিয়ে reference করে — তাই AI-এর দেওয়া নাম Subjects/Topics
+  // reference-টেবিলের সাথে মিলিয়ে id বসানো হচ্ছে (নিচে matchSubjectTopicId দেখো),
+  // নাহলে এই পাথ দিয়ে যোগ হওয়া প্রশ্ন নতুন lazy-load সিস্টেমে "অদৃশ্য" থেকে যেত। ──
+  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const saveGasSecret0=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
+  const[refData,setRefData]=useState(null);
+  useEffect(()=>{
+    if(!gasSecret){ setRefData(null); return; }
+    let cancelled=false;
+    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled) setRefData(d); });
+    return()=>{ cancelled=true; };
+  },[gasSecret]);
+
+  // নাম মিলিয়ে subject_id/topic_id বের করা (Quiz sheet-scoped) — case/space-insensitive
+  const matchSubjectTopicId=useCallback((subjectName,topicName)=>{
+    if(!refData) return {subjectId:"",topicId:""};
+    const norm=s=>(s||"").toString().trim().toLowerCase();
+    const s=(refData.subjects||[]).find(x=>x.sheet==="Quiz" && norm(x.subject_name)===norm(subjectName));
+    if(!s) return {subjectId:"",topicId:""};
+    const t=(refData.topics||[]).find(x=>x.subject_id===s.subject_id && norm(x.topic_name)===norm(topicName));
+    return {subjectId:s.subject_id, topicId:t?t.topic_id:""};
+  },[refData]);
+
   // ⚡ Firebase quota বন্ধ থাকলেও কাজ চালু থাকে — useFB()-এর ভেতরের loadPath() এখন
   // Firebase read ব্যর্থ হলে নিজে থেকেই Google Sheet fallback (GAS "getSheetRows")
   // ব্যবহার করে। Firebase চালু থাকলে স্বাভাবিকভাবেই Firebase থেকেই পড়বে।
@@ -128,9 +153,8 @@ function QBankConverterTab({push,tick}){
     catch{ push("error","❌ ভুল JSON ফরম্যাট","ঠিক করে আবার চেষ্টা করো"); }
   };
 
-  // ── GAS Secret Key + Save Location — শেয়ার্ড (সব ফিচারে একই key/পছন্দ ব্যবহার হয়) ──
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
-  const saveGasSecret=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
+  // ── GAS Secret Key (উপরে refData fetch-এর জন্য declare করা হয়েছে) + Save Location — শেয়ার্ড (সব ফিচারে একই key/পছন্দ ব্যবহার হয়) ──
+  const saveGasSecret=saveGasSecret0;
   const[saveLoc,setSaveLoc]=useState(loadQbcSaveLoc); // "sheet" | "firebase" — এই ট্যাবে ডিফল্ট "sheet"
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveQbcSaveLoc(v); };
   // ⚡ Auto-save: convert শেষ হলেই approve-করা (ডিফল্টে সবই approved) প্রশ্নগুলো নিজে থেকেই
@@ -293,12 +317,20 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
     setSaveProgress({done:0,total:approved.length});
     const saveStartedAt=Date.now();
     const audienceTags=selAud.filter(a=>a!==JOB_NONE_TAG).join(",")||"Job";
-    const rows=approved.map(r=>({
-      question:r.question, opt1:r.opt1, opt2:r.opt2, opt3:r.opt3, opt4:r.opt4,
-      correct:r.correct, subject:r.subject, sub_topic:r.sub_topic,
-      explanation:r.explanation, technique:"", prevExam:r.prevExam||"",
-      qType:"MCQ", audienceTags,
-    }));
+    let unmatchedCount=0;
+    const rows=approved.map(r=>{
+      const {subjectId,topicId}=matchSubjectTopicId(r.subject,r.sub_topic);
+      if(!subjectId) unmatchedCount++;
+      return{
+        question:r.question, opt1:r.opt1, opt2:r.opt2, opt3:r.opt3, opt4:r.opt4,
+        correct:r.correct, subject:r.subject, sub_topic:r.sub_topic,
+        explanation:r.explanation, technique:"", prevExam:r.prevExam||"",
+        qType:"MCQ", audienceTags,
+        // ── নতুন schema fields — Subjects/Topics reference-টেবিলের সাথে নাম মিলিয়ে ──
+        subject_id:subjectId, topic_id:topicId,
+      };
+    });
+    if(unmatchedCount) push("warn",`⚠️ ${unmatchedCount}টা প্রশ্নের subject_id মেলেনি`,"AI-এর দেওয়া subject/sub_topic নাম Reference ট্যাবের কোনোটার সাথে হুবহু মেলেনি — এগুলো সেভ হবে ঠিকই, কিন্তু নতুন app-এ subject_id ছাড়া দেখাবে না, পরে Reference ট্যাবে গিয়ে বা Browse থেকে ঠিক করতে হবে");
     try{
       let result;
       if(saveLoc==="sheet"){
