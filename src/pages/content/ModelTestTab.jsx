@@ -71,11 +71,22 @@ function ModelTestTab({push,tick}){
         (yearExamSets[key]=yearExamSets[key]||new Set()).add(ye);
       });
 
+      // group_id/sub_index — multi-part প্রশ্ন (একই instruction-এর কয়েকটা
+      // sub-question, BulkUploaderPage-এর 🔗 Group Mode দিয়ে যোগ করা) —
+      // এগুলো runModelTestGenerator-এ একটা অবিভাজ্য unit হিসেবে ট্রিট হবে।
+      const groupIdOf=q=>(q.group_id||q.groupId||"").toString().trim();
+      const subIndexOf=q=>{
+        const v=q.sub_index??q.subIndex;
+        return v===undefined||v===null||v===""?"":v;
+      };
+
       const pool=[
         ...quizItems.map(q=>({
           sourceKey:`Quiz|${q._fbKey}`,
           qtype:getQTypeRaw(q),
-          important:isImportantFlag(q)
+          important:isImportantFlag(q),
+          groupId:groupIdOf(q),
+          subIndex:subIndexOf(q)
         })),
         ...qbankItems.map(q=>{
           const key=repeatKeyOf(q.Question||q.question);
@@ -83,17 +94,24 @@ function ModelTestTab({push,tick}){
           return{
             sourceKey:`QBank|${q._fbKey}`,
             qtype:getQTypeRaw(q),
-            important:autoImportant||isImportantFlag(q)
+            important:autoImportant||isImportantFlag(q),
+            groupId:groupIdOf(q),
+            subIndex:subIndexOf(q)
           };
         }),
         // Study-র প্রশ্ন সবসময় "written" ধরা হয় (option না থাকায়)
         ...studyItems.map(q=>({
           sourceKey:`Study|${q._fbKey}`,
           qtype:"written",
-          important:false
+          important:false,
+          groupId:groupIdOf(q),
+          subIndex:subIndexOf(q)
         })),
       ];
 
+      // ⚠️ ধরে নেওয়া হচ্ছে একই group_id-এর সব sub-question একই qtype-এর
+      // (BulkUploaderPage-এ 🔗 Group Mode-এ পুরো ব্যাচ একই qtype দিয়েই যোগ হয়) —
+      // তাই MCQ/Written ফিল্টার এখানে group ভাঙবে না।
       const filteredPool = type==="mcq"    ? pool.filter(p=>p.qtype!=="written"&&p.qtype!=="study")
                           : type==="written"? pool.filter(p=>p.qtype==="written")
                           : pool;
@@ -176,8 +194,10 @@ function ModelTestTab({push,tick}){
 
         <div style={{fontSize:10,color:C.muted,marginBottom:10,lineHeight:1.5}}>
           💡 প্রতিটা টেস্টে ~৩০-৪০% গুরুত্বপূর্ণ (QBank-এ একাধিক বছর/পরীক্ষায় repeat হওয়া) প্রশ্ন
-          থাকবে, বাকিটা কম-ব্যবহৃত প্রশ্ন থেকে ঘুরিয়ে ঘুরিয়ে আসবে। আগের Model Test থাকলে
-          এই subject-এর জন্য সেগুলো ওভাররাইট হয়ে যাবে।
+          থাকবে, বাকিটা কম-ব্যবহৃত প্রশ্ন থেকে ঘুরিয়ে ঘুরিয়ে আসবে। মাল্টি-পার্ট প্রশ্ন (🔗 group_id
+          থাকা sub-question গুলো, যেমন "কারক নির্ণয় কর") কখনো ভাঙা হবে না — একসাথে থাকবে
+          অথবা একসাথেই বাদ পড়বে। আগের Model Test থাকলে এই subject-এর জন্য সেগুলো ওভাররাইট
+          হয়ে যাবে।
         </div>
 
         <button className="btn bp bb" disabled={generating||!subject} onClick={generate}>
