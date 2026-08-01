@@ -133,12 +133,12 @@ async function deleteIdsInSheet({sheet,ids,gasSecret}){
 }
 
 /* ── Phase 5 (নতুন schema v2) ──────────────────────────────────────────────
-   Subjects/Topics/SubTopics/Tags/Posts/Institutions রেফারেন্স-টেবিলের জন্য।
+   Subjects/Topics/Tags/Posts/Institutions রেফারেন্স-টেবিলের জন্য।
    এখন rename একটা ছোট রেফারেন্স-টেবিলের ১ রো বদলায় — Quiz/QBank/Study-র
    হাজার হাজার রো আর টাচ হয় না (আগের renameFieldInSheet-এর cascade সমস্যা
    এখানেই সমাধান হলো)। ────────────────────────────────────────────────── */
 
-/* ── সব রেফারেন্স-টেবিল (Subjects/Topics/SubTopics/Tags/Posts/Institutions)
+/* ── সব রেফারেন্স-টেবিল (Subjects/Topics/Tags/Posts/Institutions)
    একসাথে fetch — এগুলো ছোট বলে বাল্ক-ফেচ নিরাপদ। ── */
 async function fetchReferenceData({gasSecret}){
   if(!GAS||!gasSecret) return null;
@@ -147,11 +147,11 @@ async function fetchReferenceData({gasSecret}){
     const resp=await fetch(url);
     const data=await resp.json();
     if(data?.status!=="success"||!data.data) return null;
-    return data.data; // {subjects:[],topics:[],subtopics:[],tags:[],posts:[],institutions:[]}
+    return data.data; // {subjects:[],topics:[],tags:[],posts:[],institutions:[]}
   }catch(_){ return null; }
 }
 
-/* ── refType (subjects/topics/subtopics/tags/posts/institutions) + id দিয়ে
+/* ── refType (subjects/topics/tags/posts/institutions) + id দিয়ে
    ঠিক ১টা রেফারেন্স-রো রিনেম — GAS-এর নতুন "renameReferenceItem" action। ── */
 async function renameReferenceItem({refType,id,newName,gasSecret,push}){
   if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{ok:false}; }
