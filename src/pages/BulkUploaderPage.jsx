@@ -21,12 +21,11 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const[mode,setMode]=useState("Quiz");
   const[qtype,setQtype]=useState("MCQ");
   // ── Phase 5 rewrite: আগে subject/subtopic ফ্রি-টেক্সট ছিল (autocomplete সহ) —
-  // এখন Subjects/Topics/SubTopics reference-টেবিল থেকে dropdown-এ বাছাই করা হয়,
-  // subject_id/topic_id/subtopic_id সরাসরি প্রশ্নের রো-তে বসে। subject/subtopic
+  // এখন Subjects/Topics reference-টেবিল থেকে dropdown-এ বাছাই করা হয়,
+  // subject_id/topic_id সরাসরি প্রশ্নের রো-তে বসে। subject/sub_topic
   // (নাম) legacy কলামের জন্য derive করা থাকে refData থেকে, নিচে দেখো। ──
   const[subjectId,setSubjectId]=useState("");
-  const[topicId,setTopicId]=useState("");     // Quiz/Study: একমাত্র sub-level (পুরনো "sub_topic")। QBank: মাঝের "topic" level
-  const[subtopicId,setSubtopicId]=useState(""); // শুধু QBank — ৩য় level
+  const[topicId,setTopicId]=useState("");     // Quiz/Study/QBank — সব সিটেই এখন একমাত্র sub-level (পুরনো "sub_topic")
   // ── শুধু QBank mode-এ: এই ব্যাচের সব প্রশ্ন কোন পদ/প্রতিষ্ঠান/সালের প্রশ্নপত্র থেকে
   // এসেছে (ঐচ্ছিক) — দিলে প্রতিটা নতুন প্রশ্নের জন্য একই সাথে একটা Exam_Appearances
   // রো-ও যোগ হয়ে যায়, আলাদা করে "🗂️ Exam Appearances" ট্যাবে গিয়ে question_id
@@ -55,7 +54,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const archiveIdRef=useRef(null); // prefill যদি Archive থেকে এসে থাকে — সফল Submit হলে সেই এন্ট্রি Archive থেকে সরিয়ে দেওয়া হবে
 
-  /* Load Subjects/Topics/SubTopics/Tags/Posts/Institutions reference-টেবিল (আগে Firebase স্ক্যান করে distinct subject বের করা হতো — এখন GAS getReferenceData) */
+  /* Load Subjects/Topics/Tags/Posts/Institutions reference-টেবিল (আগে Firebase স্ক্যান করে distinct subject বের করা হতো — এখন GAS getReferenceData) */
   const loadRefData=useCallback(()=>{
     if(!gasSecret){ setRefData(null); return; }
     setRefLoading(true);
@@ -63,10 +62,9 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   },[gasSecret]);
   useEffect(()=>{ loadRefData(); },[loadRefData]);
 
-  // mode বদলালে subject/topic/subtopic সিলেকশন রিসেট (আগের mode-এর id নতুন mode-এ ভুল হতে পারে)
-  useEffect(()=>{ setSubjectId(""); setTopicId(""); setSubtopicId(""); if(mode!=="QBank"){ setPostSel({id:"",name:""}); setInstSel({id:"",name:""}); setExamYear(""); } },[mode]);
-  useEffect(()=>{ setTopicId(""); setSubtopicId(""); },[subjectId]);
-  useEffect(()=>{ setSubtopicId(""); },[topicId]);
+  // mode বদলালে subject/topic সিলেকশন রিসেট (আগের mode-এর id নতুন mode-এ ভুল হতে পারে)
+  useEffect(()=>{ setSubjectId(""); setTopicId(""); if(mode!=="QBank"){ setPostSel({id:"",name:""}); setInstSel({id:"",name:""}); setExamYear(""); } },[mode]);
+  useEffect(()=>{ setTopicId(""); },[subjectId]);
 
   /* AI Import (OCR) পেজ থেকে prefill — plain string অথবা {text,subject,subtopic,tags,mode,qtype} object।
      ⚠️ AI Import পুরনো নাম-ভিত্তিক subject/subtopic পাঠায় — এখন id-ভিত্তিক হওয়ায়
@@ -176,24 +174,22 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     setTimeout(()=>setShuffleInfo(null),3000);
   };
 
-  /* ── Reference dropdown options (mode/subjectId/topicId অনুযায়ী scoped) ── */
+  /* ── Reference dropdown options (mode/subjectId অনুযায়ী scoped) ── */
   const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===mode):[];
   const topicOptions=refData&&subjectId?(refData.topics||[]).filter(t=>t.subject_id===subjectId):[];
-  const subtopicOptions=refData&&topicId&&mode==="QBank"?(refData.subtopics||[]).filter(st=>st.topic_id===topicId):[];
   const tagOptions=refData?(refData.tags||[]):[];
   const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
   const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
 
   const subjectName=subjectOptions.find(s=>s.subject_id===subjectId)?.subject_name||"";
   const topicName=topicOptions.find(t=>t.topic_id===topicId)?.topic_name||"";
-  const subtopicName=subtopicOptions.find(s=>s.subtopic_id===subtopicId)?.subtopic_name||"";
   const tagNames=tagIds.map(id=>tagOptions.find(t=>t.tag_id===id)?.tag_name).filter(Boolean);
 
   /* Audience tag helpers — এখন id টগল করে (রেফারেন্স-টেবিল থেকে বাছাই, ফ্রি-টেক্সট না) */
   const toggleTag=(tagId)=>setTagIds(p=>p.includes(tagId)?p.filter(x=>x!==tagId):[...p,tagId]);
 
   /* Build Firebase record — শেয়ার্ড buildBulkRecord ব্যবহার করে (AIImportPage direct-submit ও একই ফাংশন ব্যবহার করে) */
-  const buildRec=(item,ts,id)=>buildBulkRecord({item,subject:subjectName,subtopic:mode==="QBank"?subtopicName||topicName:topicName,mode,qtype,audienceTags:tagNames,ts,id});
+  const buildRec=(item,ts,id)=>buildBulkRecord({item,subject:subjectName,subtopic:topicName,mode,qtype,audienceTags:tagNames,ts,id});
 
   /* Main upload */
   const startUpload=async()=>{
@@ -233,10 +229,9 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     if(saveLoc==="sheet"){
       const rows=entries.map((item,idx)=>buildSheetRow({
         item, subject:subjectName,
-        subtopic:mode==="QBank"?subtopicName:topicName, // legacy sub_topic কলাম
-        topicName:mode==="QBank"?topicName:"",           // legacy মাঝের topic কলাম (শুধু QBank)
+        subtopic:topicName, // legacy sub_topic কলাম
         qtype:eff, audienceTags:tagNames,
-        subjectId, topicId, subtopicId:mode==="QBank"?subtopicId:"", tagIds,
+        subjectId, topicId, tagIds,
         groupId:batchGroupId, subIndex:batchGroupId?(idx+1):null,
       }));
       // ⚠️ examAppearance পাঠানো হচ্ছে GAS-কে — GAS-সাইডে "bulk_save_rows" handler-এ
@@ -297,7 +292,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     if(sent>0&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
   };
 
-  const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setTopicId("");setSubtopicId("");setPostSel({id:"",name:""});setInstSel({id:"",name:""});setExamYear("");archiveIdRef.current=null;};
+  const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setTopicId("");setPostSel({id:"",name:""});setInstSel({id:"",name:""});setExamYear("");archiveIdRef.current=null;};
 
   const pct=progress.total?Math.round(progress.done/progress.total*100):0;
 
@@ -352,8 +347,8 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         </div>
       </div>
 
-      {/* Subject / Topic / SubTopic — Reference-টেবিল থেকে dropdown */}
-      <div style={{display:"grid",gridTemplateColumns:mode==="QBank"?"1fr 1fr 1fr":"1fr 1fr",gap:8,marginBottom:12}}>
+      {/* Subject / Topic — Reference-টেবিল থেকে dropdown */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
         <div className="fld" style={{marginBottom:0}}>
           <label>📚 Subject</label>
           <select className="inp" value={subjectId} onChange={e=>setSubjectId(e.target.value)}>
@@ -362,21 +357,12 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           </select>
         </div>
         <div className="fld" style={{marginBottom:0}}>
-          <label>📌 {mode==="QBank"?"Topic":"Sub-Topic"}</label>
+          <label>📌 Topic</label>
           <select className="inp" value={topicId} onChange={e=>setTopicId(e.target.value)} disabled={!subjectId}>
             <option value="">— বাছাই করো —</option>
             {topicOptions.map(t=>(<option key={t.topic_id} value={t.topic_id}>{t.topic_name}</option>))}
           </select>
         </div>
-        {mode==="QBank"&&(
-          <div className="fld" style={{marginBottom:0}}>
-            <label>🔖 SubTopic</label>
-            <select className="inp" value={subtopicId} onChange={e=>setSubtopicId(e.target.value)} disabled={!topicId}>
-              <option value="">— (ঐচ্ছিক) —</option>
-              {subtopicOptions.map(s=>(<option key={s.subtopic_id} value={s.subtopic_id}>{s.subtopic_name}</option>))}
-            </select>
-          </div>
-        )}
       </div>
       <div style={{fontSize:10,color:C.muted,marginBottom:12,marginTop:-6}}>
         তালিকায় না থাকলে আগে "🗂️ Reference" ট্যাব থেকে নতুন Subject/Topic যোগ করে নাও।
