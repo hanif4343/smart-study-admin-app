@@ -735,13 +735,10 @@ function doGet(e) {
         var isWr=qtyp.toLowerCase()==="written";
         if(!out.quiz[sub])out.quiz[sub]={total:0,mcq:0,written:0,topics:{}};
         out.quiz[sub].total++;if(isWr)out.quiz[sub].written++;else out.quiz[sub].mcq++;
-        var parts=stRaw.indexOf(" > ")!==-1?stRaw.split(" > "):[stRaw,stRaw];
-        var topic=parts[0].trim()||"General", st=parts.length>1?parts[1].trim():stRaw;
-        if(!out.quiz[sub].topics[topic])out.quiz[sub].topics[topic]={total:0,subtopics:{}};
+        var topic=stRaw||"General";
+        if(!out.quiz[sub].topics[topic])out.quiz[sub].topics[topic]={total:0,mcq:0,written:0};
         out.quiz[sub].topics[topic].total++;
-        if(!out.quiz[sub].topics[topic].subtopics[st])out.quiz[sub].topics[topic].subtopics[st]={total:0,mcq:0,written:0};
-        out.quiz[sub].topics[topic].subtopics[st].total++;
-        if(isWr)out.quiz[sub].topics[topic].subtopics[st].written++;else out.quiz[sub].topics[topic].subtopics[st].mcq++;
+        if(isWr)out.quiz[sub].topics[topic].written++;else out.quiz[sub].topics[topic].mcq++;
         if(qTsI!==-1&&qData[i][qTsI].toString().indexOf(today)!==-1)out.totalToday++;
       }
     }
@@ -753,16 +750,13 @@ function doGet(e) {
       for(var j=1;j<bData.length;j++){
         var bsub=(bSubI!==-1?bData[j][bSubI]:"").toString().trim()||"Unknown";
         var btyp=(bTypI!==-1?bData[j][bTypI]:"MCQ").toString().trim()||"MCQ";
-        var btop=(bTopI!==-1?bData[j][bTopI]:"").toString().trim()||"General";
-        var bst=(bStI!==-1?bData[j][bStI]:"").toString().trim()||"General";
+        var btop=(bTopI!==-1?bData[j][bTopI]:"").toString().trim()||(bStI!==-1?bData[j][bStI]:"").toString().trim()||"General";
         var bIsWr=btyp.toLowerCase()==="written";
         if(!out.qbank[bsub])out.qbank[bsub]={total:0,mcq:0,written:0,topics:{}};
         out.qbank[bsub].total++;if(bIsWr)out.qbank[bsub].written++;else out.qbank[bsub].mcq++;
-        if(!out.qbank[bsub].topics[btop])out.qbank[bsub].topics[btop]={total:0,subtopics:{}};
+        if(!out.qbank[bsub].topics[btop])out.qbank[bsub].topics[btop]={total:0,mcq:0,written:0};
         out.qbank[bsub].topics[btop].total++;
-        if(!out.qbank[bsub].topics[btop].subtopics[bst])out.qbank[bsub].topics[btop].subtopics[bst]={total:0,mcq:0,written:0};
-        out.qbank[bsub].topics[btop].subtopics[bst].total++;
-        if(bIsWr)out.qbank[bsub].topics[btop].subtopics[bst].written++;else out.qbank[bsub].topics[btop].subtopics[bst].mcq++;
+        if(bIsWr)out.qbank[bsub].topics[btop].written++;else out.qbank[bsub].topics[btop].mcq++;
         if(bTsI!==-1&&bData[j][bTsI].toString().indexOf(today)!==-1)out.totalToday++;
       }
     }
