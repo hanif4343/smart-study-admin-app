@@ -84,7 +84,7 @@ function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id,ma
       option3:isWritten?"":item.opt3||"",
       option4:isWritten?"":item.opt4||"",
       correct:item.correct||"",
-      subject,sub_topic:subtopic||subject,topic:"",
+      subject,sub_topic:subtopic||subject,
       explanation:item.explanation||"",
       "Question Type":isWritten?"Written":"MCQ",
       AudienceTags:tagStr,
@@ -106,7 +106,7 @@ function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id,ma
 
 /* Build Google-Sheet row — shared shape used by both direct-submit (OCR page) and BulkUploaderPage
    when saveLoc==="sheet". Same `item` shape as buildBulkRecord (from parseBulkEntry). */
-function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subjectId,topicId,subtopicId,tagIds,groupId,subIndex,topicName}){
+function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subjectId,topicId,tagIds,groupId,subIndex}){
   const isWritten=qtype==="Written";
   return{
     question:item.q,
@@ -115,13 +115,13 @@ function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subj
     correct:item.correct||"",
     // ── লিগেসি নাম-ভিত্তিক কলাম (backward-compat, পুরনো duplicate-check ও
     // Sheet readability এখনো এগুলো ব্যবহার করে) ──
-    subject, sub_topic:subtopic||subject, topic:topicName||"",
+    subject, sub_topic:subtopic||subject,
     explanation:item.explanation||"",
     qType:isWritten?"Written":(qtype==="Study"?"Study":"MCQ"),
     technique:"", prevExam:"", mainQpaper:mainQpaper||"",
     audienceTags:(audienceTags||[]).join(","),
-    // ── নতুন schema fields (Phase 2+) ──
-    subject_id:subjectId||"", topic_id:topicId||"", subtopic_id:subtopicId||"",
+    // ── নতুন schema fields (Phase 2+) — QBank সহ সব সিটেই এখন ২-লেভেল (subject_id/topic_id), SubTopic নেই ──
+    subject_id:subjectId||"", topic_id:topicId||"",
     audienceTagsIds:(tagIds||[]).join(","),
     group_id:groupId||"", sub_index:subIndex!=null?String(subIndex):"",
   };
