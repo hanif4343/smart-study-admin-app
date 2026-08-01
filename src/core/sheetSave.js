@@ -3,21 +3,28 @@ import { GAS } from "./config.js";
 import { fbPush, fbSet } from "./firebase.js";
 import { invalidate } from "./dataCache.js";
 
-async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSize}){
+async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSize,examAppearance}){
   if(!rows.length)return{added:0,skipped:0,failedRows:[]};
   if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{added:0,skipped:0,failedRows:rows}; }
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও"); return{added:0,skipped:0,failedRows:rows}; }
   const CHUNK=Math.max(1,chunkSize||100); // চাইলে ছোট চাংক (৫-১০, এমনকি ১) দিয়ে বেশি live প্রোগ্রেস আপডেট পাওয়া যায় — trade-off: ছোট চাংক = বেশি রিকোয়েস্ট = মোট সময় একটু বেশি
   const totalChunks=Math.ceil(rows.length/CHUNK);
-  let added=0,skipped=0,firebaseSyncFailed=false; const failedRows=[];
+  let added=0,skipped=0,firebaseSyncFailed=false,examAppearancesAdded=0; const failedRows=[];
   for(let i=0;i<rows.length;i+=CHUNK){
     const chunk=rows.slice(i,i+CHUNK);
     const isLast=(i+CHUNK>=rows.length);
     try{
-      const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify({secret:gasSecret,type:"bulk_save_rows",targetTab,rows:chunk,sync:isLast})});
+      // examAppearance (ঐচ্ছিক, শুধু QBank বাল্ক-আপলোডে পদ/প্রতিষ্ঠান/সাল দেওয়া থাকলে) —
+      // GAS bulk_save_rows-কে জানায় যাতে এই চাংকে যে নতুন question_id-গুলো তৈরি হচ্ছে,
+      // প্রতিটার জন্য একই ব্যাচে Exam_Appearances-এ একটা করে appearance-রো যোগ হয়ে যায়
+      // (আলাদা করে প্রতিটা প্রশ্নের id জেনে পরে addExamAppearance কল করার দরকার পড়ে না)।
+      const body={secret:gasSecret,type:"bulk_save_rows",targetTab,rows:chunk,sync:isLast};
+      if(examAppearance) body.examAppearance=examAppearance;
+      const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)});
       const data=await resp.json().catch(()=>({}));
       if(data.result==="error"){ failedRows.push(...chunk); continue; }
       added+=(data.added||0); skipped+=(data.skipped||0);
+      examAppearancesAdded+=(data.examAppearancesAdded||0);
       if(isLast && data.firebaseSynced===false) firebaseSyncFailed=true;
     }catch(e){ failedRows.push(...chunk); }
     onProgress?.({done:Math.min(i+CHUNK,rows.length),total:rows.length,chunkIndex:Math.floor(i/CHUNK)+1,totalChunks});
@@ -25,7 +32,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   // ⚡ Sheet-এ সেভ ঠিকই হয়ে গেছে, কিন্তু GAS-এর Firebase mirror-sync ব্যর্থ হলে dedupe-এর
   // "Quiz-এ আছে" কাউন্ট আর existingQuizKeys পুরনো থেকে যাবে — সেটা এখন চুপচাপ না থেকে জানানো হয়।
   if(firebaseSyncFailed) push?.("error","⚠️ Sheet-এ সেভ হয়েছে কিন্তু Firebase sync ব্যর্থ","'Quiz-এ আছে' কাউন্ট পুরনো থাকতে পারে — একটু পরে আবার চেষ্টা করো, বা GAS Executions log চেক করো");
-  return{added,skipped,failedRows};
+  return{added,skipped,failedRows,examAppearancesAdded};
 }
 
 /* ── Firebase-এ bulk rows সেভ — প্রতিটা row আলাদা push, ব্যর্থগুলো ফেরত দেয় (retry-এর জন্য) ──
