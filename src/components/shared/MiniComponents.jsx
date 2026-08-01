@@ -54,23 +54,15 @@ const Tree = React.memo(function Tree({entries,total,color}){
               <div style={{fontWeight:700,color,fontSize:16,minWidth:32,textAlign:"right"}}>{v.total}</div>
             </div>
             {open[sub]&&tops.map(([tp,tv])=>{
-              const sts=Object.entries(tv.subtopics||{});
               const tk=sub+"_"+tp;
               return(
                 <div key={tp} style={{marginLeft:12,borderLeft:`2px solid ${color}30`}}>
-                  <div style={{display:"flex",alignItems:"center",padding:"6px 0 6px 9px",cursor:sts.length?"pointer":"default"}} onClick={()=>sts.length&&tog(tk)}>
+                  <div style={{display:"flex",alignItems:"center",padding:"6px 0 6px 9px"}}>
                     <div style={{flex:1,fontSize:11,fontWeight:600,display:"flex",alignItems:"center",gap:3}}>
-                      {sts.length>0&&<span style={{fontSize:8,color:C.muted,display:"inline-block",transform:open[tk]?"rotate(90deg)":"none",transition:"transform .2s"}}>▶</span>}
                       📂 {tp}
                     </div>
                     <div style={{fontWeight:700,color,fontSize:13,minWidth:28,textAlign:"right"}}>{tv.total}</div>
                   </div>
-                  {open[tk]&&sts.map(([st,sv])=>(
-                    <div key={st} style={{display:"flex",alignItems:"center",padding:"5px 0 5px 18px",borderBottom:`1px solid ${C.border}20`}}>
-                      <div style={{flex:1}}><div style={{fontSize:10}}>📄 {st}</div><div style={{fontSize:9,color:C.muted}}>MCQ:{sv.mcq||0} · Written:{sv.written||0}</div></div>
-                      <div style={{fontWeight:600,color:C.muted,fontSize:12,minWidth:26,textAlign:"right"}}>{sv.total}</div>
-                    </div>
-                  ))}
                 </div>
               );
             })}
