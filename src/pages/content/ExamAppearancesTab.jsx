@@ -7,10 +7,9 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
-import { fetchReferenceData, getExamAppearances, addExamAppearance, addReferenceItem } from "../../core/sheetSave.js";
+import { fetchReferenceData, getExamAppearances, addExamAppearance } from "../../core/sheetSave.js";
+import { resolveOrCreateReference } from "../../core/referenceHelpers.js";
 import { TypeaheadCombo } from "../../components/shared/TypeaheadCombo.jsx";
-
-const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
 
 function ExamAppearancesTab({push}){
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
@@ -46,24 +45,12 @@ function ExamAppearancesTab({push}){
   const[year,setYear]=useState("");
   const[adding,setAdding]=useState(false);
 
-  // টাইপ করা নাম বিদ্যমান তালিকায় (case/space-insensitive) থাকলে সেই id রিটার্ন করে,
-  // না থাকলে addReferenceItem দিয়ে নতুন এন্ট্রি বানিয়ে সেই নতুন id রিটার্ন করে
-  const resolveOrCreate=async(sel,refType,options)=>{
-    const name=sel.name.trim();
-    if(!name) return{ok:false};
-    if(sel.id) return{ok:true,id:sel.id};
-    const hit=options.find(o=>norm(o.name)===norm(name));
-    if(hit) return{ok:true,id:hit.id};
-    const res=await addReferenceItem({refType,name,gasSecret,push});
-    return res.ok?{ok:true,id:res.id,created:true}:{ok:false};
-  };
-
   const doAdd=async()=>{
     if(!postSel.name.trim()||!instSel.name.trim()||!year.trim()){push("warn","পদ, প্রতিষ্ঠান ও সাল — সবগুলো দিন","");return;}
     setAdding(true);
-    const postRes=await resolveOrCreate(postSel,"posts",postOptions);
+    const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
     if(!postRes.ok){ push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); setAdding(false); return; }
-    const instRes=await resolveOrCreate(instSel,"institutions",instOptions);
+    const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
     if(!instRes.ok){ push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); setAdding(false); return; }
     const res=await addExamAppearance({questionId:questionId.trim(),postId:postRes.id,institutionId:instRes.id,year:year.trim(),gasSecret,push});
     if(res.ok){
