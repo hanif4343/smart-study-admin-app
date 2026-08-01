@@ -1,5 +1,5 @@
 /* ══════════ BULK UPLOADER PAGE ══════════ */
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { C } from "../core/config.js";
 import { invalidate } from "../core/dataCache.js";
 import { fbPush, fbSet } from "../core/firebase.js";
@@ -9,10 +9,12 @@ import {
   getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow,
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
 } from "../core/uploaderUtils.js";
-import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
+import { saveRowsToSheet, fetchReferenceData, addExamAppearance } from "../core/sheetSave.js";
+import { resolveOrCreateReference } from "../core/referenceHelpers.js";
 import { archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
+import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 
 function BulkUploaderPage({push,prefillText,onClearPrefill}){
 
@@ -25,6 +27,14 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const[subjectId,setSubjectId]=useState("");
   const[topicId,setTopicId]=useState("");     // Quiz/Study: একমাত্র sub-level (পুরনো "sub_topic")। QBank: মাঝের "topic" level
   const[subtopicId,setSubtopicId]=useState(""); // শুধু QBank — ৩য় level
+  // ── শুধু QBank mode-এ: এই ব্যাচের সব প্রশ্ন কোন পদ/প্রতিষ্ঠান/সালের প্রশ্নপত্র থেকে
+  // এসেছে (ঐচ্ছিক) — দিলে প্রতিটা নতুন প্রশ্নের জন্য একই সাথে একটা Exam_Appearances
+  // রো-ও যোগ হয়ে যায়, আলাদা করে "🗂️ Exam Appearances" ট্যাবে গিয়ে question_id
+  // টাইপ করে যোগ করতে হয় না। পদ/প্রতিষ্ঠান dropdown না, টাইপ-করা (মিল থাকলে বিদ্যমানটাই,
+  // না থাকলে নতুন করে তৈরি হবে) — দেখো TypeaheadCombo.jsx ──
+  const[postSel,setPostSel]=useState({id:"",name:""});
+  const[instSel,setInstSel]=useState({id:"",name:""});
+  const[examYear,setExamYear]=useState("");
   const[refData,setRefData]=useState(null);
   const[refLoading,setRefLoading]=useState(false);
   const[bulkText,setBulkText]=useState("");
@@ -45,17 +55,16 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const archiveIdRef=useRef(null); // prefill যদি Archive থেকে এসে থাকে — সফল Submit হলে সেই এন্ট্রি Archive থেকে সরিয়ে দেওয়া হবে
 
-  /* Load Subjects/Topics/SubTopics/Tags reference-টেবিল (আগে Firebase স্ক্যান করে distinct subject বের করা হতো — এখন GAS getReferenceData) */
-  useEffect(()=>{
+  /* Load Subjects/Topics/SubTopics/Tags/Posts/Institutions reference-টেবিল (আগে Firebase স্ক্যান করে distinct subject বের করা হতো — এখন GAS getReferenceData) */
+  const loadRefData=useCallback(()=>{
     if(!gasSecret){ setRefData(null); return; }
-    let cancelled=false;
     setRefLoading(true);
-    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled){ setRefData(d); setRefLoading(false); } });
-    return()=>{ cancelled=true; };
+    fetchReferenceData({gasSecret}).then(d=>{ setRefData(d); setRefLoading(false); });
   },[gasSecret]);
+  useEffect(()=>{ loadRefData(); },[loadRefData]);
 
   // mode বদলালে subject/topic/subtopic সিলেকশন রিসেট (আগের mode-এর id নতুন mode-এ ভুল হতে পারে)
-  useEffect(()=>{ setSubjectId(""); setTopicId(""); setSubtopicId(""); },[mode]);
+  useEffect(()=>{ setSubjectId(""); setTopicId(""); setSubtopicId(""); if(mode!=="QBank"){ setPostSel({id:"",name:""}); setInstSel({id:"",name:""}); setExamYear(""); } },[mode]);
   useEffect(()=>{ setTopicId(""); setSubtopicId(""); },[subjectId]);
   useEffect(()=>{ setSubtopicId(""); },[topicId]);
 
@@ -172,6 +181,8 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const topicOptions=refData&&subjectId?(refData.topics||[]).filter(t=>t.subject_id===subjectId):[];
   const subtopicOptions=refData&&topicId&&mode==="QBank"?(refData.subtopics||[]).filter(st=>st.topic_id===topicId):[];
   const tagOptions=refData?(refData.tags||[]):[];
+  const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
+  const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
 
   const subjectName=subjectOptions.find(s=>s.subject_id===subjectId)?.subject_name||"";
   const topicName=topicOptions.find(t=>t.topic_id===topicId)?.topic_name||"";
@@ -191,6 +202,22 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     const eff=getEffectiveType(mode,qtype);
     const entries=getEntries(bulkText).map(l=>parseEntry(l,eff)).filter(r=>r.ok);
     if(!entries.length){push("warn","⚠️ কোনো valid প্রশ্ন নেই — Validation chips-এ ক্লিক করে দেখুন","");return;}
+
+    // ── QBank + পদ/প্রতিষ্ঠান/সালের অন্তত ১টা দেওয়া থাকলে → resolve/create করে
+    // {postId,institutionId,year} বানানো হয়, পুরো ব্যাচের জন্য একবারই ──
+    let examAppearance=null;
+    if(mode==="QBank" && (postSel.name.trim()||instSel.name.trim()||examYear.trim())){
+      if(!postSel.name.trim()||!instSel.name.trim()||!examYear.trim()){
+        push("warn","⚠️ পদ, প্রতিষ্ঠান ও সাল — একটা দিলে তিনটাই দিতে হবে (অথবা তিনটাই খালি রাখো)","");
+        return;
+      }
+      const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
+      if(!postRes.ok){ push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
+      if(!instRes.ok){ push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
+      if(postRes.created||instRes.created) loadRefData(); // নতুন পদ/প্রতিষ্ঠান তৈরি হলে তালিকা রিফ্রেশ
+    }
 
     setRunning(true);setDone(false);setStopped(false);
     stopRef.current=false;
@@ -212,18 +239,24 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         subjectId, topicId, subtopicId:mode==="QBank"?subtopicId:"", tagIds,
         groupId:batchGroupId, subIndex:batchGroupId?(idx+1):null,
       }));
-      const result=await saveRowsToSheet({rows,targetTab:mode,gasSecret,push});
+      // ⚠️ examAppearance পাঠানো হচ্ছে GAS-কে — GAS-সাইডে "bulk_save_rows" handler-এ
+      // এখনো সাপোর্ট নাও থাকতে পারে (এই রিপোর ভেতরের code_updated.gs পুরনো/stale)।
+      // GAS যদি এই ফিল্ড না চেনে, প্রশ্নগুলো ঠিকই সেভ হবে কিন্তু appearance যোগ হবে না —
+      // দরকারি GAS প্যাচ আলাদা ফাইলে (gas-patches/2026-08-01-qbank-uploader-exam-appearance.md) দেওয়া আছে।
+      const result=await saveRowsToSheet({rows,targetTab:mode,gasSecret,push,examAppearance});
       entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
       setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
       setRunning(false);setDone(true);
       if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার",saveLoc,mode,result.failedRows);
       if(result.added>0)push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${mode} — ${subjectName}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:"")+(batchGroupId?` · group: ${batchGroupId}`:""));
+      if(examAppearance && !result.examAppearancesAdded) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","GAS-এ bulk_save_rows-এ এখনো examAppearance সাপোর্ট নেই — gas-patches ফোল্ডার দেখো, অথবা 🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
+      if(result.examAppearancesAdded)push("success",`🧾 ${result.examAppearancesAdded}টা Exam Appearance-ও যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
       if(result.failedRows.length)push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
       if((result.added>0||result.skipped>0)&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
       return;
     }
 
-    let sent=0,failed=0; const failedRecs=[];
+    let sent=0,failed=0,appearancesSent=0; const failedRecs=[];
     const BATCH=8;
     for(let i=0;i<entries.length;i+=BATCH){
       if(stopRef.current){addLog("⛔ বন্ধ করা হয়েছে","err");break;}
@@ -237,6 +270,12 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           /* Set id field to the firebase push key — same as entry app */
           if(res?.name){
             await fbSet(`${mode}/${res.name}/id`,res.name);
+            // ── examAppearance দেওয়া থাকলে, এই প্রশ্নের আসল id (fb push key, শুধু
+            // local Date.now() না) দিয়েই Exam_Appearances-এ appearance যোগ হবে ──
+            if(examAppearance){
+              const aRes=await addExamAppearance({questionId:res.name,...examAppearance,gasSecret,push});
+              if(aRes.ok) appearancesSent++;
+            }
           }
           // Sheet sync → GAS standalone handles this
           invalidate(mode);
@@ -253,11 +292,12 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     setRunning(false);setDone(true);
     if(failedRecs.length) pushFailedItems("বাল্ক আপলোডার",saveLoc,mode,failedRecs);
     if(sent>0)push("success",`✅ ${sent}টি সফলভাবে যোগ হয়েছে!`,`${mode} — ${subjectName}`);
+    if(appearancesSent>0)push("success",`🧾 ${appearancesSent}টা Exam Appearance-ও যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
     if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if(sent>0&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
   };
 
-  const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setTopicId("");setSubtopicId("");archiveIdRef.current=null;};
+  const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setTopicId("");setSubtopicId("");setPostSel({id:"",name:""});setInstSel({id:"",name:""});setExamYear("");archiveIdRef.current=null;};
 
   const pct=progress.total?Math.round(progress.done/progress.total*100):0;
 
@@ -341,6 +381,43 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       <div style={{fontSize:10,color:C.muted,marginBottom:12,marginTop:-6}}>
         তালিকায় না থাকলে আগে "🗂️ Reference" ট্যাব থেকে নতুন Subject/Topic যোগ করে নাও।
       </div>
+
+      {/* পদ/প্রতিষ্ঠান/সাল — শুধু QBank mode-এ, ঐচ্ছিক। দিলে এই পুরো ব্যাচের প্রতিটা নতুন
+          প্রশ্নের জন্য একই সাথে একটা Exam_Appearances রো-ও যোগ হয়ে যায়। ড্রপডাউন না, টাইপ
+          করলেই হবে — মিল থাকলে বিদ্যমানটাই বাছাই হয়, না থাকলে নতুন পদ/প্রতিষ্ঠান নিজে থেকেই
+          তৈরি হয়ে যাবে সাবমিটের সময়। */}
+      {mode==="QBank"&&(
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12}}>
+          <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? (ঐচ্ছিক)</div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:8}}>দিলে এই পুরো ব্যাচ একটা Exam Appearance পাবে — খালি রাখলে শুধু প্রশ্নগুলো QBank-এ যোগ হবে, appearance ছাড়া।</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div className="fld" style={{marginBottom:0}}>
+              <label>পদ (Post)</label>
+              <TypeaheadCombo
+                options={postOptions}
+                value={postSel}
+                onChange={setPostSel}
+                placeholder="যেমন: সহকারী শিক্ষক"
+                newLabel={`🆕 "${postSel.name.trim()}" নতুন পদ হিসেবে যোগ হবে`}
+              />
+            </div>
+            <div className="fld" style={{marginBottom:0}}>
+              <label>প্রতিষ্ঠান (Institution)</label>
+              <TypeaheadCombo
+                options={instOptions}
+                value={instSel}
+                onChange={setInstSel}
+                placeholder="যেমন: প্রাথমিক বিদ্যালয়"
+                newLabel={`🆕 "${instSel.name.trim()}" নতুন প্রতিষ্ঠান হিসেবে যোগ হবে`}
+              />
+            </div>
+          </div>
+          <div className="fld" style={{marginBottom:0}}>
+            <label>সাল</label>
+            <input className="inp" placeholder="যেমন: 2025" value={examYear} onChange={e=>setExamYear(e.target.value)}/>
+          </div>
+        </div>
+      )}
 
       {/* Group Mode — multi-part প্রশ্নের জন্য (যেমন "কারক নির্ণয় কর" ৫টা sub-question) */}
       <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
