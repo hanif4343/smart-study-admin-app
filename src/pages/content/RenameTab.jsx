@@ -1,10 +1,11 @@
-/* ══════════ RENAME TAB (Subject/Topic/SubTopic rename — এখন reference-টেবিল ভিত্তিক) ══════════
+/* ══════════ RENAME TAB (Subject/Topic rename — এখন reference-টেবিল ভিত্তিক) ══════════
    ⚠️ Phase 5 rewrite: আগে এই ট্যাব Quiz/QBank/Study-এর প্রতিটা রো স্ক্যান করে matching সব
    রো rewrite করত (হাজার হাজার Firebase write/Sheet cell — এটাই ছিল মূল "usage বেশি" সমস্যা)।
-   এখন Subject/Topic/SubTopic নাম প্রশ্নের রো-তে literal টেক্সট হিসেবে থাকে না — শুধু
-   subject_id/topic_id/subtopic_id (stable reference) থাকে। তাই rename মানে এখন শুধু
-   Subjects/Topics/SubTopics রেফারেন্স-টেবিলের ঠিক ১টা রো বদলানো — Quiz/QBank/Study
-   কখনো টাচ হয় না, প্রশ্ন যতই থাকুক (৭৭৬১টা হোক বা ২ লাখ)। */
+   এখন Subject/Topic নাম প্রশ্নের রো-তে literal টেক্সট হিসেবে থাকে না — শুধু
+   subject_id/topic_id (stable reference) থাকে। তাই rename মানে এখন শুধু
+   Subjects/Topics রেফারেন্স-টেবিলের ঠিক ১টা রো বদলানো — Quiz/QBank/Study
+   কখনো টাচ হয় না, প্রশ্ন যতই থাকুক (৭৭৬১টা হোক বা ২ লাখ)।
+   ⚠️ SubTopic তুলে দেওয়া হয়েছে — QBank এখন Quiz/Study-এর মতোই ২-লেভেল। */
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
@@ -16,11 +17,11 @@ const SHEET_PREFIX = { Quiz: "QZ_", QBank: "QB_", Study: "ST_" };
 
 function RenameTab({push}){
   const[sheet,setSheet]=useState("Quiz");
-  const[type,setType]=useState("subject"); // subject | topic | subtopic (subtopic শুধু QBank)
+  const[type,setType]=useState("subject"); // subject | topic
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
-  const[refData,setRefData]=useState(null); // {subjects,topics,subtopics,tags,posts,institutions}
+  const[refData,setRefData]=useState(null); // {subjects,topics,tags,posts,institutions}
   const[loading,setLoading]=useState(false);
   const[tick,setTick]=useState(0);
   const refresh=useCallback(()=>setTick(t=>t+1),[]);
@@ -34,9 +35,6 @@ function RenameTab({push}){
     });
     return()=>{ cancelled=true; };
   },[gasSecret,tick]);
-
-  // QBank ছাড়া বাকি sheet-এ subtopic লেভেল নেই — sheet বদলালে সেই অনুযায়ী type রিসেট
-  useEffect(()=>{ if(sheet!=="QBank" && type==="subtopic") setType("subject"); },[sheet,type]);
 
   // ── প্রতিটা topic-এর row_count আছে (rebuildIndex থেকে) — subject-এর কাউন্ট
   //    হিসেব করা হয় তার নিচের সব topic-এর row_count যোগ করে (extra fetch লাগে না)। ──
@@ -53,29 +51,17 @@ function RenameTab({push}){
         })
         .sort((a,b)=>b.count-a.count);
     }
-    if(type==="topic"){
-      const subjMap={}; (refData.subjects||[]).forEach(s=>{subjMap[s.subject_id]=s.subject_name;});
-      return (refData.topics||[])
-        .filter(t=>t.subject_id && t.subject_id.startsWith(prefix))
-        .map(t=>({
-          id:t.topic_id,
-          name:`${subjMap[t.subject_id]||"?"} → ${t.topic_name}`,
-          rawName:t.topic_name,
-          count:parseInt(t.row_count)||0,
-          refType:"topics"
-        }))
-        .sort((a,b)=>b.count-a.count);
-    }
-    // subtopic — শুধু QBank
-    const topicMap={}; (refData.topics||[]).forEach(t=>{topicMap[t.topic_id]=t;});
-    const subjMap2={}; (refData.subjects||[]).forEach(s=>{subjMap2[s.subject_id]=s.subject_name;});
-    return (refData.subtopics||[])
-      .filter(st=>{const t=topicMap[st.topic_id]; return t && t.subject_id && t.subject_id.startsWith(prefix);})
-      .map(st=>{
-        const t=topicMap[st.topic_id];
-        const subjName=t?subjMap2[t.subject_id]:"?";
-        return {id:st.subtopic_id,name:`${subjName} → ${t?.topic_name||"?"} → ${st.subtopic_name}`,rawName:st.subtopic_name,count:null,refType:"subtopics"};
-      });
+    const subjMap={}; (refData.subjects||[]).forEach(s=>{subjMap[s.subject_id]=s.subject_name;});
+    return (refData.topics||[])
+      .filter(t=>t.subject_id && t.subject_id.startsWith(prefix))
+      .map(t=>({
+        id:t.topic_id,
+        name:`${subjMap[t.subject_id]||"?"} → ${t.topic_name}`,
+        rawName:t.topic_name,
+        count:parseInt(t.row_count)||0,
+        refType:"topics"
+      }))
+      .sort((a,b)=>b.count-a.count);
   },[refData,sheet,type]);
 
   const[renameTarget,setRenameTarget]=useState(null);
@@ -108,7 +94,7 @@ function RenameTab({push}){
         </label>
         <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}/>
         <div style={{fontSize:10.5,color:C.muted,marginTop:5,lineHeight:1.5}}>
-          এখানে rename করলে শুধু Subjects/Topics/SubTopics রেফারেন্স-টেবিলের ১টা রো বদলাবে — Quiz/QBank/Study-এর প্রশ্নের রো কখনো টাচ হবে না।
+          এখানে rename করলে শুধু Subjects/Topics রেফারেন্স-টেবিলের ১টা রো বদলাবে — Quiz/QBank/Study-এর প্রশ্নের রো কখনো টাচ হবে না।
         </div>
       </div>
       <div style={{display:"flex",gap:6,marginBottom:8}}>
@@ -119,7 +105,6 @@ function RenameTab({push}){
       <div className="atabs" style={{marginBottom:10}}>
         <button className={`atab${type==="subject"?" on":""}`} onClick={()=>setType("subject")}>📚 Subject</button>
         <button className={`atab${type==="topic"?" on":""}`} onClick={()=>setType("topic")}>📂 Topic</button>
-        {sheet==="QBank" && <button className={`atab${type==="subtopic"?" on":""}`} onClick={()=>setType("subtopic")}>📌 Subtopic</button>}
       </div>
       <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
         {!gasSecret?"⚠️ GAS Secret Key বসাও":loading?"⏳":`${list.length}টি · ক্লিক করে রিনেম করুন`}
