@@ -1,8 +1,9 @@
-/* ══════════ REFERENCE MANAGER TAB (Subjects/Topics/SubTopics/Tags/Posts/Institutions) ══════════
-   Phase 5 — নতুন schema-র ৬টা রেফারেন্স-টেবিলের জন্য একটাই reusable CRUD UI (৬টা আলাদা
+/* ══════════ REFERENCE MANAGER TAB (Subjects/Topics/Tags/Posts/Institutions) ══════════
+   Phase 5 — নতুন schema-র রেফারেন্স-টেবিলের জন্য একটাই reusable CRUD UI (আলাদা
    পেজ না বানিয়ে)। List/Add/Rename/Delete — সবকিছু GAS-এর getReferenceData/addReferenceItem/
    renameReferenceItem/deleteReferenceItem action দিয়ে, প্রতিটাই Quiz/QBank/Study-এর
-   প্রশ্নের রো টাচ না করে শুধু ছোট রেফারেন্স-টেবিলে কাজ করে। */
+   প্রশ্নের রো টাচ না করে শুধু ছোট রেফারেন্স-টেবিলে কাজ করে।
+   ⚠️ SubTopics তুলে দেওয়া হয়েছে — QBank এখন Quiz/Study-এর মতোই ২-লেভেল (Subject→Topic)। */
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
@@ -13,14 +14,13 @@ import { useModalBack } from "../../hooks/useModalBack.js";
 const REF_TYPES = [
   {key:"subjects", label:"📚 Subjects", needsSheet:true, needsParent:false},
   {key:"topics", label:"📂 Topics", needsSheet:false, needsParent:"subjects"},
-  {key:"subtopics", label:"📌 SubTopics", needsSheet:false, needsParent:"topics", qbankOnly:true},
   {key:"tags", label:"🎯 Tags", needsSheet:false, needsParent:false},
   {key:"posts", label:"🧑‍💼 Posts (পদ)", needsSheet:false, needsParent:false},
   {key:"institutions", label:"🏢 Institutions (প্রতিষ্ঠান)", needsSheet:false, needsParent:false},
 ];
 
-const NAME_KEY = {subjects:"subject_name", topics:"topic_name", subtopics:"subtopic_name", tags:"tag_name", posts:"post_name", institutions:"institution_name"};
-const ID_KEY   = {subjects:"subject_id", topics:"topic_id", subtopics:"subtopic_id", tags:"tag_id", posts:"post_id", institutions:"institution_id"};
+const NAME_KEY = {subjects:"subject_name", topics:"topic_name", tags:"tag_name", posts:"post_name", institutions:"institution_name"};
+const ID_KEY   = {subjects:"subject_id", topics:"topic_id", tags:"tag_id", posts:"post_id", institutions:"institution_id"};
 
 /* ── ছোট ডিলিট-নিশ্চিতকরণ মডাল — কতগুলো প্রশ্ন এই এন্ট্রি ব্যবহার করছে সেটা
    দেখিয়ে সতর্ক করে (delete করলে প্রশ্ন মোছে না, কিন্তু orphan reference থেকে যাবে)। ── */
@@ -46,7 +46,7 @@ function DeleteConfirmModal({name,count,onCancel,onConfirm,deleting}){
 function ReferenceManagerTab({push}){
   const[refKey,setRefKey]=useState("subjects");
   const[sheet,setSheet]=useState("Quiz"); // subjects-এর জন্য
-  const[parentId,setParentId]=useState(""); // topics/subtopics-এর জন্য
+  const[parentId,setParentId]=useState(""); // topics-এর জন্য (subjects প্যারেন্ট)
 
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
@@ -66,14 +66,10 @@ function ReferenceManagerTab({push}){
 
   const cfg=REF_TYPES.find(r=>r.key===refKey);
 
-  // ── Parent dropdown-এর অপশন (topics-এর জন্য subjects, subtopics-এর জন্য topics) ──
+  // ── Parent dropdown-এর অপশন (topics-এর জন্য subjects) ──
   const parentOptions=useMemo(()=>{
     if(!refData) return [];
     if(refKey==="topics") return (refData.subjects||[]).filter(s=>s.sheet===sheet);
-    if(refKey==="subtopics"){
-      const qbSubjIds=new Set((refData.subjects||[]).filter(s=>s.sheet==="QBank").map(s=>s.subject_id));
-      return (refData.topics||[]).filter(t=>qbSubjIds.has(t.subject_id));
-    }
     return [];
   },[refData,refKey,sheet]);
 
@@ -85,7 +81,6 @@ function ReferenceManagerTab({push}){
     const rows=refData[refKey]||[];
     if(refKey==="subjects") return rows.filter(r=>r.sheet===sheet);
     if(refKey==="topics") return parentId ? rows.filter(r=>r.subject_id===parentId) : [];
-    if(refKey==="subtopics") return parentId ? rows.filter(r=>r.topic_id===parentId) : [];
     return rows;
   },[refData,refKey,sheet,parentId]);
 
@@ -94,7 +89,7 @@ function ReferenceManagerTab({push}){
       if(refKey==="topics") return parseInt(row.row_count)||0;
       return (refData?.topics||[]).filter(t=>t.subject_id===row.subject_id).reduce((s,t)=>s+(parseInt(t.row_count)||0),0);
     }
-    return null; // subtopics/tags/posts/institutions-এর জন্য live count নেই
+    return null; // tags/posts/institutions-এর জন্য live count নেই
   },[refData,refKey]);
 
   const[addName,setAddName]=useState("");
@@ -152,20 +147,15 @@ function ReferenceManagerTab({push}){
           ))}
         </div>
       )}
-      {refKey==="subtopics" && (
-        <div style={{display:"flex",gap:6,marginBottom:10}}>
-          <button className="ftab on">QBank (subtopic শুধু এখানেই আছে)</button>
-        </div>
-      )}
 
       {cfg.needsParent && (
         <div className="fld" style={{marginBottom:10}}>
-          <label>{refKey==="topics"?"Subject সিলেক্ট করো":"Topic সিলেক্ট করো"}</label>
+          <label>Subject সিলেক্ট করো</label>
           <select className="inp" value={parentId} onChange={e=>setParentId(e.target.value)}>
             <option value="">— বাছাই করো —</option>
             {parentOptions.map(p=>(
-              <option key={p[ID_KEY[refKey==="topics"?"subjects":"topics"]]} value={p[ID_KEY[refKey==="topics"?"subjects":"topics"]]}>
-                {p[NAME_KEY[refKey==="topics"?"subjects":"topics"]]}
+              <option key={p.subject_id} value={p.subject_id}>
+                {p.subject_name}
               </option>
             ))}
           </select>
