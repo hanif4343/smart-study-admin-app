@@ -71,18 +71,13 @@ function buildSubjectMap(arr){
     const q=arr[i];
     const sub=(q.Subject||q.subject||"Unknown").trim();
     const typ=(q.QType||q.qtype||"MCQ").toLowerCase();
-    const st=(q.Sub_topic||q.sub_topic||"General").trim();
-    const parts=st.includes(" > ")?st.split(" > "):[st,st];
-    const top=parts[0].trim()||"General";
-    const stF=parts.length>1?parts[1].trim():st;
+    const top=(q.Sub_topic||q.sub_topic||"General").trim()||"General";
     const isWr=typ==="written";
     if(!map[sub])map[sub]={total:0,mcq:0,written:0,topics:{}};
     map[sub].total++;if(isWr)map[sub].written++;else map[sub].mcq++;
-    if(!map[sub].topics[top])map[sub].topics[top]={total:0,subtopics:{}};
+    if(!map[sub].topics[top])map[sub].topics[top]={total:0,mcq:0,written:0};
     map[sub].topics[top].total++;
-    if(!map[sub].topics[top].subtopics[stF])map[sub].topics[top].subtopics[stF]={total:0,mcq:0,written:0};
-    map[sub].topics[top].subtopics[stF].total++;
-    if(isWr)map[sub].topics[top].subtopics[stF].written++;else map[sub].topics[top].subtopics[stF].mcq++;
+    if(isWr)map[sub].topics[top].written++;else map[sub].topics[top].mcq++;
   }
   return map;
 }
