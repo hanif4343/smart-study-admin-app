@@ -1,14 +1,72 @@
-/* ══════════ BROWSE TAB (Content Manager) ══════════ */
+/* ══════════ BROWSE TAB (Content Manager) ══════════
+   ⚠️ Phase 5 rewrite (group_id fix): আগে এই ট্যাব Firebase (useFB) থেকে raw প্রশ্ন
+   পড়ত — কিন্তু Firebase-এ সেভ হওয়া রেকর্ডে (buildBulkRecord/saveRowsToFirebaseBulk
+   পথ) group_id/subject_id/topic_id ফিল্ড থাকেই না (শুধু Sheet-এ সেভ হওয়া রো-তেই
+   এগুলো থাকে, buildSheetRow দেখো)। ফলে Browse ট্যাব কখনো group_id দেখতে পেত না,
+   আর multi-part প্রশ্নের (যেমন "কারক নির্ণয় কর" ৫টা sub-question) মাঝের একটা
+   sub-question একা ডিলিট হয়ে গেলে বাকি group ভাঙা অবস্থায় থেকে যেত — কোনো
+   সতর্কতা ছাড়াই।
+
+   এখন এই ট্যাব GAS-এর "getSheetRows" (useSheetRows হুক, dataCache.js) থেকে পড়ে —
+   যেটা Sheet-এর আসল কলাম (subject_id/topic_id/group_id/sub_index সহ) হুবহু ফেরত
+   দেয়। এর জন্য GAS Secret Key দরকার (অন্য Phase 5 ট্যাবগুলোর মতোই)।
+
+   ডিলিট ফ্লো এখন group-aware: কোনো প্রশ্নে group_id থাকলে (আর group-এ ১-এর বেশি
+   সদস্য থাকলে), ডিলিট বাটনে চাপ দিলে সরাসরি ডিলিট না হয়ে একটা choice modal
+   আসে — "শুধু এইটা" (group ভাঙার ঝুঁকি নিয়ে) বা "পুরো group একসাথে"। ── */
 import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../../core/config.js";
-import { useFB, invalidate } from "../../core/dataCache.js";
+import { useSheetRows, invalidate } from "../../core/dataCache.js";
 import { fbDelete, fbDeleteBatch, fbPush, fbSet } from "../../core/firebase.js";
-import { toArr, nowTs, loadSharedGasSecret } from "../../core/utils.js";
+import { toArr, nowTs, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { deleteIdsInSheet } from "../../core/sheetSave.js";
 import { callAiProviderRotatingRaw, buildKeyPool, OCR_SPLIT_RULES, OCR_NOISE_RULES, OCR_CORRECTION_RULES } from "../../core/ocrProviders.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
 import { InlineEditModal } from "./InlineEditModal.jsx";
 import { ReformatReviewModal } from "./ReformatReviewModal.jsx";
+import { useModalBack } from "../../hooks/useModalBack.js";
+
+/* ── প্রশ্নের group_id/sub_index — sheet header যেই casing-এই থাকুক (snake_case
+   canonical, কিন্তু defensively কয়েকটা variant চেক করা হলো, বাকি ফিল্ডগুলোর
+   মতোই এই ফাইলের প্যাটার্ন অনুসরণ করে)। ── */
+const groupIdOf = q => (q.group_id ?? q.Group_id ?? q.groupId ?? q.GroupId ?? "").toString().trim();
+const subIndexOf = q => (q.sub_index ?? q.Sub_index ?? q.subIndex ?? q.SubIndex ?? "").toString().trim();
+
+/* ── কোনো প্রশ্নে group_id থাকলে (আর group-এ ১-এর বেশি সদস্য থাকলে) ডিলিটের
+   আগে এই choice modal দেখায় — একা sub-question ডিলিট (group ভাঙবে) নাকি
+   পুরো group একসাথে ডিলিট, সেটা admin স্পষ্টভাবে বেছে নেয়। ── */
+function GroupDeleteChoiceModal({target, group, onCancel, onDeleteSingle, onDeleteGroup}){
+  useModalBack(onCancel);
+  const sorted=[...group].sort((a,b)=>(parseInt(subIndexOf(a))||0)-(parseInt(subIndexOf(b))||0));
+  return(
+    <div className="ovl" style={{zIndex:300}}>
+      <div className="modal" style={{borderTop:`3px solid #f59e0b`}}>
+        <div className="mh"/>
+        <div style={{textAlign:"center",marginBottom:12}}>
+          <div style={{fontSize:36,marginBottom:6}}>🔗</div>
+          <div style={{fontSize:15,fontWeight:700,color:"#f59e0b",marginBottom:4}}>এই প্রশ্নটা একটা multi-part group-এর অংশ</div>
+          <div style={{fontSize:11,color:C.muted,lineHeight:1.6}}>একই instruction-এর নিচে মোট <b style={{color:C.text}}>{group.length}টি</b> sub-question একসাথে আছে (group: <code>{groupIdOf(target)}</code>)। শুধু এইটা ডিলিট করলে বাকিগুলো "ভাঙা" group হিসেবে থেকে যাবে।</div>
+        </div>
+        <div style={{background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 10px",marginBottom:14,maxHeight:140,overflowY:"auto"}}>
+          {sorted.map(m=>{
+            const isTarget=m===target||(m._fbKey&&m._fbKey===target._fbKey);
+            return(
+              <div key={m._fbKey||m.id} style={{display:"flex",gap:6,alignItems:"flex-start",padding:"3px 0",fontSize:11,color:isTarget?"#f59e0b":C.muted,fontWeight:isTarget?700:500}}>
+                <span style={{minWidth:16}}>{subIndexOf(m)||"?"}.</span>
+                <span style={{wordBreak:"break-word"}}>{(m.Question||m.question||"").toString().slice(0,60)}{isTarget?" ← এটাই ডিলিট করতে চাচ্ছ":""}</span>
+              </div>
+            );
+          })}
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button className="btn" style={{justifyContent:"center",background:"#f59e0b22",color:"#f59e0b",border:"1px solid #f59e0b44"}} onClick={onDeleteSingle}>⚠️ শুধু এই sub-question ডিলিট করো (group ভাঙবে)</button>
+          <button className="btn" style={{justifyContent:"center",background:C.red,color:"#fff"}} onClick={onDeleteGroup}>🗑️ পুরো group ({group.length}টি) একসাথে ডিলিট করো</button>
+          <button className="btn bg" style={{justifyContent:"center"}} onClick={onCancel}>বাতিল</button>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /* ── পুরনো, একাধিক উপ-প্রশ্নের উত্তর এক জায়গায় বান্ডিল হয়ে-যাওয়া entry-কে
    AI দিয়ে আলাদা আলাদা স্বতন্ত্র {q,a}-এ ভেঙে দেওয়ার প্রম্পট। প্রশ্নব্যাংক
@@ -38,15 +96,25 @@ function parseReformatResponse(text){
 
 function BrowseTab({push,tick}){
   const[sheet,setSheet]=useState("Quiz");
-  const{data:raw,loading}=useFB(sheet,tick);
+
+  // ── GAS Secret Key — এখন Sheet-সোর্স থেকে পড়ে বলে অন্য Phase 5 ট্যাবগুলোর
+  // (ReferenceManagerTab/DeleteTab ইত্যাদি) মতোই এটা লাগবে ──
+  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[localTick,setLocalTick]=useState(0);
+  const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
+  const refreshSheet=()=>setLocalTick(t=>t+1);
+
+  const{data:raw,loading}=useSheetRows(sheet, (tick||0)+localTick*1000);
   const[search,setSearch]=useState("");
   const[filterSub,setFilterSub]=useState("all");
   const[filterAudience,setFilterAudience]=useState("all");
-  const[viewMode,setViewMode]=useState("all"); // "all" | "duplicates"
+  const[viewMode,setViewMode]=useState("all"); // "all" | "duplicates" | "suspicious"
   const[editing,setEditing]=useState(null);
   const[delTarget,setDelTarget]=useState(null);
   const[delLoading,setDelLoading]=useState(false);
+  const[groupDeleteCtx,setGroupDeleteCtx]=useState(null); // {target, group} — group-choice modal
   const[bulkDelTargets,setBulkDelTargets]=useState(null); // array of qs to bulk delete
+  const[bulkDelKind,setBulkDelKind]=useState("duplicate"); // "duplicate" | "suspicious" | "group"
   const[bulkDelLoading,setBulkDelLoading]=useState(false);
   const[page,setPage]=useState(0);
   const[expandedKeys,setExpandedKeys]=useState(()=>new Set()); // কোন কোন কার্ড "বিস্তারিত" খোলা আছে
@@ -60,6 +128,20 @@ function BrowseTab({push,tick}){
   const allQ=useMemo(()=>toArr(raw).reverse(),[raw]);
   const subjects=useMemo(()=>["all",...new Set(allQ.map(q=>(q.Subject||q.subject||"").trim()).filter(Boolean))]
   ,[allQ]);
+
+  // ── group_id → সব সদস্যের ম্যাপ (একই sheet-এর মধ্যে) — ডিলিটের আগে group
+  // চেক করার জন্য। allQ পুরো sheet-এর সব রো (Sheet-সোর্স, পুরনো Firebase-only
+  // পড়ার তুলনায় এখন group_id ফিল্ড এখানে সত্যিই থাকে)। ──
+  const groupMap=useMemo(()=>{
+    const m={};
+    allQ.forEach(q=>{
+      const gid=groupIdOf(q);
+      if(!gid)return;
+      if(!m[gid])m[gid]=[];
+      m[gid].push(q);
+    });
+    return m;
+  },[allQ]);
 
   // Collect all unique AudienceTags from current sheet, sorted by count
   const audienceTags=useMemo(()=>{
@@ -134,14 +216,23 @@ function BrowseTab({push,tick}){
   const pageSlice=useMemo(()=>filtered.slice(page*PAGE,(page+1)*PAGE),[filtered,page]);
   const totalPages=Math.ceil(filtered.length/PAGE);
 
-  // ── FIX: আগে এখানে শুধু Firebase-এ delete হতো (fbDelete), Sheet একদমই টাচ
-  // হতো না — মানে GAS/Sheet মোডে যারা ডেটা পড়ে তাদের কাছে "ডিলিট করা" প্রশ্নটা
-  // থেকেই যেত। এখন Sheet delete-ও (GAS deleteByIds) সাথে হচ্ছে।
-  // ⚠️ group_id-aware warning (multi-part প্রশ্ন গ্রুপ একসাথে ডিলিট) এখনো যোগ
-  // করা যায়নি — কারণ এই ট্যাব এখনো Firebase (useFB) থেকে ডেটা পড়ে, যেটাতে
-  // নতুন schema-র subject_id/topic_id/group_id ফিল্ড নেই (Phase 4 deferred)।
-  // এই ট্যাবের ডেটা-সোর্স Sheet/GAS-এ migrate করাটা একটা বড় আলাদা কাজ —
-  // master plan-এ future task হিসেবে নোট করা আছে। ──
+  // ── ডিলিট বাটনে ক্লিক করলে প্রথমে group চেক করা হয় — group_id থাকলে আর
+  // group-এ ১-এর বেশি সদস্য থাকলে সরাসরি ডিলিট না করে choice modal দেখানো
+  // হয় (single sub-question vs পুরো group)। group না থাকলে/একা হলে আগের
+  // মতোই সরাসরি single-delete confirm modal। ──
+  const onDeleteClick=(q)=>{
+    const gid=groupIdOf(q);
+    const fullGroup=gid?(groupMap[gid]||[q]):[q];
+    if(gid && fullGroup.length>1){
+      setGroupDeleteCtx({target:q, group:fullGroup});
+    } else {
+      setDelTarget(q);
+    }
+  };
+
+  // ── FIX (আগে থেকেই ছিল): Firebase delete-এর পাশাপাশি Sheet delete-ও
+  // (GAS deleteByIds) হয়, নাহলে GAS/Sheet মোডে যারা পড়ে তাদের কাছে "ডিলিট
+  // করা" প্রশ্নটা থেকেই যেত। ──
   const hardDelete=async()=>{
     if(!delTarget)return;
     setDelLoading(true);
@@ -149,7 +240,6 @@ function BrowseTab({push,tick}){
       const fkey=delTarget._fbKey;
       const qid=(delTarget.ID||delTarget.id||"").toString();
       if(fkey){await fbDelete(`${sheet}/${fkey}`);invalidate(sheet);}
-      const gasSecret=loadSharedGasSecret();
       let sheetMsg="";
       if(gasSecret&&qid){
         const sres=await deleteIdsInSheet({sheet,ids:[qid],gasSecret});
@@ -157,21 +247,31 @@ function BrowseTab({push,tick}){
       } else {
         sheetMsg=" · ⚠️ GAS Secret না থাকায় শুধু Firebase-এ মুছেছে, Sheet-এ না";
       }
+      refreshSheet();
       push("success","🗑️ ডিলিট!",`#${qid}${sheetMsg}`);
       setDelTarget(null);
     }catch(e){push("error","ডিলিট ব্যর্থ",String(e?.message||e||"unknown"));}
     setDelLoading(false);
   };
 
-  const bulkDeleteDuplicates=async(qs)=>{
+  // ── একাধিক প্রশ্ন একসাথে ডিলিট (duplicate/suspicious/group — তিনটাতেই
+  // ব্যবহার হয়)। Firebase batch-delete + Sheet batch-delete দুটোই হয় ──
+  const bulkDeleteMany=async(qs)=>{
     if(!qs||qs.length===0)return;
     setBulkDelLoading(true);
     try{
-      // ⚡ Single multi-path PATCH — deletes all duplicates in one Firebase call
       const keys=qs.map(q=>q._fbKey).filter(Boolean);
+      const ids=qs.map(q=>(q.ID||q.id||"").toString()).filter(Boolean);
       const deleted=await fbDeleteBatch(sheet, keys);
-      invalidate(sheet);
-      push("success",`🗑️ ${deleted}টি এন্ট্রি ডিলিট!`,"");
+      let sheetMsg="";
+      if(gasSecret&&ids.length){
+        const sres=await deleteIdsInSheet({sheet,ids,gasSecret});
+        sheetMsg=sres.ok?` · Sheet থেকেও ${sres.deleted||ids.length}টি মুছেছে`:` · ⚠️ Sheet delete ব্যর্থ (${sres.error||"?"})`;
+      } else {
+        sheetMsg=" · ⚠️ GAS Secret না থাকায় শুধু Firebase-এ মুছেছে, Sheet-এ না";
+      }
+      refreshSheet();
+      push("success",`🗑️ ${deleted}টি এন্ট্রি ডিলিট!`,sheetMsg);
       setBulkDelTargets(null);
     }catch(e){push("error","Bulk ডিলিট ব্যর্থ",String(e?.message||e||"unknown"));}
     setBulkDelLoading(false);
@@ -234,7 +334,7 @@ function BrowseTab({push,tick}){
       // নতুন entries সফলভাবে লেখা হওয়ার পরই পুরনো বান্ডিল entries ডিলিট করা হয় — ডেটা হারানোর ঝুঁকি এড়াতে
       const sourceKeys=[...new Set(included.map(e=>e.sourceKey).filter(Boolean))];
       if(sourceKeys.length) await fbDeleteBatch(sheet,sourceKeys);
-      invalidate(sheet);
+      refreshSheet();
       push("success",`✅ ${included.length}টি নতুন প্রশ্ন তৈরি হলো`,`${sourceKeys.length}টি পুরনো বান্ডিল এন্ট্রি বদলে গেল`);
       setReformatEntries(null);
       setSelectedKeys(new Set());
@@ -245,6 +345,14 @@ function BrowseTab({push,tick}){
 
   return(
     <>
+      {/* GAS Secret Key — Sheet-সোর্স থেকে পড়ে বলে এটা লাগবে (অন্য Phase 5 ট্যাবের মতোই) */}
+      <div className="fld" style={{marginBottom:10}}>
+        <label style={{display:"flex",justifyContent:"space-between"}}>
+          <span>GAS Secret Key</span>
+        </label>
+        <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>{setGasSecretP(e.target.value);}} onBlur={refreshSheet}/>
+        {!gasSecret && <div style={{fontSize:10,color:"#f59e0b",marginTop:4}}>⚠️ Secret Key ছাড়া Sheet থেকে প্রশ্ন লোড হবে না</div>}
+      </div>
       {/* Sheet tabs + Audience selector row */}
       <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center",flexWrap:"wrap"}}>
         {["Quiz","QBank","Study"].map(s=>(
@@ -293,7 +401,7 @@ function BrowseTab({push,tick}){
             </div>
             {suspiciousQs.length>0&&(
               <button
-                onClick={()=>setBulkDelTargets(suspiciousQs)}
+                onClick={()=>{setBulkDelKind("suspicious");setBulkDelTargets(suspiciousQs);}}
                 style={{fontSize:11,padding:"5px 12px",borderRadius:8,background:"#f59e0b22",color:"#f59e0b",border:"1px solid #f59e0b44",fontWeight:700,cursor:"pointer"}}>
                 🗑️ সব সন্দেহজনক ডিলিট ({suspiciousQs.length}টি)
               </button>
@@ -315,6 +423,7 @@ function BrowseTab({push,tick}){
                 onClick={()=>{
                   // Select all non-original (keep first of each group, delete rest)
                   const toDelete=duplicateGroups.flatMap(g=>g.slice(1));
+                  setBulkDelKind("duplicate");
                   setBulkDelTargets(toDelete);
                 }}
                 style={{fontSize:11,padding:"5px 12px",borderRadius:8,background:C.red+"22",color:C.red,border:`1px solid ${C.red}44`,fontWeight:700,cursor:"pointer"}}>
@@ -359,7 +468,7 @@ function BrowseTab({push,tick}){
         {totalPages>1&&<span style={{color:C.accent}}>{page+1}/{totalPages}</span>}
       </div>
       {loading&&!raw?[...Array(4)].map((_,i)=><div key={i} className="sk"/>):
-       filtered.length===0?<div className="empty"><div className="ei">📋</div><p>কিছু নেই</p></div>:
+       filtered.length===0?<div className="empty"><div className="ei">📋</div><p>{!gasSecret?"GAS Secret Key দাও":"কিছু নেই"}</p></div>:
        pageSlice.map((q,i)=>{
         const qid=(q.ID||q.id||"").toString();
         const qtext=(q.Question||q.question||"(নোট)").slice(0,80);
@@ -372,7 +481,9 @@ function BrowseTab({push,tick}){
         const isOriginal=q._isDupOriginal;
         const cardKey=q._fbKey||i;
         const isOpen=expandedKeys.has(cardKey);
-        // ── বিস্তারিত ভিউ-এর জন্য সব ফিল্ড (Firebase-এ নানা নামে থাকতে পারে, তাই সব variant চেক করা হয়) ──
+        const gid=groupIdOf(q);
+        const groupSize=gid?(groupMap[gid]||[]).length:0;
+        // ── বিস্তারিত ভিউ-এর জন্য সব ফিল্ড (Firebase/Sheet-এ নানা নামে থাকতে পারে, তাই সব variant চেক করা হয়) ──
         const _o=(k1,k2,k3,k4)=>q[k1]||q[k2]||q[k3]||q[k4]||"";
         const opt1=_o("Opt1","opt1","Option1","option1"), opt2=_o("Opt2","opt2","Option2","option2");
         const opt3=_o("Opt3","opt3","Option3","option3"), opt4=_o("Opt4","opt4","Option4","option4");
@@ -390,6 +501,11 @@ function BrowseTab({push,tick}){
               )}
               <span className={`qtag ${qt==="written"?"qtag-wr":"qtag-mcq"}`}>{qt==="written"?"✍️":"❓"}</span>
               <span style={{fontSize:9,color:C.muted,marginTop:1}}>#{qid}</span>
+              {gid&&(
+                <span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:"#818cf822",color:"#818cf8",fontWeight:700,border:"1px solid #818cf844"}} title={`group: ${gid}`}>
+                  🔗 {subIndexOf(q)||"?"}/{groupSize}
+                </span>
+              )}
               {isDup&&(
                 <span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:isOriginal?C.green+"22":C.red+"22",color:isOriginal?C.green:C.red,fontWeight:700,border:`1px solid ${isOriginal?C.green:C.red}44`}}>
                   {isOriginal?`✅ Original (${q._dupGroup}টি)`:"🔁 Duplicate"}
@@ -397,7 +513,7 @@ function BrowseTab({push,tick}){
               )}
               <div style={{flex:1}}/>
               <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}33`}} onClick={()=>setEditing(q)}>✏️</button>
-              <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`}} onClick={()=>setDelTarget(q)}>🗑️</button>
+              <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`}} onClick={()=>onDeleteClick(q)}>🗑️</button>
             </div>
             <div className="qcard-q">
               {isSuspicious&&<span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:"#f59e0b22",color:"#f59e0b",fontWeight:800,border:"1px solid #f59e0b44",marginRight:6}}>⚠️ সন্দেহজনক/ভাঙা এন্ট্রি</span>}
@@ -470,18 +586,28 @@ function BrowseTab({push,tick}){
           <button className="btn bg" disabled={page>=totalPages-1} onClick={()=>setPage(p=>p+1)}>পরে →</button>
         </div>
       )}
-      {editing&&<InlineEditModal q={editing} sheet={sheet} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);invalidate(sheet);}} push={push}/>}
+      {editing&&<InlineEditModal q={editing} sheet={sheet} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);refreshSheet();}} push={push}/>}
+      {groupDeleteCtx&&<GroupDeleteChoiceModal
+        target={groupDeleteCtx.target} group={groupDeleteCtx.group}
+        onCancel={()=>setGroupDeleteCtx(null)}
+        onDeleteSingle={()=>{ setDelTarget(groupDeleteCtx.target); setGroupDeleteCtx(null); }}
+        onDeleteGroup={()=>{ setBulkDelKind("group"); setBulkDelTargets(groupDeleteCtx.group); setGroupDeleteCtx(null); }}
+      />}
       {delTarget&&<DeleteWarningModal
         title="এই প্রশ্নটি ডিলিট করবেন?"
-        description={`"${(delTarget.Question||delTarget.question||"নোট").slice(0,60)}…" Firebase ও Google Sheet থেকে মুছে যাবে।`}
+        description={`"${(delTarget.Question||delTarget.question||"নোট").slice(0,60)}…" Firebase ও Google Sheet থেকে মুছে যাবে।${groupIdOf(delTarget)?" ⚠️ এটা একটা multi-part group-এর অংশ ছিল — বাকিগুলো এখন থেকে group ভাঙা অবস্থায় থাকবে।":""}`}
         onConfirm={hardDelete} onCancel={()=>setDelTarget(null)} loading={delLoading}
       />}
       {bulkDelTargets&&<DeleteWarningModal
-        title={`🗑️ ${bulkDelTargets.length}টি ${viewMode==="suspicious"?"সন্দেহজনক":"Duplicate"} এন্ট্রি ডিলিট করবেন?`}
-        description={viewMode==="suspicious"
-          ?`এগুলোর প্রশ্নের টেক্সট ৩ অক্ষরের কম (ভাঙা/নয়েজ) — ${bulkDelTargets.length}টি Firebase থেকে মুছে যাবে।`
-          :`এগুলো হলো duplicate কপি। Original গুলো রেখে বাকি ${bulkDelTargets.length}টি Firebase থেকে মুছে যাবে।`}
-        onConfirm={()=>bulkDeleteDuplicates(bulkDelTargets)} onCancel={()=>setBulkDelTargets(null)} loading={bulkDelLoading}
+        title={bulkDelKind==="group"?`🔗 পুরো group (${bulkDelTargets.length}টি sub-question) ডিলিট করবেন?`:`🗑️ ${bulkDelTargets.length}টি ${bulkDelKind==="suspicious"?"সন্দেহজনক":"Duplicate"} এন্ট্রি ডিলিট করবেন?`}
+        description={
+          bulkDelKind==="group"
+            ?`একই instruction-এর সব (${bulkDelTargets.length}টি) sub-question একসাথে Firebase ও Google Sheet থেকে মুছে যাবে — group-এর কোনো অংশ বাদ থাকবে না।`
+            :bulkDelKind==="suspicious"
+            ?`এগুলোর প্রশ্নের টেক্সট ৩ অক্ষরের কম (ভাঙা/নয়েজ) — ${bulkDelTargets.length}টি Firebase ও Sheet থেকে মুছে যাবে।`
+            :`এগুলো হলো duplicate কপি। Original গুলো রেখে বাকি ${bulkDelTargets.length}টি Firebase ও Sheet থেকে মুছে যাবে।`
+        }
+        onConfirm={()=>bulkDeleteMany(bulkDelTargets)} onCancel={()=>setBulkDelTargets(null)} loading={bulkDelLoading}
       />}
       {reformatEntries&&<ReformatReviewModal
         entries={reformatEntries}
