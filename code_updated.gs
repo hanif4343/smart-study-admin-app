@@ -126,20 +126,53 @@ function sendFCMToAll(title, body, extraData) {
   } catch(e) { return {error:e.toString()}; }
 }
 
-/* ══ ATOMIC ID ══ */
+/* ══ ATOMIC ID ══
+   ⚠️ Phase 5: আগে এই ফাংশন পুরনো numeric id (1001, 1002...) জেনারেট করত। এখন থেকে
+   নতুন প্রশ্নের id prefix-ভিত্তিক ("QZ-00001" স্টাইল) — RenameTab.jsx-এর
+   SHEET_PREFIX (subject_id প্রিফিক্স, "QZ_" স্টাইল)-এর সাথে মিল রেখে বানানো, শুধু
+   "_" এর বদলে "-" আর সংখ্যা 5-ডিজিট zero-padded (ExamAppearancesTab.jsx-এর
+   placeholder "QB-00123" অনুযায়ী)। পুরনো numeric id-গুলোর (1001, 1002...) সাথে
+   কখনো সংঘর্ষ হবে না, কারণ ফরম্যাটই আলাদা (prefix+dash থাকায়) — তাই কোনো
+   migration/backfill লাগে না, পুরনো রো-গুলো পুরনো numeric id নিয়েই থাকে, শুধু নতুন
+   যা যোগ হবে সেগুলোই নতুন prefix-স্কিমে আসবে। */
+var ID_PREFIX = { Quiz: "QZ", QBank: "QB", Study: "ST", Typing: "TY" };
+
 function getNextId(sheetName) {
   var lock = LockService.getScriptLock(); lock.waitLock(15000);
   try {
-    var prop=PropertiesService.getScriptProperties(), key="MAX_ID_"+sheetName.toUpperCase();
-    var ss=SpreadsheetApp.getActiveSpreadsheet(), sh=ss.getSheetByName(sheetName);
-    var cur=parseInt(prop.getProperty(key)||"0");
-    if(cur<1000&&sh&&sh.getLastRow()>1){
-      var ids=sh.getRange(2,1,sh.getLastRow()-1,1).getValues().map(function(r){return parseInt(r[0])||0;});
-      cur=Math.max.apply(null,ids);
+    var prop = PropertiesService.getScriptProperties();
+    var prefix = ID_PREFIX[sheetName] || sheetName.substring(0,2).toUpperCase();
+    // পুরনো "MAX_ID_*" property থেকে ইচ্ছাকৃতভাবে আলাদা key — পুরনো numeric
+    // কাউন্টারের সাথে এই নতুন prefix-কাউন্টার কখনো mix হবে না
+    var key = "NEXT_SEQ_" + sheetName.toUpperCase();
+    var seq = parseInt(prop.getProperty(key) || "0");
+
+    // প্রথমবার (property এখনো সেট হয়নি) — Sheet-এ আগে থেকেই কোনো prefix-id
+    // (এই সেশনে বা আগে কখনো ম্যানুয়ালি বসানো) থাকলে তার সর্বোচ্চ সংখ্যা থেকে
+    // শুরু করা হয়, যাতে ভুলে ডুপ্লিকেট prefix-id তৈরি না হয়। নাহলে 0 থেকে শুরু।
+    if (seq === 0) {
+      var ss = SpreadsheetApp.getActiveSpreadsheet(), sh = ss.getSheetByName(sheetName);
+      if (sh && sh.getLastRow() > 1) {
+        var re = new RegExp("^" + prefix + "-(\\d+)$");
+        var ids = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+        for (var i = 0; i < ids.length; i++) {
+          var cell = ids[i][0];
+          var m = cell !== "" && cell !== null ? cell.toString().match(re) : null;
+          if (m) { var n = parseInt(m[1], 10); if (n > seq) seq = n; }
+        }
+      }
     }
-    if(cur<1000)cur=1000;
-    var next=cur+1; prop.setProperty(key,next.toString()); return next;
+
+    seq = seq + 1;
+    prop.setProperty(key, seq.toString());
+    return prefix + "-" + pad5(seq);
   } finally { lock.releaseLock(); }
+}
+
+function pad5(n) {
+  var s = n.toString();
+  while (s.length < 5) s = "0" + s;
+  return s;
 }
 
 /* ══ DUPLICATE CHECK ══ */
@@ -551,6 +584,342 @@ function doGet(e) {
     return json({result:"success",count:count,field:field,old:oldV,new:newV,firebaseSynced:fbSynced});
   }
 
+  /* ══════════════════════════════════════════════════════════
+     PHASE 3 — নতুন schema (v2) actions
+     Subjects/Topics/Tags/Posts/Institutions reference-টেবিল
+     ও paginated question-fetch এর জন্য
+  ══════════════════════════════════════════════════════════ */
+
+  // ── REF_TABS: reference-টেবিলের নাম ও তাদের id-কলাম ──
+  var REF_TABS = {
+    subjects:     {sheet:"Subjects",     idCol:"subject_id",   nameCol:"subject_name"},
+    topics:       {sheet:"Topics",       idCol:"topic_id",     nameCol:"topic_name"},
+    tags:         {sheet:"Tags",         idCol:"tag_id",       nameCol:"tag_name"},
+    posts:        {sheet:"Posts",        idCol:"post_id",      nameCol:"post_name"},
+    institutions: {sheet:"Institutions", idCol:"institution_id", nameCol:"institution_name"}
+  };
+
+  // ── getReferenceData — Subjects/Topics/Tags/Posts/Institutions
+  // সবগুলো ছোট রেফারেন্স-টেবিল একবারে fetch করে (এগুলো ছোট বলেই বাল্ক-ফেচ
+  // নিরাপদ — এখানেই একমাত্র জায়গা যেখানে ছোট টেবিলের পুরোটা একসাথে পাঠানো হয়) ──
+  if (action==="getReferenceData") {
+    var refSs=SpreadsheetApp.getActiveSpreadsheet();
+    var refOut={};
+    for (var refKey in REF_TABS) {
+      var refCfg=REF_TABS[refKey];
+      var refSh=refSs.getSheetByName(refCfg.sheet);
+      refOut[refKey]=[];
+      if (refSh && refSh.getLastRow()>=2) {
+        var refData=refSh.getDataRange().getValues();
+        var refHdr=refData[0];
+        for (var ri=1;ri<refData.length;ri++) {
+          var refRec={};
+          for (var rj=0;rj<refHdr.length;rj++) {
+            var rk=refHdr[rj].toString().trim();
+            if (!rk) continue;
+            refRec[rk]=refData[ri][rj];
+          }
+          if (refRec[refCfg.idCol]) refOut[refKey].push(refRec);
+        }
+      }
+    }
+    return json({status:"success",result:"success",data:refOut});
+  }
+
+  // ── renameReferenceItem — subject/topic/tag/post/institution rename।
+  // আগের renameField-এর মতো পুরো Quiz/QBank/Study স্ক্যান করে না — শুধু
+  // সংশ্লিষ্ট reference ট্যাবের ১টা রো (id দিয়ে খুঁজে) বদলায়। questions
+  // subject_id/topic_id দিয়ে reference করে বলে rename-এ তাদের কিছুই ছোঁয়া
+  // লাগে না — এটাই মূল fix যেটা বহুবার আলোচনা হয়েছে। ──
+  if (action==="renameReferenceItem") {
+    var rriType=(e.parameter.refType||"").toLowerCase();
+    var rriId=(e.parameter.id||"").toString().trim();
+    var rriNewName=(e.parameter.newName||"").toString().trim();
+    var rriCfg=REF_TABS[rriType];
+    if (!rriCfg) return json({status:"error",result:"error",message:"অজানা refType: "+rriType});
+    if (!rriId || !rriNewName) return json({status:"error",result:"error",message:"id/newName missing"});
+    var rriSs=SpreadsheetApp.getActiveSpreadsheet(), rriSh=rriSs.getSheetByName(rriCfg.sheet);
+    if (!rriSh) return json({status:"error",result:"error",message:"Sheet not found: "+rriCfg.sheet});
+    var rriData=rriSh.getDataRange().getValues(), rriHdr=rriData[0];
+    var rriIdCol=-1, rriNameCol=-1;
+    for (var rc=0;rc<rriHdr.length;rc++){
+      var rcName=rriHdr[rc].toString().trim();
+      if (rcName===rriCfg.idCol) rriIdCol=rc;
+      if (rcName===rriCfg.nameCol) rriNameCol=rc;
+    }
+    if (rriIdCol<0||rriNameCol<0) return json({status:"error",result:"error",message:"id/name column not found in "+rriCfg.sheet});
+    var rriFound=false;
+    for (var rr=1;rr<rriData.length;rr++){
+      if ((rriData[rr][rriIdCol]||"").toString().trim()===rriId){
+        rriSh.getRange(rr+1,rriNameCol+1).setValue(rriNewName);
+        rriFound=true;
+        break; // ★ ঠিক ১টা রো — এখানেই cascade এড়ানো হচ্ছে
+      }
+    }
+    if (!rriFound) return json({status:"error",result:"error",message:"id পাওয়া যায়নি: "+rriId});
+    // Firebase mirror — শুধু এই ছোট reference node, প্রশ্নের কোনো node টাচ হয় না
+    var rriFbOk=true;
+    try {
+      var rriCfgProps=getProps();
+      if (rriCfgProps.FIREBASE_URL) {
+        var rriUrl=rriCfgProps.FIREBASE_URL+rriCfg.sheet+"/"+encodeURIComponent(rriId)+"/"+rriCfg.nameCol+".json"
+          +(rriCfgProps.FIREBASE_DB_SECRET?("?auth="+rriCfgProps.FIREBASE_DB_SECRET):"");
+        UrlFetchApp.fetch(rriUrl,{method:"put",contentType:"application/json",payload:JSON.stringify(rriNewName),muteHttpExceptions:true});
+      }
+    } catch(rriErr){ rriFbOk=false; }
+    return json({status:"success",result:"success",refType:rriType,id:rriId,newName:rriNewName,rowsChanged:1,firebaseSynced:rriFbOk});
+  }
+
+  // ── addReferenceItem — Subjects/Topics/Tags/Posts/Institutions-এ
+  // নতুন এন্ট্রি যোগ করে, id নিজে থেকে জেনারেট করে (parent-scoped prefix সহ)।
+  // Manager UI থেকে "নতুন যোগ করো" বাটনে ব্যবহার হয়। ──
+  if (action==="addReferenceItem") {
+    var ariType=(e.parameter.refType||"").toLowerCase();
+    var ariName=(e.parameter.name||"").toString().trim();
+    var ariParentId=(e.parameter.parentId||"").toString().trim(); // topics→subject_id
+    var ariSheet=(e.parameter.sheet||"").toString().trim(); // শুধু subjects-এর জন্য (Quiz/QBank/Study)
+    var ariCfg=REF_TABS[ariType];
+    if (!ariCfg) return json({status:"error",result:"error",message:"অজানা refType: "+ariType});
+    if (!ariName) return json({status:"error",result:"error",message:"name প্রয়োজন"});
+    if (ariType==="topics" && !ariParentId) return json({status:"error",result:"error",message:"parentId প্রয়োজন"});
+    if (ariType==="subjects" && ["Quiz","QBank","Study"].indexOf(ariSheet)<0) return json({status:"error",result:"error",message:"sheet প্রয়োজন (Quiz/QBank/Study)"});
+
+    var ariSs=SpreadsheetApp.getActiveSpreadsheet(), ariSh=ariSs.getSheetByName(ariCfg.sheet);
+    if (!ariSh) return json({status:"error",result:"error",message:"Sheet not found: "+ariCfg.sheet});
+    var ariData=ariSh.getDataRange().getValues(), ariHdr=ariData[0];
+    var ariIdCol=ariHdr.indexOf(ariCfg.idCol);
+
+    // ── নতুন id জেনারেট (parent-scoped prefix + পরের সিরিয়াল নাম্বার) ──
+    var ariNewId="";
+    if (ariType==="subjects") {
+      var ariPrefix=(ariSheet==="Quiz"?"QZ_S":ariSheet==="QBank"?"QB_S":"ST_S");
+      var ariMax=0;
+      for (var a1=1;a1<ariData.length;a1++){
+        var aId1=(ariData[a1][ariIdCol]||"").toString();
+        if (aId1.indexOf(ariPrefix)===0){ var n1=parseInt(aId1.substring(ariPrefix.length),10); if(!isNaN(n1)&&n1>ariMax) ariMax=n1; }
+      }
+      ariNewId=ariPrefix+(ariMax+1<10?"0"+(ariMax+1):(ariMax+1));
+    } else if (ariType==="topics") {
+      var ariPrefix2=ariParentId+"_T";
+      var ariMax2=0;
+      for (var a2=1;a2<ariData.length;a2++){
+        var aId2=(ariData[a2][ariIdCol]||"").toString();
+        if (aId2.indexOf(ariPrefix2)===0){ var n2=parseInt(aId2.substring(ariPrefix2.length),10); if(!isNaN(n2)&&n2>ariMax2) ariMax2=n2; }
+      }
+      ariNewId=ariPrefix2+(ariMax2+1<10?"0"+(ariMax2+1):(ariMax2+1));
+    } else { // tags/posts/institutions — flat prefix (TAG/P/I)
+      var ariPrefix4=(ariType==="tags"?"TAG":ariType==="posts"?"P":"I");
+      var ariMax4=0;
+      for (var a4=1;a4<ariData.length;a4++){
+        var aId4=(ariData[a4][ariIdCol]||"").toString();
+        if (aId4.indexOf(ariPrefix4)===0){ var n4=parseInt(aId4.substring(ariPrefix4.length),10); if(!isNaN(n4)&&n4>ariMax4) ariMax4=n4; }
+      }
+      ariNewId=ariPrefix4+(ariMax4+1<10?"0"+(ariMax4+1):(ariMax4+1));
+    }
+
+    // ── নতুন রো বসাও (হেডার অনুযায়ী কলাম মিলিয়ে) ──
+    var ariNewRow=new Array(ariHdr.length).fill("");
+    ariNewRow[ariIdCol]=ariNewId;
+    var ariNameCol=ariHdr.indexOf(ariCfg.nameCol);
+    if (ariNameCol>=0) ariNewRow[ariNameCol]=ariName;
+    if (ariType==="subjects"){ var ariSheetCol=ariHdr.indexOf("sheet"); if(ariSheetCol>=0) ariNewRow[ariSheetCol]=ariSheet; }
+    if (ariType==="topics"){ var ariSubCol=ariHdr.indexOf("subject_id"); if(ariSubCol>=0) ariNewRow[ariSubCol]=ariParentId; }
+    ariSh.appendRow(ariNewRow);
+
+    return json({status:"success",result:"success",refType:ariType,id:ariNewId,name:ariName});
+  }
+
+  // ── deleteReferenceItem — একটা রেফারেন্স-এন্ট্রি ডিলিট করে (id দিয়ে)।
+  // ⚠️ এটা শুধু reference টেবিলের রো মোছে — যেসব প্রশ্ন এই id ব্যবহার করছে
+  // তাদের subject_id/topic_id ফাঁকা/orphan হয়ে যাবে (প্রশ্ন মোছে না)। Admin
+  // UI-তে ডিলিটের আগে ব্যবহার-সংখ্যা দেখিয়ে সতর্ক করা উচিত। ──
+  if (action==="deleteReferenceItem") {
+    var driType=(e.parameter.refType||"").toLowerCase();
+    var driId=(e.parameter.id||"").toString().trim();
+    var driCfg=REF_TABS[driType];
+    if (!driCfg) return json({status:"error",result:"error",message:"অজানা refType: "+driType});
+    if (!driId) return json({status:"error",result:"error",message:"id প্রয়োজন"});
+    var driSs=SpreadsheetApp.getActiveSpreadsheet(), driSh=driSs.getSheetByName(driCfg.sheet);
+    if (!driSh) return json({status:"error",result:"error",message:"Sheet not found: "+driCfg.sheet});
+    var driData=driSh.getDataRange().getValues(), driHdr=driData[0];
+    var driIdCol=driHdr.indexOf(driCfg.idCol);
+    var driFound=false;
+    for (var d1=driData.length-1;d1>=1;d1--){
+      if ((driData[d1][driIdCol]||"").toString().trim()===driId){ driSh.deleteRow(d1+1); driFound=true; break; }
+    }
+    if (!driFound) return json({status:"error",result:"error",message:"id পাওয়া যায়নি: "+driId});
+    return json({status:"success",result:"success",refType:driType,id:driId,deleted:1});
+  }
+
+  // ── rebuildIndex — Quiz/QBank/Study প্রতিটাকে subject_id (তারপর topic_id)
+  // অনুযায়ী সাজায়, আর Topics ট্যাবে row_start/row_count বসিয়ে দেয়।
+  // getQuestionsPage এই index ব্যবহার করে O(limit) সময়ে পেজ ফেরত দেয়,
+  // পুরো শিট স্ক্যান করা লাগে না। ⚠️ এটা ম্যানুয়ালি/ট্রিগার দিয়ে চালাতে হবে
+  // (bulk add/rename এর পরে) — প্রতিটা ছোট এডিটে না, কারণ পুরো শিট re-sort
+  // করে বলে খরচ আছে (কিন্তু এটা batch অপারেশন, admin-triggered, ইউজার-facing
+  // read খরচের সাথে সম্পর্কহীন)। ──
+  if (action==="rebuildIndex") {
+    var ribResults={};
+    var ribSheets=[{name:"Quiz",prefix:"subject_id"},{name:"QBank",prefix:"subject_id"},{name:"Study",prefix:"subject_id"}];
+    var ribSs=SpreadsheetApp.getActiveSpreadsheet();
+    var ribTopicsSh=ribSs.getSheetByName("Topics");
+    var ribTopicsData=ribTopicsSh?ribTopicsSh.getDataRange().getValues():[];
+    var ribTopicsHdr=ribTopicsData[0]||[];
+    // Topics ট্যাবে row_start/row_count কলাম না থাকলে যোগ করো
+    var ribRsCol=ribTopicsHdr.indexOf("row_start"), ribRcCol=ribTopicsHdr.indexOf("row_count");
+    if (ribTopicsSh && ribRsCol<0) { ribTopicsSh.getRange(1,ribTopicsHdr.length+1).setValue("row_start"); ribRsCol=ribTopicsHdr.length; }
+    if (ribTopicsSh && ribRcCol<0) { ribTopicsSh.getRange(1,ribTopicsHdr.length+(ribRsCol===ribTopicsHdr.length?2:1)).setValue("row_count"); ribRcCol=ribRsCol+1; }
+
+    var ribIndexMap={}; // topic_id -> {start,count,sheet}
+    for (var rs=0;rs<ribSheets.length;rs++) {
+      var ribShName=ribSheets[rs].name;
+      var ribSh=ribSs.getSheetByName(ribShName);
+      if (!ribSh || ribSh.getLastRow()<2) continue;
+      var ribRange=ribSh.getDataRange();
+      var ribData=ribRange.getValues();
+      var ribHdr=ribData[0];
+      var ribSubCol=ribHdr.indexOf("subject_id"), ribTopCol=ribHdr.indexOf("topic_id");
+      if (ribSubCol<0) { ribResults[ribShName]="subject_id column missing — skip"; continue; }
+      // sort by subject_id, topic_id (header বাদে)
+      var ribSortCols=[{column:ribSubCol+1,ascending:true}];
+      if (ribTopCol>=0) ribSortCols.push({column:ribTopCol+1,ascending:true});
+      ribSh.getRange(2,1,ribSh.getLastRow()-1,ribSh.getLastColumn()).sort(ribSortCols);
+      // re-read after sort, build contiguous ranges per topic_id
+      var ribData2=ribSh.getDataRange().getValues();
+      var curTopic=null, curStart=2, curCount=0;
+      for (var i5=1;i5<ribData2.length;i5++){
+        var tId=ribTopCol>=0?(ribData2[i5][ribTopCol]||"").toString():"";
+        if (tId!==curTopic) {
+          if (curTopic) ribIndexMap[curTopic]={start:curStart,count:curCount,sheet:ribShName};
+          curTopic=tId; curStart=i5+1; curCount=0;
+        }
+        curCount++;
+      }
+      if (curTopic) ribIndexMap[curTopic]={start:curStart,count:curCount,sheet:ribShName};
+      ribResults[ribShName]="sorted, "+(ribData2.length-1)+" rows";
+    }
+    // Topics ট্যাবে row_start/row_count বসাও (topic_id দিয়ে ম্যাচ করে)
+    if (ribTopicsSh) {
+      var ribTIdCol=ribTopicsHdr.indexOf("topic_id");
+      for (var t2=1;t2<ribTopicsData.length;t2++){
+        var ribTid=(ribTopicsData[t2][ribTIdCol]||"").toString();
+        var ribEntry=ribIndexMap[ribTid];
+        if (ribEntry) {
+          ribTopicsSh.getRange(t2+1,ribRsCol+1).setValue(ribEntry.start);
+          ribTopicsSh.getRange(t2+1,ribRcCol+1).setValue(ribEntry.count);
+        }
+      }
+    }
+    return json({status:"success",result:"success",message:"Index rebuilt",details:ribResults});
+  }
+
+  // ── getQuestionsPage — subject_id(+topic_id) অনুযায়ী ঠিক ৫০টা (বা limit)
+  // প্রশ্ন ফেরত দেয়, পুরো শিট স্ক্যান না করে — rebuildIndex-এ বানানো
+  // row_start/row_count ব্যবহার করে সরাসরি সেই row-range পড়ে। ──
+  if (action==="getQuestionsPage") {
+    var gqpSheet=(e.parameter.sheet||"Quiz");
+    var gqpMap={quiz:"Quiz",qbank:"QBank",study:"Study"};
+    gqpSheet=gqpMap[gqpSheet.toLowerCase()]||gqpSheet;
+    var gqpTopicId=(e.parameter.topicId||"").toString().trim();
+    var gqpCursor=parseInt(e.parameter.cursor||"0",10)||0;
+    var gqpLimit=Math.min(parseInt(e.parameter.limit||"50",10)||50, 100); // safety cap
+    if (!gqpTopicId) return json({status:"error",result:"error",message:"topicId প্রয়োজন"});
+
+    var gqpSs=SpreadsheetApp.getActiveSpreadsheet();
+    var gqpTopicsSh=gqpSs.getSheetByName("Topics");
+    if (!gqpTopicsSh) return json({status:"error",result:"error",message:"Topics sheet নেই"});
+    var gqpTData=gqpTopicsSh.getDataRange().getValues(), gqpTHdr=gqpTData[0];
+    var gqpTIdCol=gqpTHdr.indexOf("topic_id"), gqpRsCol=gqpTHdr.indexOf("row_start"), gqpRcCol=gqpTHdr.indexOf("row_count");
+    if (gqpRsCol<0||gqpRcCol<0) return json({status:"error",result:"error",message:"Index নেই — আগে action=rebuildIndex চালাও"});
+    var gqpEntry=null;
+    for (var g1=1;g1<gqpTData.length;g1++){
+      if ((gqpTData[g1][gqpTIdCol]||"").toString()===gqpTopicId){ gqpEntry={start:gqpTData[g1][gqpRsCol],count:gqpTData[g1][gqpRcCol]}; break; }
+    }
+    if (!gqpEntry || !gqpEntry.start) return json({status:"success",result:"success",rows:[],hasMore:false,total:0});
+
+    var gqpSh=gqpSs.getSheetByName(gqpSheet);
+    if (!gqpSh) return json({status:"error",result:"error",message:"Sheet not found: "+gqpSheet});
+    var gqpHdr=gqpSh.getRange(1,1,1,gqpSh.getLastColumn()).getValues()[0];
+
+    var gqpReadStart=gqpEntry.start+gqpCursor;
+    var gqpRemaining=gqpEntry.count-gqpCursor;
+    if (gqpRemaining<=0) return json({status:"success",result:"success",rows:[],hasMore:false,total:gqpEntry.count});
+    var gqpReadCount=Math.min(gqpLimit, gqpRemaining);
+    var gqpVals=gqpSh.getRange(gqpReadStart,1,gqpReadCount,gqpSh.getLastColumn()).getValues();
+
+    var gqpRows=[];
+    for (var g2=0;g2<gqpVals.length;g2++){
+      var gqpRec={};
+      for (var g3=0;g3<gqpHdr.length;g3++){
+        var gqpKey=gqpHdr[g3].toString().trim();
+        if (!gqpKey) continue;
+        var gqpVal=gqpVals[g2][g3];
+        gqpRec[gqpKey]=(gqpVal instanceof Date)?Utilities.formatDate(gqpVal,"GMT+6","dd-MM-yyyy HH:mm:ss"):gqpVal;
+      }
+      gqpRows.push(gqpRec);
+    }
+    var gqpNextCursor=gqpCursor+gqpReadCount;
+    return json({status:"success",result:"success",rows:gqpRows,hasMore:gqpNextCursor<gqpEntry.count,nextCursor:gqpNextCursor,total:gqpEntry.count});
+  }
+
+  // ── getExamAppearances — একটা প্রশ্ন কোন কোন পদ/প্রতিষ্ঠান/সালে এসেছে
+  // (Exam_Appearances ট্যাব থেকে question_id দিয়ে খুঁজে) ──
+  if (action==="getExamAppearances") {
+    var geaQid=(e.parameter.questionId||"").toString().trim();
+    if (!geaQid) return json({status:"error",result:"error",message:"questionId প্রয়োজন"});
+    var geaSs=SpreadsheetApp.getActiveSpreadsheet(), geaSh=geaSs.getSheetByName("Exam_Appearances");
+    if (!geaSh || geaSh.getLastRow()<2) return json({status:"success",result:"success",appearances:[]});
+    var geaData=geaSh.getDataRange().getValues(), geaHdr=geaData[0];
+    var geaQCol=geaHdr.indexOf("question_id");
+    var geaOut=[];
+    for (var ge=1;ge<geaData.length;ge++){
+      if ((geaData[ge][geaQCol]||"").toString().trim()===geaQid){
+        var geaRec={};
+        for (var gj=0;gj<geaHdr.length;gj++) geaRec[geaHdr[gj].toString().trim()]=geaData[ge][gj];
+        geaOut.push(geaRec);
+      }
+    }
+    return json({status:"success",result:"success",appearances:geaOut});
+  }
+
+  // ── addExamAppearance — একটা প্রশ্নের নতুন appearance (post+institution+year)
+  // যোগ করে — মূল প্রশ্নের রো একটুও touch হয় না, শুধু এই ছোট ট্যাবে ১টা নতুন রো ──
+  if (action==="addExamAppearance") {
+    var aeaQid=(e.parameter.questionId||"").toString().trim();
+    var aeaPostId=(e.parameter.postId||"").toString().trim();
+    var aeaInstId=(e.parameter.institutionId||"").toString().trim();
+    var aeaYear=(e.parameter.year||"").toString().trim();
+    if (!aeaQid||!aeaPostId||!aeaInstId||!aeaYear) return json({status:"error",result:"error",message:"questionId/postId/institutionId/year সবগুলো প্রয়োজন"});
+    var aeaSs=SpreadsheetApp.getActiveSpreadsheet(), aeaSh=aeaSs.getSheetByName("Exam_Appearances");
+    if (!aeaSh) return json({status:"error",result:"error",message:"Exam_Appearances sheet নেই"});
+    var aeaNewId="EA-"+Utilities.getUuid().substring(0,8);
+    aeaSh.appendRow([aeaNewId, aeaQid, aeaPostId, aeaInstId, aeaYear]);
+    return json({status:"success",result:"success",appearanceId:aeaNewId});
+  }
+
+  // ── getAllExamAppearances — পুরো Exam_Appearances ট্যাব একবারে বাল্ক-ফেচ (Android
+  // User App-এর "পদ অনুযায়ী ব্রাউজ" ফ্লো-র জন্য — getExamAppearances-এর মতো একটা
+  // questionId দিয়ে scope করা না, পুরো টেবিল)। getReferenceData-এর মতোই ছোট টেবিল
+  // বলে বাল্ক-ফেচ নিরাপদ (Subjects/Topics/Tags/Posts/Institutions-এর সমান আকারের) ──
+  if (action==="getAllExamAppearances") {
+    var gaeaSs=SpreadsheetApp.getActiveSpreadsheet(), gaeaSh=gaeaSs.getSheetByName("Exam_Appearances");
+    if (!gaeaSh || gaeaSh.getLastRow()<2) return json({status:"success",result:"success",appearances:[]});
+    var gaeaData=gaeaSh.getDataRange().getValues(), gaeaHdr=gaeaData[0];
+    var gaeaIdCol=gaeaHdr.indexOf("appearance_id");
+    var gaeaOut=[];
+    for (var gae=1;gae<gaeaData.length;gae++){
+      if (gaeaIdCol>=0 && !gaeaData[gae][gaeaIdCol]) continue; // খালি রো স্কিপ
+      var gaeaRec={};
+      for (var gaj=0;gaj<gaeaHdr.length;gaj++) {
+        var gaeaKey=gaeaHdr[gaj].toString().trim();
+        if (!gaeaKey) continue;
+        gaeaRec[gaeaKey]=gaeaData[gae][gaj];
+      }
+      gaeaOut.push(gaeaRec);
+    }
+    return json({status:"success",result:"success",appearances:gaeaOut});
+  }
+
   // ── deleteByIds ── ★ delete questions by comma-separated IDs
   if (action==="deleteByIds") {
     var shName2=e.parameter.sheet||"QBank";
@@ -569,8 +938,109 @@ function doGet(e) {
       var rowId=idIdx>=0?d4[i4][idIdx].toString():"";
       if(ids.indexOf(rowId)>=0){sh4.deleteRow(i4+1);deleted++;}
     }
+    // ── প্রশ্ন ডিলিট হলে সংশ্লিষ্ট Exam_Appearances রো-ও ক্লিন-আপ করা হয়,
+    // নাহলে orphan appearance রো থেকে যেত (এমন question_id-কে পয়েন্ট করে
+    // যেটা আর সেভ নেই) ──
+    var eaCleanupSh=ss4.getSheetByName("Exam_Appearances");
+    var eaDeleted=0;
+    if (eaCleanupSh && eaCleanupSh.getLastRow()>=2) {
+      var eaData=eaCleanupSh.getDataRange().getValues(), eaHdr=eaData[0];
+      var eaQCol=eaHdr.indexOf("question_id");
+      if (eaQCol>=0) {
+        for (var ei=eaData.length-1;ei>=1;ei--){
+          var eaQid=(eaData[ei][eaQCol]||"").toString();
+          if (ids.indexOf(eaQid)>=0) { eaCleanupSh.deleteRow(ei+1); eaDeleted++; }
+        }
+      }
+    }
     // Firebase already updated directly from app - DO NOT sync (would overwrite with array)
-    return json({result:"success",deleted:deleted,sheet:shName2});
+    return json({result:"success",deleted:deleted,sheet:shName2,examAppearancesDeleted:eaDeleted});
+  }
+
+  // ── deleteByReferenceId — একটা পুরো subject_id/topic_id-এর সব প্রশ্ন
+  // একসাথে ডিলিট করে। rebuildIndex-এ বানানো row_start/row_count ব্যবহার করে একটা
+  // মাত্র contiguous range delete করে (deleteByIds-এর মতো এক-এক করে হাজার হাজার রো
+  // ডিলিট করলে বড় Subject-এ (৭০০০+ প্রশ্ন) ৬-মিনিট execution limit-এ ধাক্কা লাগতে
+  // পারত — এটা তার থেকে অনেক দ্রুত)। ডিলিটের পর Topics ইনডেক্স নিজে থেকেই আপডেট
+  // (shift/remove) করে দেওয়া হয়, আলাদা করে rebuildIndex চালাতে হয় না। ──
+  if (action==="deleteByReferenceId") {
+    var driiType=(e.parameter.refType||"").toLowerCase(); // "subject" | "topic"
+    var driiId=(e.parameter.id||"").toString().trim();
+    if (!driiId) return json({status:"error",result:"error",message:"id প্রয়োজন"});
+
+    var driiSs=SpreadsheetApp.getActiveSpreadsheet();
+    var driiTopicsSh=driiSs.getSheetByName("Topics");
+    if (!driiTopicsSh) return json({status:"error",result:"error",message:"Topics sheet নেই"});
+    var driiTData=driiTopicsSh.getDataRange().getValues(), driiTHdr=driiTData[0];
+    var driiTIdCol=driiTHdr.indexOf("topic_id"), driiSubCol=driiTHdr.indexOf("subject_id");
+    var driiRsCol=driiTHdr.indexOf("row_start"), driiRcCol=driiTHdr.indexOf("row_count");
+    if (driiRsCol<0||driiRcCol<0) return json({status:"error",result:"error",message:"Index নেই — আগে action=rebuildIndex চালাও"});
+
+    // ── কোন কোন topic-row (Topics ট্যাবে) এই delete-এ প্রভাবিত হবে, আর
+    // Quiz/QBank/Study-তে কোন range মুছতে হবে সেটা বের করা ──
+    var driiAffectedTopicRows=[]; // Topics ট্যাবের row index (0-based, data array-এ)
+    if (driiType==="topic") {
+      for (var dt=1;dt<driiTData.length;dt++){ if((driiTData[dt][driiTIdCol]||"").toString()===driiId){ driiAffectedTopicRows.push(dt); break; } }
+    } else if (driiType==="subject") {
+      for (var ds=1;ds<driiTData.length;ds++){ if((driiTData[ds][driiSubCol]||"").toString()===driiId) driiAffectedTopicRows.push(ds); }
+    } else {
+      return json({status:"error",result:"error",message:"অজানা refType: "+driiType+" (subject/topic সাপোর্ট করে)"});
+    }
+    if (!driiAffectedTopicRows.length) return json({status:"success",result:"success",deleted:0,message:"কিছু পাওয়া যায়নি"});
+
+    var driiStarts=driiAffectedTopicRows.map(function(i){return driiTData[i][driiRsCol];}).filter(Boolean);
+    var driiEnds=driiAffectedTopicRows.map(function(i){return driiTData[i][driiRsCol]+driiTData[i][driiRcCol]-1;}).filter(function(v){return v;});
+    if (!driiStarts.length) return json({status:"success",result:"success",deleted:0,message:"এই এন্ট্রিতে কোনো প্রশ্ন নেই"});
+    var driiRangeStart=Math.min.apply(null,driiStarts);
+    var driiRangeEnd=Math.max.apply(null,driiEnds);
+    var driiRangeCount=driiRangeEnd-driiRangeStart+1;
+
+    // sheet নাম বের করা (subject_id/topic_id-এর প্রিফিক্স থেকে)
+    var driiSheetName=driiId.indexOf("QZ")===0?"Quiz":driiId.indexOf("QB")===0?"QBank":driiId.indexOf("ST")===0?"Study":"";
+    var driiSh=driiSs.getSheetByName(driiSheetName);
+    if (!driiSh) return json({status:"error",result:"error",message:"Sheet not found for id: "+driiId});
+
+    // ── ডিলিট করার আগে ওই রেঞ্জের সব question id ধরে রাখা (Exam_Appearances cleanup-এর জন্য) ──
+    var driiHdr=driiSh.getRange(1,1,1,driiSh.getLastColumn()).getValues()[0];
+    var driiIdCol=driiHdr.indexOf("id");
+    var driiIdsInRange=driiSh.getRange(driiRangeStart,driiIdCol+1,driiRangeCount,1).getValues().map(function(r){return (r[0]||"").toString();});
+
+    driiSh.deleteRows(driiRangeStart,driiRangeCount);
+
+    // ── Exam_Appearances cleanup ──
+    var driiEaSh=driiSs.getSheetByName("Exam_Appearances");
+    var driiEaDeleted=0;
+    if (driiEaSh && driiEaSh.getLastRow()>=2) {
+      var driiEaData=driiEaSh.getDataRange().getValues(), driiEaHdr=driiEaData[0];
+      var driiEaQCol=driiEaHdr.indexOf("question_id");
+      if (driiEaQCol>=0) {
+        for (var de=driiEaData.length-1;de>=1;de--){
+          if (driiIdsInRange.indexOf((driiEaData[de][driiEaQCol]||"").toString())>=0){ driiEaSh.deleteRow(de+1); driiEaDeleted++; }
+        }
+      }
+    }
+
+    // ── Topics ইনডেক্স আপডেট: মুছে-যাওয়া topic-row(গুলো) বাদ, বাকিদের row_start শিফট ──
+    var driiRemoveTopicIds={}; driiAffectedTopicRows.forEach(function(i){ driiRemoveTopicIds[driiTData[i][driiTIdCol]]=true; });
+    for (var dr=driiTData.length-1;dr>=1;dr--){
+      var dTid=(driiTData[dr][driiTIdCol]||"").toString();
+      if (driiRemoveTopicIds[dTid]) { driiTopicsSh.deleteRow(dr+1); continue; }
+      var dStart=driiTData[dr][driiRsCol];
+      if (dStart && dStart>driiRangeEnd) driiTopicsSh.getRange(dr+1,driiRsCol+1).setValue(dStart-driiRangeCount);
+    }
+    // subject-level delete হলে Subjects ট্যাব থেকেও ওই subject-row বাদ
+    if (driiType==="subject") {
+      var driiSubjSh=driiSs.getSheetByName("Subjects");
+      if (driiSubjSh) {
+        var driiSjData=driiSubjSh.getDataRange().getValues(), driiSjHdr=driiSjData[0];
+        var driiSjIdCol=driiSjHdr.indexOf("subject_id");
+        for (var sj=driiSjData.length-1;sj>=1;sj--){
+          if ((driiSjData[sj][driiSjIdCol]||"").toString()===driiId) { driiSubjSh.deleteRow(sj+1); break; }
+        }
+      }
+    }
+
+    return json({status:"success",result:"success",deleted:driiRangeCount,examAppearancesDeleted:driiEaDeleted,sheet:driiSheetName});
   }
 
   // ── adminNotify ──
@@ -994,13 +1464,11 @@ function doPost(e) {
       var bRows=params.rows||[];
       if(!bRows.length) return json({result:"success",added:0,skipped:0});
 
-      // ⚡ ফিক্স: আগে প্রতিটা রো-এর জন্য isDuplicate() পুরো শীট আবার getDataRange() দিয়ে
-      //    পড়তো, আর appendRow() আলাদাভাবে কল হতো — কয়েকশো প্রশ্নে এটা শয়ে শয়ে ফুল-শীট রিড
-      //    করতো বলে সেভ অস্বাভাবিক ধীর হয়ে যাচ্ছিলো (কখনো ৪৭৯টার জন্য মিনিটের পর মিনিট)।
-      //    এখন শীট একবারই পড়া হয়, ডুপ্লিকেট চেক in-memory Set দিয়ে হয়, আর সব নতুন রো
-      //    শেষে একটাই setValues() কলে ব্যাচ-লেখা হয়।
+      // ⚡ ফিক্স (আগের পারফরম্যান্স-ফিক্স অক্ষত): শীট একবারই পড়া হয়, ডুপ্লিকেট চেক
+      //    in-memory Set দিয়ে হয়, সব নতুন রো শেষে একটাই setValues() কলে ব্যাচ-লেখা হয়।
       var bData=bSh.getDataRange().getValues();
-      var bHdr=bData.length?bData[0].map(function(h){return h.toString().toLowerCase().trim();}):[];
+      var bRawHdr=bData.length?bData[0]:[]; // আসল header, order অক্ষত রাখা হলো row-array বানানোর জন্য
+      var bHdr=bRawHdr.map(function(h){return h.toString().toLowerCase().trim();});
       var bQIdx=bHdr.indexOf("question"), bSubIdx=bHdr.indexOf("subject"), bStIdx=bHdr.indexOf("sub_topic");
       if(bStIdx===-1)bStIdx=bHdr.indexOf("subtopic");
       var bNorm=function(s){return (s||'').toString().toLowerCase().replace(/\s+/g,' ').trim().substring(0,100);};
@@ -1012,16 +1480,64 @@ function doPost(e) {
         }
       }
 
+      // ── FIX (গুরুত্বপূর্ণ): আগে এখানে row-array পজিশন হার্ডকোড করা হতো (পুরনো
+      // কলাম-অর্ডার ধরে নিয়ে) — Phase 2 migration-এ id কলাম সরে যাওয়ায় ও নতুন
+      // কলাম (subject_id/topic_id/group_id/sub_index/AudienceTags_ids) যোগ হওয়ায়
+      // এই হার্ডকোডেড পজিশন এখন আর সঠিক না — ভুল কলামে ডেটা লেখা হয়ে যেত (silent
+      // data corruption)। এখন header-name দিয়ে match করে row array বানানো হয়,
+      // sheet-এ কলাম যেই অর্ডারেই থাকুক না কেন সঠিক জায়গায় বসবে। ──
+      var bKeyNorm=function(s){return (s||"").toString().toLowerCase().replace(/[^a-z0-9]/g,"");};
+      var bColIndexByNormName={};
+      for(var bh=0; bh<bRawHdr.length; bh++){ bColIndexByNormName[bKeyNorm(bRawHdr[bh])]=bh; }
+      function buildRowArray(fieldMap){
+        var arr=new Array(bRawHdr.length).fill("");
+        for(var fkey in fieldMap){
+          var ci=bColIndexByNormName[bKeyNorm(fkey)];
+          if(ci!==undefined) arr[ci]=fieldMap[fkey];
+        }
+        return arr;
+      }
+
       var bLock=LockService.getScriptLock(); bLock.waitLock(15000);
       var bAdded=0, bSkipped=0;
-      try{
-        var bProp=PropertiesService.getScriptProperties(), bIdKey="MAX_ID_"+bTab.toUpperCase();
-        var bCurId=parseInt(bProp.getProperty(bIdKey)||"0");
-        if(bCurId<1000 && bSh.getLastRow()>1){
-          var bIdCol=bSh.getRange(2,1,bSh.getLastRow()-1,1).getValues().map(function(r){return parseInt(r[0])||0;});
-          bCurId=Math.max.apply(null,[1000].concat(bIdCol));
+      // ── QBank + পদ/প্রতিষ্ঠান/সালের অন্তত ১টা দেওয়া থাকলে (BulkUploaderPage থেকে
+      // params.examAppearance অবজেক্ট আসে) — প্রতিটা নতুন QBank প্রশ্নের bId অ্যাসাইন
+      // হওয়ার সাথে সাথেই Exam_Appearances-এ একটা করে রো জমা করা হয়, লুপ শেষে একবারে
+      // ব্যাচ-write (bNewRows-এর মতোই একই lock-এর ভেতরে, race condition এড়াতে)। ──
+      var bAppearanceRows=[];
+      var bAppearanceProp, bAppearanceCurId=0;
+      if(params.examAppearance && bTab==="QBank"){
+        bAppearanceProp=PropertiesService.getScriptProperties();
+        bAppearanceCurId=parseInt(bAppearanceProp.getProperty("MAX_ID_EXAM_APPEARANCES")||"0");
+        if(bAppearanceCurId<1){
+          var apSh0=ss.getSheetByName("Exam_Appearances");
+          if(apSh0 && apSh0.getLastRow()>1){
+            var apIdCol0=apSh0.getRange(2,1,apSh0.getLastRow()-1,1).getValues().map(function(r){
+              var m=(r[0]||"").toString().match(/(\d+)$/); return m?parseInt(m[1],10):0;
+            });
+            bAppearanceCurId=Math.max.apply(null,[0].concat(apIdCol0));
+          }
         }
-        if(bCurId<1000)bCurId=1000;
+      }
+      try{
+        // ── ID generation — migration-এর সাথে সামঞ্জস্যপূর্ণ prefix স্কিম
+        // (QZ-00001 / QB-00001 / ST-00001), পুরনো plain-numeric MAX_ID_* স্কিমের
+        // বদলে — যাতে নতুন ও পুরনো প্রশ্নের id একই ফরম্যাটে থাকে। ──
+        var bPrefix=(bTab==="Quiz"?"QZ-":bTab==="QBank"?"QB-":bTab==="Study"?"ST-":"");
+        var bMaxNum=0;
+        if(bPrefix && bData.length>1 && bQIdx!==-1){
+          var bIdColIdx=bColIndexByNormName["id"];
+          if(bIdColIdx!==undefined){
+            for(var bmr=1;bmr<bData.length;bmr++){
+              var bmv=(bData[bmr][bIdColIdx]||"").toString();
+              if(bmv.indexOf(bPrefix)===0){ var bmn=parseInt(bmv.substring(bPrefix.length),10); if(!isNaN(bmn)&&bmn>bMaxNum) bMaxNum=bmn; }
+            }
+          }
+        }
+        var bCurId=bMaxNum;
+        // Typing-এর মতো prefix-বিহীন শিটের জন্য পুরনো numeric স্কিম fallback হিসেবে রাখা হলো
+        var bProp=PropertiesService.getScriptProperties(), bIdKey="MAX_ID_"+bTab.toUpperCase();
+        var bLegacyCurId=parseInt(bProp.getProperty(bIdKey)||"1000");
 
         var bNewRows=[];
         var bNowMs=Date.now();
@@ -1030,30 +1546,65 @@ function doPost(e) {
           try{
             var bKey=bNorm(row.question)+"|"+bNorm(row.sub_topic)+"|"+bNorm(row.subject);
             if(row.question && bExisting[bKey]){ bSkipped++; continue; }
-            var bId=row.editId||(bCurId+1);
-            var bLine=[];
-            if(bTab==="Quiz")      bLine=[bId,row.question,row.opt1,row.opt2,row.opt3,row.opt4,row.correct,row.subject,row.sub_topic,row.explanation,row.technique||"",row.prevExam||"",row.qType||"MCQ",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",bNowMs,"NF"];
-            else if(bTab==="QBank")bLine=[bId,row.question,row.opt1,row.opt2,row.opt3,row.opt4,row.correct,row.subject,row.topic||"",row.sub_topic,row.explanation,row.technique||"",row.qType||"MCQ",row.mainQpaper||"",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",bNowMs,"NF"];
-            else if(bTab==="Study")bLine=[bId,row.subject,row.sub_topic,row.question||"",row.correct||"",row.explanation,row.technique||"",row.timestamp||new Date().toLocaleString(),row.audienceTags||"",row.visualUrl||"",bNowMs,"NF"];
-            // ── Typing bulk insert-ও একই সরল schema অনুসরণ করে: id, language, content, updatedAt, NF ──
-            else if(bTab==="Typing")bLine=[bId,row.language||"",row.content||"",bNowMs,"NF"];
-            if(bLine.length===0){ bSkipped++; continue; }
-            if(!row.editId)bCurId++;
+
+            var bId;
+            if(row.editId){ bId=row.editId; }
+            else if(bPrefix){ bCurId++; bId=bPrefix+(bCurId<10000?("0000"+bCurId).slice(-5):bCurId); }
+            else { bLegacyCurId++; bId=bLegacyCurId; }
+
+            var bFieldMap={
+              "id":bId, "question":row.question||"",
+              "option1":row.opt1||"", "option2":row.opt2||"", "option3":row.opt3||"",
+              "option4":row.opt4||"", "correct":row.correct||"",
+              "subject":row.subject||"", "sub_topic":row.sub_topic||"", "topic":row.topic||"",
+              "explanation":row.explanation||"", "technique":row.technique||"",
+              "previousexam":row.prevExam||"", "questiontype":row.qType||"MCQ",
+              "timestamp":row.timestamp||new Date().toLocaleString(),
+              "audiencetags":row.audienceTags||"", "questionpaper":row.mainQpaper||"",
+              "visualurl":row.visualUrl||"", "updatedat":bNowMs, "notfirebase":"NF",
+              "language":row.language||"", "content":row.content||"",
+              // ── নতুন schema fields — client (BulkUploaderPage) থেকে দিলে বসবে,
+              // না দিলে ফাঁকা থাকবে (পরে Admin App-এর Reference ট্যাব দিয়ে ঠিক করা যাবে) ──
+              "subjectid":row.subject_id||"", "topicid":row.topic_id||"",
+              "groupid":row.group_id||"",
+              "subindex":row.sub_index||"", "audiencetagsids":row.audienceTagsIds||""
+            };
+            var bLine=buildRowArray(bFieldMap);
+            if(bTab==="Typing"){ /* Typing-এর সরল schema — শুধু id/language/content/updatedAt/NF দরকার, বাকি field map-এ থাকলেও ক্ষতি নেই কারণ কলাম না থাকলে ignore হয় */ }
+
+            if(!row.editId){ /* id বসানো হয়ে গেছে উপরেই */ }
             bNewRows.push(bLine);
             bExisting[bKey]=true; // একই ব্যাচে দুইবার একই প্রশ্ন থাকলে দ্বিতীয়টাও বাদ পড়বে
             bAdded++;
+            if(params.examAppearance && bTab==="QBank"){
+              bAppearanceCurId++;
+              bAppearanceRows.push([
+                "EA"+bAppearanceCurId, // appearance_id
+                bId,                   // question_id — এইমাত্র assign হওয়া id
+                params.examAppearance.postId||"",
+                params.examAppearance.institutionId||"",
+                params.examAppearance.year||""
+              ]);
+            }
           }catch(rowErr){ bSkipped++; }
         }
         if(bNewRows.length){
-          bSh.getRange(bSh.getLastRow()+1,1,bNewRows.length,bNewRows[0].length).setValues(bNewRows);
+          bSh.getRange(bSh.getLastRow()+1,1,bNewRows.length,bRawHdr.length).setValues(bNewRows);
         }
-        bProp.setProperty(bIdKey,bCurId.toString());
+        if(bAppearanceRows.length){
+          var apSheet=ss.getSheetByName("Exam_Appearances");
+          if(apSheet){
+            apSheet.getRange(apSheet.getLastRow()+1,1,bAppearanceRows.length,5).setValues(bAppearanceRows);
+            bAppearanceProp.setProperty("MAX_ID_EXAM_APPEARANCES",bAppearanceCurId.toString());
+          }
+        }
+        if(!bPrefix) bProp.setProperty(bIdKey,bLegacyCurId.toString());
       } finally { bLock.releaseLock(); }
 
       var bShouldSync = (params.sync!==undefined) ? !!params.sync : true; // পুরনো কলার (sync ফ্ল্যাগ ছাড়া) থাকলে আগের মতোই প্রতিবার সিঙ্ক হবে, নতুন ফ্রন্টএন্ড শুধু শেষ চাংকেই sync:true পাঠায়
       var bSyncOk = true;
       if(bShouldSync) bSyncOk = syncToFirebase(bTab,bTab);
-      return json({result:"success",added:bAdded,skipped:bSkipped,firebaseSynced:bSyncOk});
+      return json({result:"success",added:bAdded,skipped:bSkipped,firebaseSynced:bSyncOk,examAppearancesAdded:bAppearanceRows.length});
     }
 
     // ── নতুন User signup ──
@@ -1096,8 +1647,15 @@ function doPost(e) {
     if(params.question&&isDuplicate(mSh,params.subject||'',params.question,params.sub_topic||''))
       return json({result:"duplicate",message:"এই sub-topic-এ প্রশ্নটি আগে থেকেই আছে"});
 
+    // ── FIX: আগে এখানে id কলাম হার্ডকোড করে column-0 (প্রথম কলাম) ধরে নেওয়া
+    // হতো (mData[ei][0])। Phase 4-এ id কলাম রিপ্লেস/রিপজিশন হওয়ার সম্ভাবনা
+    // আছে বলে এখন header name ("id") দিয়ে কলাম খুঁজে নেওয়া হচ্ছে — কলাম
+    // যেখানেই থাকুক না কেন এটা সঠিকভাবে কাজ করবে। ──
     var eId=params.editId, rIdx=-1, mData=mSh.getDataRange().getValues(), finalId=eId;
-    if(eId){for(var ei=1;ei<mData.length;ei++){if(mData[ei][0].toString()===eId.toString()){rIdx=ei+1;break;}}}
+    var mHdr=mData[0]||[];
+    var mIdCol=0;
+    for (var mh=0; mh<mHdr.length; mh++) { if (mHdr[mh].toString().trim().toLowerCase()==="id") { mIdCol=mh; break; } }
+    if(eId){for(var ei=1;ei<mData.length;ei++){if(mData[ei][mIdCol].toString()===eId.toString()){rIdx=ei+1;break;}}}
     if(!eId&&["Quiz","Study","QBank","Typing"].indexOf(tTab)>-1)finalId=getNextId(tTab);
 
     var rData=[];
