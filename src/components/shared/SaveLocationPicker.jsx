@@ -1,4 +1,5 @@
-/* ── UI: Save Location টগল (Google Sheet | Firebase) — সব সেভ-ফিচারে reuse হয় ── */
+/* ── UI: Save Location — এখন শুধু Google Sheet (NO-FIREBASE POLICY: Quiz/QBank/Study/
+   Typing আর Firebase-এ যায় না, তাই টগলের দরকার নেই, শুধু GAS Secret Key ইনপুট দরকার) ── */
 import React, { useState } from "react";
 import { C } from "../../core/config.js";
 
@@ -10,11 +11,10 @@ function SaveLocationPicker({value,onChange,gasSecret,onGasSecretChange,compact=
   return(
     <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:12,marginBottom:10}}>
       <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:8}}>💾 Save Location</div>
-      <div style={{display:"flex",gap:8,marginBottom:value==="sheet"?8:0}}>
-        <button type="button" className="btn" style={{flex:1,justifyContent:"center",background:value==="sheet"?C.green:"transparent",color:value==="sheet"?"#04180a":C.text,border:`1px solid ${C.border}`}} onClick={()=>onChange("sheet")}>📄 Google Sheet</button>
-        <button type="button" className="btn" style={{flex:1,justifyContent:"center",background:value==="firebase"?C.accent:"transparent",color:value==="firebase"?"#fff":C.text,border:`1px solid ${C.border}`}} onClick={()=>onChange("firebase")}>🔥 Firebase</button>
+      <div style={{display:"flex",gap:8,marginBottom:8}}>
+        <div style={{flex:1,textAlign:"center",padding:"8px 0",borderRadius:6,background:C.green,color:"#04180a",fontWeight:600}}>📄 Google Sheet</div>
       </div>
-      {value==="sheet" && (
+      {
         showKey ? (
           <div className="fld" style={{marginBottom:0}}>
             <label style={{display:"flex",justifyContent:"space-between"}}>
@@ -26,7 +26,7 @@ function SaveLocationPicker({value,onChange,gasSecret,onGasSecretChange,compact=
         ) : (
           <div style={{fontSize:11,color:C.accent,cursor:"pointer",fontWeight:600}} onClick={()=>setShowKey(true)}>🔑 GAS Secret Key পরিবর্তন করো</div>
         )
-      )}
+      }
     </div>
   );
 }
