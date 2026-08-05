@@ -2,8 +2,8 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../core/config.js";
 import { useFB, invalidate } from "../core/dataCache.js";
-import { fbPatch } from "../core/firebase.js";
-import { toArr } from "../core/utils.js";
+import { syncFieldsToSheet } from "../core/sheetSave.js";
+import { loadSharedGasSecret, toArr } from "../core/utils.js";
 
 function BulkQTypeTab({push,tick}){
   const[sheet,setSheet]=useState("Study");
@@ -51,6 +51,8 @@ function BulkQTypeTab({push,tick}){
   const runUpdate=async()=>{
     const targets=filtered.filter(q=>selected.has(q._fbKey||q.id||q.ID));
     if(!targets.length){push("warn","⚠️ কোনো প্রশ্ন সিলেক্ট করা হয়নি","");return;}
+    const gasSecret=loadSharedGasSecret();
+    if(!gasSecret){push("error","ব্যর্থ","GAS Secret Key দাও");return;}
     setRunning(true);
     setProgress({done:0,total:targets.length});
     let done=0;
@@ -58,12 +60,12 @@ function BulkQTypeTab({push,tick}){
     for(let i=0;i<targets.length;i+=BATCH){
       const batch=targets.slice(i,i+BATCH);
       await Promise.all(batch.map(async q=>{
-        const fkey=q._fbKey;
-        if(!fkey)return;
+        const qid=(q.ID||q.id||q._fbKey||"").toString();
+        if(!qid)return;
         try{
-          await fbPatch(`${sheet}/${fkey}`,{"Question Type":targetType});
-          done++;
-          setProgress({done,total:targets.length});
+          const res=await syncFieldsToSheet({sheet,id:qid,fields:{qtype:targetType},gasSecret});
+          if(res.ok){ done++; setProgress({done,total:targets.length}); }
+          else push("error","ব্যর্থ",`#${qid}: ${res.failed.join(", ")}`);
         }catch(e){push("error","ব্যর্থ",String(e?.message||e));}
       }));
     }
