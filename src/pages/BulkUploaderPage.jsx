@@ -2,14 +2,13 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { C } from "../core/config.js";
 import { invalidate } from "../core/dataCache.js";
-import { fbPush, fbSet } from "../core/firebase.js";
 import { nowTs } from "../core/utils.js";
 import { Bar } from "../components/shared/MiniComponents.jsx";
 import {
   getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow,
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
 } from "../core/uploaderUtils.js";
-import { saveRowsToSheet, fetchReferenceData, addExamAppearance } from "../core/sheetSave.js";
+import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
 import { resolveOrCreateReference } from "../core/referenceHelpers.js";
 import { archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
@@ -226,70 +225,27 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     // দেখানোর জন্য), sub_index ক্রমিক (1,2,3...) ──
     const batchGroupId=groupMode?("GRP_"+Date.now().toString(36).toUpperCase()):"";
 
-    if(saveLoc==="sheet"){
-      const rows=entries.map((item,idx)=>buildSheetRow({
-        item, subject:subjectName,
-        subtopic:topicName, // legacy sub_topic কলাম
-        qtype:eff, audienceTags:tagNames,
-        subjectId, topicId, tagIds,
-        groupId:batchGroupId, subIndex:batchGroupId?(idx+1):null,
-      }));
-      // ⚠️ examAppearance পাঠানো হচ্ছে GAS-কে — GAS-সাইডে "bulk_save_rows" handler-এ
-      // এখনো সাপোর্ট নাও থাকতে পারে (এই রিপোর ভেতরের code_updated.gs পুরনো/stale)।
-      // GAS যদি এই ফিল্ড না চেনে, প্রশ্নগুলো ঠিকই সেভ হবে কিন্তু appearance যোগ হবে না —
-      // দরকারি GAS প্যাচ আলাদা ফাইলে (gas-patches/2026-08-01-qbank-uploader-exam-appearance.md) দেওয়া আছে।
-      const result=await saveRowsToSheet({rows,targetTab:mode,gasSecret,push,examAppearance});
-      entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
-      setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
-      setRunning(false);setDone(true);
-      if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার",saveLoc,mode,result.failedRows);
-      if(result.added>0)push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${mode} — ${subjectName}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:"")+(batchGroupId?` · group: ${batchGroupId}`:""));
-      if(examAppearance && !result.examAppearancesAdded) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","GAS-এ bulk_save_rows-এ এখনো examAppearance সাপোর্ট নেই — gas-patches ফোল্ডার দেখো, অথবা 🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
-      if(result.examAppearancesAdded)push("success",`🧾 ${result.examAppearancesAdded}টা Exam Appearance-ও যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
-      if(result.failedRows.length)push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
-      if((result.added>0||result.skipped>0)&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
-      return;
-    }
-
-    let sent=0,failed=0,appearancesSent=0; const failedRecs=[];
-    const BATCH=8;
-    for(let i=0;i<entries.length;i+=BATCH){
-      if(stopRef.current){addLog("⛔ বন্ধ করা হয়েছে","err");break;}
-      const batch=entries.slice(i,i+BATCH);
-      await Promise.all(batch.map(async(item)=>{
-        const ts=nowTs();
-        const id=Date.now()+Math.floor(Math.random()*9999);
-        const rec=buildRec(item,ts,id);
-        try{
-          const res=await fbPush(mode,rec);
-          /* Set id field to the firebase push key — same as entry app */
-          if(res?.name){
-            await fbSet(`${mode}/${res.name}/id`,res.name);
-            // ── examAppearance দেওয়া থাকলে, এই প্রশ্নের আসল id (fb push key, শুধু
-            // local Date.now() না) দিয়েই Exam_Appearances-এ appearance যোগ হবে ──
-            if(examAppearance){
-              const aRes=await addExamAppearance({questionId:res.name,...examAppearance,gasSecret,push});
-              if(aRes.ok) appearancesSent++;
-            }
-          }
-          // Sheet sync → GAS standalone handles this
-          invalidate(mode);
-          sent++;
-          addLog(`✔ ${(item.q||"").substring(0,55)}...`,"ok");
-        }catch(e){
-          failed++;
-          failedRecs.push(rec);
-          addLog(`✗ ব্যর্থ: ${(item.q||"").substring(0,45)}... [${e.message}]`,"err");
-        }
-        setProgress(p=>({...p,done:p.done+1,sent,failed}));
-      }));
-    }
+    // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
+    // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে। GAS-এর
+    // bulk_save_rows handler examAppearance ফিল্ড এখন সাপোর্ট করে (gas-patches
+    // ফোল্ডারের প্যাচটা এখন কোর কোডেই বসানো আছে)।
+    const rows=entries.map((item,idx)=>buildSheetRow({
+      item, subject:subjectName,
+      subtopic:topicName, // legacy sub_topic কলাম
+      qtype:eff, audienceTags:tagNames,
+      subjectId, topicId, tagIds,
+      groupId:batchGroupId, subIndex:batchGroupId?(idx+1):null,
+    }));
+    const result=await saveRowsToSheet({rows,targetTab:mode,gasSecret,push,examAppearance});
+    entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
+    setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setRunning(false);setDone(true);
-    if(failedRecs.length) pushFailedItems("বাল্ক আপলোডার",saveLoc,mode,failedRecs);
-    if(sent>0)push("success",`✅ ${sent}টি সফলভাবে যোগ হয়েছে!`,`${mode} — ${subjectName}`);
-    if(appearancesSent>0)push("success",`🧾 ${appearancesSent}টা Exam Appearance-ও যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
-    if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
-    if(sent>0&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
+    if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার","sheet",mode,result.failedRows);
+    if(result.added>0)push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${mode} — ${subjectName}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:"")+(batchGroupId?` · group: ${batchGroupId}`:""));
+    if(examAppearance && !result.examAppearancesAdded) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
+    if(result.examAppearancesAdded)push("success",`🧾 ${result.examAppearancesAdded}টা Exam Appearance-ও যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
+    if(result.failedRows.length)push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    if((result.added>0||result.skipped>0)&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
   };
 
   const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setTopicId("");setPostSel({id:"",name:""});setInstSel({id:"",name:""});setExamYear("");archiveIdRef.current=null;};
