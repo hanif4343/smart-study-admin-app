@@ -3,16 +3,14 @@
    সব রো-তে Firebase PATCH যেত (O(N))। এখন AudienceTags প্রশ্নের রো-তে literal নাম না,
    Tag ID (যেমন "TAG01") হিসেবে থাকে — তাই rename মানে শুধু Tags রেফারেন্স-টেবিলের
    ১টা রো বদলানো, প্রশ্নের কোনো রো টাচ হয় না।
-   ⚠️ "Bulk Add Audience Tag" অংশ (নিচে) এখনো Firebase (useFB) থেকে Subject/Topic লিস্ট
-   পড়ে — Phase 4 (Firebase content sync) deferred থাকায় এই অংশ আপাতত stale/অকার্যকর
-   হতে পারে যদি Firebase-এ নতুন schema sync করা না থাকে। এটা future rework আইটেম
-   (master plan-এ নোট করা আছে) — Sheet-ভিত্তিক bulk-tag GAS action লাগবে। ── */
+   ⚠️ NO-FIREBASE POLICY আপডেট: "Bulk Add Audience Tag" অংশ এখন dataCache.js-এর
+   loadPath (Quiz/QBank/Study-এর জন্য primary GAS getSheetRows) দিয়ে Sheet থেকেই পড়ে,
+   আর লেখাও GAS "updateField" (syncFieldsToSheet) দিয়ে হয় — Firebase পুরোপুরি বাইপাস। ── */
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { C } from "../../core/config.js";
 import { useFB, invalidate } from "../../core/dataCache.js";
-import { fbPatch, fbPatchBatch } from "../../core/firebase.js";
 import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
-import { fetchReferenceData, renameReferenceItem } from "../../core/sheetSave.js";
+import { fetchReferenceData, renameReferenceItem, syncFieldsToSheet } from "../../core/sheetSave.js";
 import { AudienceRenameModal } from "./AudienceRenameModal.jsx";
 
 function AudienceTagRenameTab({push,tick}){
@@ -75,6 +73,7 @@ function AudienceTagRenameTab({push,tick}){
   const doBulkAddTag=async()=>{
     if(!bulkTag.trim()){push("warn","Audience Tag লিখুন","");return;}
     if(bulkSelected.size===0){push("warn","Subject/Topic সিলেক্ট করুন","");return;}
+    if(!gasSecret){push("error","❌ GAS Secret Key দাও","");return;}
     setBulkAdding(true);
     try{
       const tag=bulkTag.trim();
@@ -84,25 +83,23 @@ function AudienceTagRenameTab({push,tick}){
           :(q.Topic||q.topic||q.Sub_topic||q.sub_topic||"").trim();
         return bulkSelected.has(key);
       });
-      setBulkProgress({done:0,total:affected.length});
-      const fieldKey=affected.find(q=>q.AudienceTags!=null)?"AudienceTags":
-                    affected.find(q=>q.audienceTags!=null)?"audienceTags":"AudienceTags";
-      const patchItems=affected.map(q=>{
-        if(!q._fbKey)return null;
-        return{path:`${bulkSheet}/${q._fbKey}`,data:{[fieldKey]:tag}};
-      }).filter(Boolean);
+      const ids=affected.map(q=>(q.ID||q.id||q._fbKey||"").toString()).filter(Boolean);
+      setBulkProgress({done:0,total:ids.length});
 
-      // Batch patch with progress
-      const CONC=20;
-      let done=0;
-      for(let i=0;i<patchItems.length;i+=CONC){
-        const chunk=patchItems.slice(i,i+CONC);
-        await Promise.all(chunk.map(({path,data})=>fbPatch(path,data)));
-        done+=chunk.length;
-        setBulkProgress({done,total:affected.length});
+      // NO-FIREBASE POLICY: Quiz/QBank/Study এখন শুধু Sheet-এ থাকে — GAS "updateField"
+      // দিয়ে প্রতিটা প্রশ্নের "audiencetags" কলাম আপডেট হয় (আগে সরাসরি Firebase fbPatch হতো)।
+      const CONC=10;
+      let done=0,failed=0;
+      for(let i=0;i<ids.length;i+=CONC){
+        const chunk=ids.slice(i,i+CONC);
+        await Promise.all(chunk.map(async(id)=>{
+          const res=await syncFieldsToSheet({sheet:bulkSheet,id,fields:{audiencetags:tag},gasSecret});
+          if(res.ok)done++; else failed++;
+        }));
+        setBulkProgress({done:done+failed,total:ids.length});
       }
       invalidate(bulkSheet);
-      push("success","✅ Audience Tag সেট!",`"${tag}" → ${done}টি question এ বসানো হয়েছে`);
+      push("success","✅ Audience Tag সেট!",`"${tag}" → ${done}টি question এ বসানো হয়েছে`+(failed?`, ${failed}টি ব্যর্থ`:""));
       setBulkSelected(new Set());
       setBulkTag("");
     }catch(e){push("error","ব্যর্থ",e.message);}
