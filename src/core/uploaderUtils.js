@@ -141,7 +141,9 @@ const LS_FAILED_QUEUE  = "ss_failed_save_queue_v1";  // ব্যর্থ র�
 const LS_OCR_CACHE     = "ss_ocr_cache_v1";          // ছবি → OCR টেক্সট ক্যাশ (একই ছবি দ্বিতীয়বার OCR করতে হয় না)
 const OCR_CACHE_MAX    = 60;                          // সর্বোচ্চ এতগুলো ছবির OCR ফলাফল ক্যাশে রাখা হয়
 
-function loadSaveLocPref(){ try{ return localStorage.getItem(LS_SAVE_LOCATION)||"firebase"; }catch{ return "firebase"; } }
+// NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন সবসময় Sheet-এ যায়। পুরনো
+// ব্যবহারকারীর localStorage-এ আগের "firebase" প্রেফারেন্স থাকলেও তা উপেক্ষা করা হয়।
+function loadSaveLocPref(){ return "sheet"; }
 function saveSaveLocPref(v){ try{ localStorage.setItem(LS_SAVE_LOCATION,v); }catch{} }
 
 /* ── ব্যর্থ হওয়া সেভ-রো ক্যাশ — retry এর জন্য ── */
