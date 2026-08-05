@@ -15,11 +15,16 @@ function FailedQueuePanel({push,sourceFilter}){
   const bySource={};
   items.forEach(it=>{ (bySource[it.source]=bySource[it.source]||[]).push(it); });
 
+  // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন কখনো Firebase-এ যায় না — পুরনো
+  // ক্যাশে (এই পলিসির আগে জমা হওয়া) কোনো item-এর location এখনো "firebase" লেখা থাকলেও
+  // এই ৪ tab-এর জন্য জোর করে Sheet-পথেই retry হবে।
+  const NO_FIREBASE_TABS=["Quiz","QBank","Study","Typing"];
   const retryGroup=async(groupKey,groupItems)=>{
     setRetryingKey(groupKey);
     const{location,targetTab}=groupItems[0];
     const rows=groupItems.map(g=>g.row);
-    const result = location==="sheet"
+    const useSheet = location==="sheet" || NO_FIREBASE_TABS.includes(targetTab);
+    const result = useSheet
       ? await saveRowsToSheet({rows,targetTab,gasSecret:loadSharedGasSecret(),push})
       : await saveRowsToFirebaseBulk({rows,targetTab});
     const failedSet=new Set(result.failedRows||[]);
