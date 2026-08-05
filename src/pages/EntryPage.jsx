@@ -2,8 +2,9 @@
 import React, { useState, useEffect } from "react";
 import { C } from "../core/config.js";
 import { loadPath, invalidate } from "../core/dataCache.js";
-import { fbPush } from "../core/firebase.js";
-import { toArr, uploadImg, nowTs } from "../core/utils.js";
+import { saveRowsToSheet } from "../core/sheetSave.js";
+import { buildSheetRow } from "../core/uploaderUtils.js";
+import { loadSharedGasSecret, toArr, uploadImg } from "../core/utils.js";
 import { ImageCropPicker } from "../components/shared/ImageCropPicker.jsx";
 
 function EntryPage({push}){
@@ -44,21 +45,29 @@ function EntryPage({push}){
   const submit=async()=>{
     if(!question.trim()&&qImgUrls.length===0){push("warn","প্রশ্ন লিখুন বা ছবি দিন","");return;}
     if(!subject.trim()){push("warn","বিষয় লিখুন","");return;}
+    const gasSecret=loadSharedGasSecret();
+    if(!gasSecret){push("error","❌ GAS Secret Key দাও","");return;}
     setSaving(true);
     try{
-      const ts=nowTs(),id=Date.now();
       // combine: single upload imgUrl + crop question imgs
       const allQImgs=[...qImgUrls,...(imgUrl?[imgUrl]:[])];
       const finalImg=allQImgs.join(","); // multiple imgs comma separated
       const finalExpl=explanation+(solImgUrls.length?"\n"+solImgUrls.join("\n"):"");
-      let rec={};
-      if(mode==="Quiz")rec={ID:id,Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Subject:subject,Sub_topic:subtopic,Explanation:finalExpl,Technique:technique,QType:qtype,Timestamp:ts,Image:finalImg};
-      else if(mode==="QBank")rec={ID:id,Question:question,Opt1:opt1,Opt2:opt2,Opt3:opt3,Opt4:opt4,Correct:correct,Subject:subject,Topic:topic,Sub_topic:subtopic,Explanation:finalExpl,Technique:technique,QType:qtype,Timestamp:ts,Image:finalImg};
-      else rec={ID:id,Question:question,Correct:correct,Subject:subject,Sub_topic:subtopic,Explanation:finalExpl,Technique:technique,"Question Type":"Study",Timestamp:ts,Image:finalImg};
-      await fbPush(mode,rec);
-      invalidate(mode);
-      push("success","✅ সেভ হয়েছে!",`${mode} #${id}`);
-      reset();
+      // NO-FIREBASE POLICY: Quiz/QBank/Study এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
+      // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
+      const row=buildSheetRow({
+        item:{q:question,opt1,opt2,opt3,opt4,correct,explanation:finalExpl,image:finalImg},
+        subject, subtopic, qtype:mode==="Study"?"Study":qtype, audienceTags:[],
+        ...(mode==="QBank"?{topic}:{}),
+      });
+      const result=await saveRowsToSheet({rows:[row],targetTab:mode,gasSecret,push});
+      if(result.added>0){
+        invalidate(mode);
+        push("success","✅ সেভ হয়েছে!",`${mode}`);
+        reset();
+      } else {
+        push("error","ব্যর্থ",result.failedRows.length?"Sheet-এ লেখা যায়নি":"duplicate — আগে থেকেই আছে");
+      }
     }catch(e){push("error","ব্যর্থ",e.message);}
     setSaving(false);
   };
