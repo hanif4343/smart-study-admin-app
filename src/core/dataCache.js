@@ -28,15 +28,33 @@ async function fetchSheetFallback(path){
   }catch(_){ return null; }
 }
 
+/* ── NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন Firebase-এ থাকেই না, তাই এই
+   ৪ tab-এর জন্য GAS "getSheetRows"-ই একমাত্র/primary পথ — fbGet কল করাই হয় না
+   (আগে করলে প্রতিবার একটা নিশ্চিত-ব্যর্থ Firebase রিকোয়েস্ট যেত)। Users এখনো
+   Firebase-এই থাকে, তাই Users-এর জন্য আগের মতোই fbGet primary + Sheet fallback। ── */
+const SHEET_ONLY_TABS = ["Quiz","QBank","Study","Typing"];
+
 async function loadPath(path, force=false){
   const now = Date.now();
   const cached = _store[path];
   if(!force && cached && !cached.promise && now - cached.ts < STALE) return cached.data;
   if(cached?.promise) return cached.promise;
-  const p = fbGet(path).then(data=>{
+
+  const tab=(path||"").split("/")[0];
+  const p = (SHEET_ONLY_TABS.includes(tab)
+    ? fetchSheetFallback(path).then(data=>{
+        if(!data) throw new Error(`Sheet read ব্যর্থ: ${tab}`);
+        return data;
+      })
+    : fbGet(path)
+  ).then(data=>{
     _store[path] = {data, ts:Date.now(), promise:null};
     return data;
   }).catch(async e=>{
+    if(SHEET_ONLY_TABS.includes(tab)){
+      if(_store[path]) _store[path].promise = null;
+      throw e;
+    }
     const fallback = await fetchSheetFallback(path);
     if(fallback){
       _store[path] = {data:fallback, ts:Date.now(), promise:null, fromSheetFallback:true};
