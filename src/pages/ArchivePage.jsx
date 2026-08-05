@@ -10,7 +10,6 @@
    ══════════════════════════════════════════════════════════════════ */
 import React, { useState, useMemo } from "react";
 import { C } from "../core/config.js";
-import { fbPush, fbSet } from "../core/firebase.js";
 import { nowTs } from "../core/utils.js";
 import {
   getBulkEntries, parseBulkEntry, buildBulkRecord, buildSheetRow,
@@ -81,32 +80,15 @@ function ArchivePage({push,onSendToBulk}){
     const subtopic=(src.subtopic||"").trim()||subject;
     setSubmittingId(e.id);
 
-    if(saveLoc==="sheet"){
-      const rows=items.map(item=>buildSheetRow({item,subject,subtopic,qtype:effQtype,audienceTags:[]}));
-      const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
-      if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
-      setSubmittingId(null);
-      if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,`${targetMode} — ${subject}`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
-      if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
-      if(res.added>0||res.skipped>0){
-        archiveDelete(e.id); refresh();
-        if(expandedId===e.id){setExpandedId(null);setEditBuf(null);}
-      }
-      return;
-    }
-
-    let sent=0,failed=0; const failedRecs=[];
-    for(const item of items){
-      const ts=nowTs(); const id=Date.now()+Math.floor(Math.random()*9999);
-      const rec=buildBulkRecord({item,subject,subtopic,mode:targetMode,qtype:effQtype,audienceTags:[],ts,id});
-      try{ const res=await fbPush(targetMode,rec); if(res?.name) await fbSet(`${targetMode}/${res.name}/id`,res.name); sent++; }
-      catch(err){ failed++; failedRecs.push(rec); }
-    }
-    if(failedRecs.length) pushFailedItems(SRC_NAME,"firebase",targetMode,failedRecs);
+    // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
+    // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
+    const rows=items.map(item=>buildSheetRow({item,subject,subtopic,qtype:effQtype,audienceTags:[]}));
+    const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
+    if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
     setSubmittingId(null);
-    if(sent>0) push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${targetMode} — ${subject}`);
-    if(failed>0) push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
-    if(sent>0){
+    if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,`${targetMode} — ${subject}`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
+    if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    if(res.added>0||res.skipped>0){
       archiveDelete(e.id); refresh();
       if(expandedId===e.id){setExpandedId(null);setEditBuf(null);}
     }
