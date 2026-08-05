@@ -15,7 +15,6 @@
 import React, { useState, useRef } from "react";
 import { C } from "../core/config.js";
 import { _LC } from "../core/logger.js";
-import { fbPush, fbSet } from "../core/firebase.js";
 import { nowTs, uploadImageSrcToImgbb } from "../core/utils.js";
 import { _BGM } from "../core/bgTasks.js";
 import { callAiProviderRotatingRaw, buildKeyPool, OCR_CORRECTION_RULES } from "../core/ocrProviders.js";
@@ -562,59 +561,26 @@ function MultiSubjectImportPage({push}){
       g.rows.forEach(r=>allRows.push({q:r.q,correct:r.correct,subject,subtopic,mainQpaper}));
     });
 
-    if(saveLoc==="sheet"){
-      const rows=allRows.map(item=>buildSheetRow({
-        item:{q:item.q,correct:item.correct,explanation:""},
-        subject:item.subject,subtopic:item.subtopic,qtype:"Written",audienceTags:[],
-        mainQpaper:item.mainQpaper,
-      }));
-      const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
-      if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
-      setResult({added:res.added,skipped:res.skipped,failed:res.failedRows.length,groupCount:readyGroups.length});
-      setSubmitting(false);
-      // ── যেসব group Submit হলো, শুধু ওগুলোই লিস্ট থেকে সরাও — Subject/Sub-topic ফাঁকা থাকা group-গুলো
-      //    Confirm স্ক্রিনেই থেকে যাবে, পূরণ করে আবার Submit চাপার জন্য ──
-      const readyIds=new Set(readyGroups.map(g=>g.id));
-      setDraftGroups(p=>p.filter(g=>!readyIds.has(g.id)));
-      setPhase(blockedGroups.length>0?"confirm":"done");
-      if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,
-        `${readyGroups.length}টি subject/sub-topic গ্রুপ`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
-      if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
-      if(res.added>0||res.skipped>0){
-        const ids=readyGroups.flatMap(g=>g.archiveIds||[]);
-        if(ids.length) archiveDeleteMany(ids);
-      }
-      return;
-    }
-
-    let sent=0,failed=0; const failedRecs=[];
-    const BATCH=8;
-    for(let i=0;i<allRows.length;i+=BATCH){
-      const batch=allRows.slice(i,i+BATCH);
-      await Promise.all(batch.map(async(item)=>{
-        const ts=nowTs();
-        const id=Date.now()+Math.floor(Math.random()*9999);
-        const rec=buildBulkRecord({
-          item:{q:item.q,correct:item.correct,explanation:""},
-          subject:item.subject,subtopic:item.subtopic,mode:targetMode,qtype:"Written",
-          audienceTags:[],ts,id,mainQpaper:item.mainQpaper
-        });
-        try{
-          const res=await fbPush(targetMode,rec);
-          if(res?.name) await fbSet(`${targetMode}/${res.name}/id`,res.name);
-          sent++;
-        }catch(e){ failed++; failedRecs.push(rec); }
-      }));
-    }
-    if(failedRecs.length) pushFailedItems(SRC_NAME,"firebase",targetMode,failedRecs);
-    setResult({added:sent,skipped:0,failed,groupCount:readyGroups.length});
+    // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
+    // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
+    const rows=allRows.map(item=>buildSheetRow({
+      item:{q:item.q,correct:item.correct,explanation:""},
+      subject:item.subject,subtopic:item.subtopic,qtype:"Written",audienceTags:[],
+      mainQpaper:item.mainQpaper,
+    }));
+    const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
+    if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
+    setResult({added:res.added,skipped:res.skipped,failed:res.failedRows.length,groupCount:readyGroups.length});
     setSubmitting(false);
+    // ── যেসব group Submit হলো, শুধু ওগুলোই লিস্ট থেকে সরাও — Subject/Sub-topic ফাঁকা থাকা group-গুলো
+    //    Confirm স্ক্রিনেই থেকে যাবে, পূরণ করে আবার Submit চাপার জন্য ──
     const readyIds=new Set(readyGroups.map(g=>g.id));
     setDraftGroups(p=>p.filter(g=>!readyIds.has(g.id)));
     setPhase(blockedGroups.length>0?"confirm":"done");
-    if(sent>0) push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${readyGroups.length}টি subject/sub-topic গ্রুপ`);
-    if(failed>0) push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
-    if(sent>0){
+    if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,
+      `${readyGroups.length}টি subject/sub-topic গ্রুপ`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
+    if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    if(res.added>0||res.skipped>0){
       const ids=readyGroups.flatMap(g=>g.archiveIds||[]);
       if(ids.length) archiveDeleteMany(ids);
     }
