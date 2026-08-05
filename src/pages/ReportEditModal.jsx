@@ -2,9 +2,10 @@
 import React, { useState, useEffect } from "react";
 import { C } from "../core/config.js";
 import { loadPath, invalidate } from "../core/dataCache.js";
-import { fbGet, fbSet, fbPatch, fbDelete } from "../core/firebase.js";
+import { fbSet, fbDelete } from "../core/firebase.js";
+import { syncFieldsToSheet } from "../core/sheetSave.js";
 import { fcmNotifyPhone } from "../core/fcm.js";
-import { toArr, phoneKey, nowTs } from "../core/utils.js";
+import { toArr, phoneKey, nowTs, loadSharedGasSecret } from "../core/utils.js";
 import { useModalBack } from "../hooks/useModalBack.js";
 
 function ReportEditModal({report,onClose,onDone,push}){
@@ -134,19 +135,19 @@ function ReportEditModal({report,onClose,onDone,push}){
     try{
       if(qdata&&qid){
         const t=qdata._tab||"QBank";
-        const fkey=qdata._fbKey;
-        let patch={};
-        if(qtype==="mcq"){
-          const o1k=qdata.Opt1!=null?"Opt1":qdata.opt1!=null?"opt1":"Option1";
-          const o2k=o1k.replace(/1$/,"2");const o3k=o1k.replace(/1$/,"3");const o4k=o1k.replace(/1$/,"4");
-          patch={Question:question,[o1k]:opt1,[o2k]:opt2,[o3k]:opt3,[o4k]:opt4,Correct:correct,Explanation:explanation,Technique:technique};
-        } else {
-          patch={Question:question,Explanation:explanation,Technique:technique};
-          if(qtype==="study")patch.Correct=correct;
-        }
-        if(fkey)await fbPatch(`${t}/${fkey}`,patch);
+        const sid=(qdata.ID||qdata.id||qdata._fbKey||"").toString();
+        // NO-FIREBASE POLICY: Quiz/QBank/Study এখন শুধু Sheet-এ এডিট হয় (GAS
+        // "updateField" দিয়ে) — আগে এখানে সরাসরি Firebase fbPatch হতো।
+        const gasSecret=loadSharedGasSecret();
+        if(!gasSecret||!sid){ push("error","Save ব্যর্থ",!sid?"প্রশ্নের id পাওয়া যায়নি":"GAS Secret Key দাও"); setSaving(false); return; }
+        const fields=qtype==="mcq"
+          ?{question,opt1,opt2,opt3,opt4,correct,explanation,technique}
+          :qtype==="study"
+          ?{question,correct,explanation,technique}
+          :{question,explanation,technique};
+        const res=await syncFieldsToSheet({sheet:t,id:sid,fields,gasSecret});
+        if(!res.ok){ push("error","Save আংশিক ব্যর্থ",`ফিল্ড: ${res.failed.join(", ")}`); setSaving(false); return; }
         invalidate(t);
-        // Sheet sync → GAS standalone handles this
       }
       push("success","✅ সেভ হয়েছে!","");
       setStep(2);
