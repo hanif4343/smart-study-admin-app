@@ -4,9 +4,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { C } from "../../core/config.js";
 import { useFB, invalidate, loadPath } from "../../core/dataCache.js";
-import { toArr, nowTs, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
+import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { callAiProviderRotatingRaw } from "../../core/ocrProviders.js";
-import { saveRowsToSheet, saveRowsToFirebaseBulk, fetchReferenceData } from "../../core/sheetSave.js";
+import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
 import { pushFailedItems } from "../../core/uploaderUtils.js";
 import { JOB_NONE_TAG } from "../../core/ghConfig.js";
 import {
@@ -332,27 +332,14 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
     });
     if(unmatchedCount) push("warn",`⚠️ ${unmatchedCount}টা প্রশ্নের subject_id মেলেনি`,"AI-এর দেওয়া subject/sub_topic নাম Reference ট্যাবের কোনোটার সাথে হুবহু মেলেনি — এগুলো সেভ হবে ঠিকই, কিন্তু নতুন app-এ subject_id ছাড়া দেখাবে না, পরে Reference ট্যাবে গিয়ে বা Browse থেকে ঠিক করতে হবে");
     try{
-      let result;
-      if(saveLoc==="sheet"){
-        result=await saveRowsToSheet({rows,targetTab:"Quiz",gasSecret,push,onProgress:setSaveProgress,chunkSize:saveChunkSize});
-      }else{
-        const ts=nowTs();
-        const fbRows=rows.map(r=>({
-          question:r.question, option1:r.opt1,option2:r.opt2,option3:r.opt3,option4:r.opt4,
-          correct:r.correct, subject:r.subject, sub_topic:r.sub_topic, explanation:r.explanation,
-          "Question Type":r.qType, AudienceTags:r.audienceTags, Timestamp:ts, technique:"", Previous_Exam:r.prevExam||"",
-        }));
-        const fbResult=await saveRowsToFirebaseBulk({rows:fbRows,targetTab:"Quiz",concurrency:saveChunkSize,onProgress:setSaveProgress});
-        // failedRows থেকে ফেরত আসা fbRows-কে rows-এর সাথে মিলিয়ে দাও (index অনুযায়ী — একই ক্রমে পাঠানো হয়েছিল)
-        const failedIdx=new Set(fbResult.failedRows.map(fr=>fbRows.indexOf(fr)));
-        result={added:fbResult.added,skipped:0,failedRows:rows.filter((_,i)=>failedIdx.has(i))};
-      }
+      // NO-FIREBASE POLICY: Quiz এখন শুধু Google Sheet-এ যায় (GAS দিয়ে), Firebase-এ
+      // সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
+      const result=await saveRowsToSheet({rows,targetTab:"Quiz",gasSecret,push,onProgress:setSaveProgress,chunkSize:saveChunkSize});
       // ⚡ Quiz sheet-এ নতুন প্রশ্ন যোগ হলো — কাশ করা Quiz ডাটা invalidate করা হলো যাতে
-      // dedup-এর "ইতিমধ্যে Quiz-এ আছে" চেক সাথে সাথেই এই নতুন প্রশ্নগুলো ধরে ফেলে
-      // (saveRowsToFirebaseBulk নিজেই invalidate করে, sheet-save পাথের জন্যও এখানে নিশ্চিত করা হলো)।
+      // dedup-এর "ইতিমধ্যে Quiz-এ আছে" চেক সাথে সাথেই এই নতুন প্রশ্নগুলো ধরে ফেলে।
       if(result.added>0) invalidate("Quiz");
       const failedCount=result.failedRows.length;
-      if(failedCount) pushFailedItems("QBank→Quiz",saveLoc,"Quiz",result.failedRows);
+      if(failedCount) pushFailedItems("QBank→Quiz","sheet","Quiz",result.failedRows);
       const tookSec=Math.max(1,Math.round((Date.now()-saveStartedAt)/1000));
       push("success","✅ সেভ সম্পন্ন",
         `${result.added||0}টা নতুন প্রশ্ন যোগ হয়েছে`+
