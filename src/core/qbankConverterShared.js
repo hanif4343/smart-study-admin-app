@@ -8,7 +8,8 @@ const LS_QBC_RESULTS_DRAFT = "qbank_conv_results_draft_v1"; // AI-generated resu
 // QBank→Quiz-এ ডিফল্ট সবসময় Google Sheet-ই থাকে (approval তো এমনিতেই অটো হয়ে যায়)।
 const LS_QBC_SAVELOC  = "qbank_conv_saveloc_v1";   // "sheet" | "firebase" — ডিফল্ট "sheet"
 const LS_QBC_AUTOSAVE = "qbank_conv_autosave_v1";  // "1" | "0" — ডিফল্ট চালু
-function loadQbcSaveLoc(){ try{ return localStorage.getItem(LS_QBC_SAVELOC)||"sheet"; }catch{ return "sheet"; } }
+// NO-FIREBASE POLICY: Quiz এখন সবসময় Sheet-এ যায়, পুরনো "firebase" প্রেফারেন্স উপেক্ষা করা হয়।
+function loadQbcSaveLoc(){ return "sheet"; }
 function saveQbcSaveLoc(v){ try{ localStorage.setItem(LS_QBC_SAVELOC,v); }catch{} }
 function loadQbcAutoSave(){ try{ return localStorage.getItem(LS_QBC_AUTOSAVE)!=="0"; }catch{ return true; } }
 function saveQbcAutoSave(v){ try{ localStorage.setItem(LS_QBC_AUTOSAVE,v?"1":"0"); }catch{} }
