@@ -3,7 +3,6 @@ import React, { useState, useEffect, useRef } from "react";
 import { C } from "../core/config.js";
 import { _LC } from "../core/logger.js";
 import { loadPath, invalidate } from "../core/dataCache.js";
-import { fbPush, fbSet } from "../core/firebase.js";
 import { toArr, nowTs } from "../core/utils.js";
 import { callAiProviderRotating, buildKeyPool } from "../core/ocrProviders.js";
 import {
@@ -76,43 +75,16 @@ function AIImportPage({push,onSendToBulk}){
     setDirectRunning(true);
     setDirectProgress({done:0,total:entries.length,sent:0,failed:0});
 
-    if(saveLoc==="sheet"){
-      const rows=entries.map(item=>buildSheetRow({item,subject,subtopic,qtype:effQtype,audienceTags}));
-      const result=await saveRowsToSheet({rows,targetTab:effMode,gasSecret,push});
-      setDirectProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
-      setDirectRunning(false);
-      if(result.failedRows.length) pushFailedItems("AI Import (OCR)",saveLoc,effMode,result.failedRows);
-      if(result.added>0) push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${effMode} — ${subject}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
-      if(result.failedRows.length) push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
-      if((result.added>0||result.skipped>0)&&archivedEntryId){ archiveDelete(archivedEntryId); setArchivedEntryId(null); }
-      return;
-    }
-
-    let sent=0,failed=0; const failedRecs=[];
-    const BATCH=8;
-    for(let i=0;i<entries.length;i+=BATCH){
-      const batch=entries.slice(i,i+BATCH);
-      await Promise.all(batch.map(async(item)=>{
-        const ts=nowTs();
-        const id=Date.now()+Math.floor(Math.random()*9999);
-        const rec=buildBulkRecord({item,subject,subtopic,mode:effMode,qtype:effQtype,audienceTags,ts,id});
-        try{
-          const res=await fbPush(effMode,rec);
-          if(res?.name) await fbSet(`${effMode}/${res.name}/id`,res.name);
-          invalidate(effMode);
-          sent++;
-        }catch(e){
-          failed++;
-          failedRecs.push(rec);
-        }
-        setDirectProgress(p=>({...p,done:p.done+1,sent,failed}));
-      }));
-    }
+    // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
+    // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
+    const rows=entries.map(item=>buildSheetRow({item,subject,subtopic,qtype:effQtype,audienceTags}));
+    const result=await saveRowsToSheet({rows,targetTab:effMode,gasSecret,push});
+    setDirectProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setDirectRunning(false);
-    if(failedRecs.length) pushFailedItems("AI Import (OCR)",saveLoc,effMode,failedRecs);
-    if(sent>0)push("success",`✅ ${sent}টি সরাসরি যোগ হয়েছে!`,`${effMode} — ${subject}`);
-    if(failed>0)push("error",`${failed}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
-    if(sent>0&&archivedEntryId){ archiveDelete(archivedEntryId); setArchivedEntryId(null); }
+    if(result.failedRows.length) pushFailedItems("AI Import (OCR)","sheet",effMode,result.failedRows);
+    if(result.added>0) push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${effMode} — ${subject}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
+    if(result.failedRows.length) push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    if((result.added>0||result.skipped>0)&&archivedEntryId){ archiveDelete(archivedEntryId); setArchivedEntryId(null); }
   };
 
   /* ── Capacitor Camera plugin ── */
