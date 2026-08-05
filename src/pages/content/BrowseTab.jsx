@@ -17,9 +17,9 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../../core/config.js";
 import { useSheetRows, invalidate } from "../../core/dataCache.js";
-import { fbDelete, fbDeleteBatch, fbPush, fbSet } from "../../core/firebase.js";
-import { toArr, nowTs, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
-import { deleteIdsInSheet } from "../../core/sheetSave.js";
+import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
+import { deleteIdsInSheet, saveRowsToSheet } from "../../core/sheetSave.js";
+import { buildSheetRow } from "../../core/uploaderUtils.js";
 import { callAiProviderRotatingRaw, buildKeyPool, OCR_SPLIT_RULES, OCR_NOISE_RULES, OCR_CORRECTION_RULES } from "../../core/ocrProviders.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
 import { InlineEditModal } from "./InlineEditModal.jsx";
@@ -230,48 +230,38 @@ function BrowseTab({push,tick}){
     }
   };
 
-  // ── FIX (আগে থেকেই ছিল): Firebase delete-এর পাশাপাশি Sheet delete-ও
-  // (GAS deleteByIds) হয়, নাহলে GAS/Sheet মোডে যারা পড়ে তাদের কাছে "ডিলিট
-  // করা" প্রশ্নটা থেকেই যেত। ──
+  // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Sheet-এ থাকে (GAS
+  // deleteByIds), Firebase delete-এর পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
+  // GAS Secret না থাকলে ডিলিটই হবে না (আগের মতো "শুধু Firebase-এ মুছেছে"
+  // silent fallback আর নেই, কারণ Firebase-এ আর কিছু থাকেই না মোছার মতো)।
   const hardDelete=async()=>{
     if(!delTarget)return;
+    const qid=(delTarget.ID||delTarget.id||delTarget._fbKey||"").toString();
+    if(!gasSecret||!qid){ push("error","ডিলিট ব্যর্থ","GAS Secret Key বা question id নেই"); return; }
     setDelLoading(true);
     try{
-      const fkey=delTarget._fbKey;
-      const qid=(delTarget.ID||delTarget.id||"").toString();
-      if(fkey){await fbDelete(`${sheet}/${fkey}`);invalidate(sheet);}
-      let sheetMsg="";
-      if(gasSecret&&qid){
-        const sres=await deleteIdsInSheet({sheet,ids:[qid],gasSecret});
-        sheetMsg=sres.ok?` · Sheet থেকেও মুছেছে`:` · ⚠️ Sheet delete ব্যর্থ (${sres.error||"?"})`;
-      } else {
-        sheetMsg=" · ⚠️ GAS Secret না থাকায় শুধু Firebase-এ মুছেছে, Sheet-এ না";
-      }
+      const sres=await deleteIdsInSheet({sheet,ids:[qid],gasSecret});
+      if(!sres.ok){ push("error","ডিলিট ব্যর্থ",sres.error||"অজানা error"); setDelLoading(false); return; }
+      invalidate(sheet);
       refreshSheet();
-      push("success","🗑️ ডিলিট!",`#${qid}${sheetMsg}`);
+      push("success","🗑️ ডিলিট!",`#${qid} · Sheet থেকে মুছেছে`);
       setDelTarget(null);
     }catch(e){push("error","ডিলিট ব্যর্থ",String(e?.message||e||"unknown"));}
     setDelLoading(false);
   };
 
-  // ── একাধিক প্রশ্ন একসাথে ডিলিট (duplicate/suspicious/group — তিনটাতেই
-  // ব্যবহার হয়)। Firebase batch-delete + Sheet batch-delete দুটোই হয় ──
+  // ── একাধিক প্রশ্ন একসাথে ডিলিট (duplicate/suspicious/group — তিনটাতেই ব্যবহার হয়)। ──
   const bulkDeleteMany=async(qs)=>{
     if(!qs||qs.length===0)return;
+    const ids=qs.map(q=>(q.ID||q.id||q._fbKey||"").toString()).filter(Boolean);
+    if(!gasSecret||!ids.length){ push("error","Bulk ডিলিট ব্যর্থ","GAS Secret Key বা question id নেই"); return; }
     setBulkDelLoading(true);
     try{
-      const keys=qs.map(q=>q._fbKey).filter(Boolean);
-      const ids=qs.map(q=>(q.ID||q.id||"").toString()).filter(Boolean);
-      const deleted=await fbDeleteBatch(sheet, keys);
-      let sheetMsg="";
-      if(gasSecret&&ids.length){
-        const sres=await deleteIdsInSheet({sheet,ids,gasSecret});
-        sheetMsg=sres.ok?` · Sheet থেকেও ${sres.deleted||ids.length}টি মুছেছে`:` · ⚠️ Sheet delete ব্যর্থ (${sres.error||"?"})`;
-      } else {
-        sheetMsg=" · ⚠️ GAS Secret না থাকায় শুধু Firebase-এ মুছেছে, Sheet-এ না";
-      }
+      const sres=await deleteIdsInSheet({sheet,ids,gasSecret});
+      if(!sres.ok){ push("error","Bulk ডিলিট ব্যর্থ",sres.error||"অজানা error"); setBulkDelLoading(false); return; }
+      invalidate(sheet);
       refreshSheet();
-      push("success",`🗑️ ${deleted}টি এন্ট্রি ডিলিট!`,sheetMsg);
+      push("success",`🗑️ ${sres.deleted||ids.length}টি এন্ট্রি Sheet থেকে ডিলিট!`,"");
       setBulkDelTargets(null);
     }catch(e){push("error","Bulk ডিলিট ব্যর্থ",String(e?.message||e||"unknown"));}
     setBulkDelLoading(false);
@@ -307,38 +297,37 @@ function BrowseTab({push,tick}){
     setReformatEntries(collected);
   };
 
-  /* ── রিভিউ মোডাল থেকে "সেভ করুন" — নতুন entries লেখা হয়, তারপর পুরনো (বান্ডিল) entries ডিলিট হয় ── */
+  /* ── রিভিউ মোডাল থেকে "সেভ করুন" — নতুন entries Sheet-এ (GAS দিয়ে) লেখা হয়,
+     তারপর পুরনো (বান্ডিল) entries Sheet থেকেই ডিলিট হয়। NO-FIREBASE POLICY:
+     আগে এখানে সরাসরি fbPush/fbDeleteBatch দিয়ে Firebase-এ লেখা হতো, এখন
+     সবটাই GAS/Sheet-ভিত্তিক। ── */
   const saveReformat=async(finalEntries)=>{
     const included=finalEntries.filter(e=>e.include&&e.q&&e.a);
     if(included.length===0)return;
+    if(!gasSecret){ push("error","সেভ ব্যর্থ","GAS Secret Key দাও"); return; }
     setReformatSaving(true);
     try{
-      for(const e of included){
-        const ts=nowTs();
-        const id=Date.now()+Math.floor(Math.random()*9999);
-        const isStudy=sheet==="Study";
-        const isWritten=(e.qtype||"Written")==="Written";
-        const rec={
-          id,question:e.q,
-          ...(isStudy?{}:{option1:isWritten?"":"",option2:isWritten?"":"",option3:isWritten?"":"",option4:isWritten?"":""}),
-          correct:e.a,
-          subject:e.subject,sub_topic:e.sub_topic||e.subject,
-          explanation:"",
-          "Question Type":e.qtype||"Written",
-          AudienceTags:e.audienceTags||"",
-          Timestamp:ts,technique:"",
-        };
-        const res=await fbPush(sheet,rec);
-        if(res?.name) await fbSet(`${sheet}/${res.name}/id`,res.name);
+      const isStudy=sheet==="Study";
+      const rows=included.map(e=>buildSheetRow({
+        item:{q:e.q,opt1:"",opt2:"",opt3:"",opt4:"",correct:e.a,explanation:""},
+        subject:e.subject, subtopic:e.sub_topic||e.subject,
+        qtype:isStudy?"Study":(e.qtype||"Written"),
+        audienceTags:(e.audienceTags||"").split(",").filter(Boolean),
+      }));
+      const result=await saveRowsToSheet({rows,targetTab:sheet,gasSecret,push});
+      if(result.added>0){
+        // নতুন entries সফলভাবে লেখা হওয়ার পরই পুরনো বান্ডিল entries ডিলিট করা হয় — ডেটা হারানোর ঝুঁকি এড়াতে
+        const sourceIds=[...new Set(included.map(e=>e.sourceKey).filter(Boolean))];
+        if(sourceIds.length) await deleteIdsInSheet({sheet,ids:sourceIds,gasSecret});
+        invalidate(sheet);
+        refreshSheet();
+        push("success",`✅ ${result.added}টি নতুন প্রশ্ন Sheet-এ তৈরি হলো`,`${sourceIds.length}টি পুরনো বান্ডিল এন্ট্রি বদলে গেল`);
+        setReformatEntries(null);
+        setSelectedKeys(new Set());
+        setSelectMode(false);
+      } else {
+        push("error","সেভ ব্যর্থ","কোনো নতুন প্রশ্ন Sheet-এ যোগ হয়নি — পুরনো এন্ট্রি অক্ষত রাখা হয়েছে");
       }
-      // নতুন entries সফলভাবে লেখা হওয়ার পরই পুরনো বান্ডিল entries ডিলিট করা হয় — ডেটা হারানোর ঝুঁকি এড়াতে
-      const sourceKeys=[...new Set(included.map(e=>e.sourceKey).filter(Boolean))];
-      if(sourceKeys.length) await fbDeleteBatch(sheet,sourceKeys);
-      refreshSheet();
-      push("success",`✅ ${included.length}টি নতুন প্রশ্ন তৈরি হলো`,`${sourceKeys.length}টি পুরনো বান্ডিল এন্ট্রি বদলে গেল`);
-      setReformatEntries(null);
-      setSelectedKeys(new Set());
-      setSelectMode(false);
     }catch(e){push("error","সেভ ব্যর্থ",String(e?.message||e||"unknown"));}
     setReformatSaving(false);
   };
