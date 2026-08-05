@@ -1,7 +1,6 @@
 /* ══════════ INLINE EDIT MODAL ══════════ */
 import React, { useState } from "react";
 import { C } from "../../core/config.js";
-import { fbPatch } from "../../core/firebase.js";
 import { syncFieldsToSheet } from "../../core/sheetSave.js";
 import { loadSharedGasSecret } from "../../core/utils.js";
 import { useModalBack } from "../../hooks/useModalBack.js";
@@ -29,28 +28,9 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
   const save=async()=>{
     setSaving(true);
     try{
-      const fkey=q._fbKey;
-      let patch={};
-      if(questionType==="Study"){
-        patch={Question:question,Correct:correct,Explanation:explanation,Technique:technique,"Question Type":"Study"};
-      } else if(questionType==="Written"){
-        patch={Question:question,Explanation:explanation,Technique:technique,"Question Type":"Written"};
-      } else {
-        // Firebase এ যে key name আছে সেটাই use করো
-        const o1k=q.Opt1!=null?"Opt1":q.opt1!=null?"opt1":q.Option1!=null?"Option1":q.option1!=null?"option1":"Option1";
-        const o2k=o1k.replace("1","2"),o3k=o1k.replace("1","3"),o4k=o1k.replace("1","4");
-        patch={Question:question,[o1k]:opt1,[o2k]:opt2,[o3k]:opt3,[o4k]:opt4,Correct:correct,Explanation:explanation,Technique:technique,"Question Type":"MCQ"};
-      }
-
-      // ⚡ আগে fbPatch ব্যর্থ হলে (permission denied/quota) পুরো try{} ব্লক catch-এ চলে
-      // যেত আর নিচের Sheet sync-এর কাছে কখনো পৌঁছাতোই না — Sheet sync ছিল conditional
-      // on Firebase success. এখন উল্টো: Sheet update (GAS "updateField") এখন প্রাইমারি/
-      // নির্ভরযোগ্য অ্যাকশন, Firebase patch শুধু best-effort মিরর — ব্যর্থ হলেও Sheet
-      // update থামবে না বা বাতিল হবে না।
-      let fbError=null;
-      try{ if(fkey)await fbPatch(`${sheet}/${fkey}`,patch); }
-      catch(e){ fbError=e?.message||String(e); }
-
+      // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Sheet-এ এডিট হয় (GAS
+      // "updateField" দিয়ে) — আগে এখানে Firebase-এও সমান্তরালে fbPatch হতো (best-effort
+      // mirror), সেটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
       const gasSecret=loadSharedGasSecret();
       const sheetFields=questionType==="Study"
         ?{question,correct,explanation,technique}
@@ -58,22 +38,18 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
         ?{question,explanation,technique}
         :{question,opt1,opt2,opt3,opt4,correct,explanation,technique};
 
-      let sheetRes={ok:false,failed:Object.keys(sheetFields)};
-      if(gasSecret&&qid){
-        sheetRes=await syncFieldsToSheet({sheet,id:qid,fields:sheetFields,gasSecret});
+      if(!gasSecret||!qid){
+        push("error","❌ Edit ব্যর্থ",!qid?"এই প্রশ্নের id পাওয়া যায়নি":"GAS Secret Key দাও");
+        setSaving(false);
+        return;
       }
 
+      const sheetRes=await syncFieldsToSheet({sheet,id:qid,fields:sheetFields,gasSecret});
       if(sheetRes.ok){
-        push("success","✅ Sheet-এ আপডেট!",`#${qid}`+(fbError?` (Firebase ব্যর্থ ছিল, শুধু Sheet-এ সেভ হয়েছে)`:""));
-        onSaved();
-      } else if(!fbError){
-        // Firebase অন্তত সফল, Sheet ব্যর্থ/স্কিপড — আগের মতো Edit সফল দেখাও, শুধু sheet-warning যোগ করো
-        push("success","✅ আপডেট!",`#${qid}`);
-        if(gasSecret) push("error","⚠️ Sheet-এ sync ব্যর্থ",`ফিল্ড: ${sheetRes.failed.join(", ")||"সব"} — Firebase-এ ঠিকই সেভ হয়েছে`);
+        push("success","✅ Sheet-এ আপডেট!",`#${qid}`);
         onSaved();
       } else {
-        push("error","❌ Edit সম্পূর্ণ ব্যর্থ (Firebase ও Sheet দুটোই)",
-          [fbError, gasSecret?`Sheet: ${sheetRes.failed.join(", ")}`:"GAS Secret নেই"].filter(Boolean).join(" | "));
+        push("error","❌ Edit ব্যর্থ",`ফিল্ড: ${sheetRes.failed.join(", ")||"সব"}`);
       }
     }catch(e){push("error","Edit ব্যর্থ",String(e?.message||e||"unknown"));}
     setSaving(false);
