@@ -80,13 +80,20 @@ function ArchivePage({push,onSendToBulk}){
     const subtopic=(src.subtopic||"").trim()||subject;
     setSubmittingId(e.id);
 
-    // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
-    // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
-    const rows=items.map(item=>buildSheetRow({item,subject,subtopic,qtype:effQtype,audienceTags:[]}));
+    // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে)।
+    // MCQ-তে প্রতিটা লাইনের নিজস্ব subject;topic (item.subject/item.topic) থাকলে সেটাই
+    // ব্যবহার হয়, না থাকলে ওপরের Archive entry-র subject/subtopic fallback হিসেবে বসে।
+    const rows=items.map(item=>buildSheetRow({
+      item,
+      subject:(item.subject&&item.subject.trim())||subject,
+      subtopic:(item.topic&&item.topic.trim())||subtopic,
+      qtype:effQtype,audienceTags:[]
+    }));
     const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
     if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
     setSubmittingId(null);
-    if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,`${targetMode} — ${subject}`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
+    const subjLabel=(effQtype==="MCQ"||effQtype==="Written")?[...new Set(items.map(i=>i.subject).filter(Boolean))].join(", ")||subject:subject;
+    if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,`${targetMode} — ${subjLabel}`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
     if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if(res.added>0||res.skipped>0){
       archiveDelete(e.id); refresh();
