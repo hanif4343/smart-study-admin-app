@@ -240,4 +240,19 @@ async function addExamAppearance({questionId,postId,institutionId,year,gasSecret
   }catch(e){ push?.("error","❌ যোগ ব্যর্থ",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance };
+/* ── পুরো Exam_Appearances ট্যাব একবারে বাল্ক-ফেচ — GAS-এর "getAllExamAppearances"
+   action (Android User App-এর "পদ অনুযায়ী ব্রাউজ" ফ্লো-র জন্য আগে থেকেই সার্ভারে
+   ছিল, এখন Admin App-এর Browse ট্যাবেও QBank-এর Post/Institution/Year ফিল্টারের
+   জন্য ব্যবহার হয়)। questionId দিয়ে scope করা না — পুরো টেবিল একবারে আসে। ── */
+async function fetchAllExamAppearances({gasSecret,push}){
+  if(!GAS||!gasSecret) return{ok:false,appearances:[]};
+  try{
+    const url=`${GAS}?action=getAllExamAppearances&secret=${encodeURIComponent(gasSecret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status!=="success"){ push?.("error","❌ Appearance লোড ব্যর্থ",data.message||""); return{ok:false,appearances:[]}; }
+    return{ok:true,appearances:data.appearances||[]};
+  }catch(e){ push?.("error","❌ Appearance লোড ব্যর্থ",e.message); return{ok:false,appearances:[]}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances };
