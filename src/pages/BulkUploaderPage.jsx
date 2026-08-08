@@ -132,7 +132,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
 
   /* ── Shuffle MCQ Options ──
      প্রতিটি MCQ লাইনে অপশনগুলো (col 1-4) random করে সাজায়,
-     correct field (col 5) সেই অনুযায়ী আপডেট করে।
+     correct field (col 5) সেই অনুযায়ী আপডেট করে। subject/topic/ব্যাখ্যা অপরিবর্তিত থাকে।
      { } block এবং plain line দুটো format-ই handle করে।
   */
   const[shuffleInfo,setShuffleInfo]=useState(null); // {count} — কতটা shuffle হলো
@@ -145,12 +145,14 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       if(!tr||tr.startsWith("#"))return entry;
       const flat=tr.replace(/\r?\n/g," ").replace(/\s+/g," ");
       const parts=flat.split(";").map(p=>p.trim());
-      // MCQ: index 0=প্রশ্ন, 1-4=অপশন, 5=correct, 6=ব্যাখ্যা(optional)
-      if(parts.length<6)return entry;
+      // নতুন MCQ প্যাটার্ন: 0=প্রশ্ন, 1-4=অপশন, 5=correct, 6=subject, 7=topic, 8=ব্যাখ্যা(optional)
+      if(parts.length<8)return entry;
       const q=parts[0];
       const opts=[parts[1],parts[2],parts[3],parts[4]];
       const correct=parts[5];
-      const expl=parts[6]||"";
+      const subj=parts[6];
+      const top=parts[7];
+      const expl=parts[8]||"";
       // Fisher-Yates shuffle
       for(let i=opts.length-1;i>0;i--){
         const j=Math.floor(Math.random()*(i+1));
@@ -158,8 +160,8 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       }
       // correct field = shuffled text-এ যেটা সঠিক (value same থাকে)
       const newLine=expl
-        ?`${q} ; ${opts[0]} ; ${opts[1]} ; ${opts[2]} ; ${opts[3]} ; ${correct} ; ${expl}`
-        :`${q} ; ${opts[0]} ; ${opts[1]} ; ${opts[2]} ; ${opts[3]} ; ${correct}`;
+        ?`${q} ; ${opts[0]} ; ${opts[1]} ; ${opts[2]} ; ${opts[3]} ; ${correct} ; ${subj} ; ${top} ; ${expl}`
+        :`${q} ; ${opts[0]} ; ${opts[1]} ; ${opts[2]} ; ${opts[3]} ; ${correct} ; ${subj} ; ${top}`;
       shuffled++;
       return newLine;
     });
@@ -190,11 +192,57 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   /* Build Firebase record — শেয়ার্ড buildBulkRecord ব্যবহার করে (AIImportPage direct-submit ও একই ফাংশন ব্যবহার করে) */
   const buildRec=(item,ts,id)=>buildBulkRecord({item,subject:subjectName,subtopic:topicName,mode,qtype,audienceTags:tagNames,ts,id});
 
+  /* ── MCQ mode-এ প্রতি লাইনে নিজস্ব subject;topic টাইপ করা থাকে (Phase 7 নতুন প্যাটার্ন) —
+     তাই global dropdown লাগে না। প্রতিটা ইউনিক subject/topic নাম রেজলভ-অর-ক্রিয়েট করে
+     subject_id/topic_id বসানো হয়। একই ব্যাচে বারবার একই নাম এলে ক্যাশ থেকেই id মেলে
+     (duplicate reference row তৈরি হয় না)। Subject না থাকলে (sheet-এ প্রথমবার) নতুন
+     Subject + তার আন্ডারে নতুন Topic — দুটোই এক ধাক্কায় তৈরি হয়ে যায়। ── */
+  const resolveSubjectTopicPerEntry=async(entries)=>{
+    const subjCache=new Map(); // norm(name) -> subject_id
+    const topicCache=new Map(); // subject_id+"|"+norm(name) -> topic_id
+    let curSubjects=subjectOptions, curTopics=refData?.topics||[];
+    let anyCreated=false;
+    const resolved=[];
+    for(const item of entries){
+      const sName=(item.subject||"").trim();
+      const tName=(item.topic||"").trim();
+      if(!sName||!tName) return{ok:false,reason:`"${(item.q||"").substring(0,40)}..." — লাইনে Subject/Topic লেখা নেই (নতুন ফরম্যাট: প্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;উত্তর;Subject;Topic;ব্যাখ্যা)`};
+      const sKey=sName.toLowerCase();
+      let sId=subjCache.get(sKey);
+      if(!sId){
+        const hit=curSubjects.find(s=>s.subject_name.trim().toLowerCase()===sKey);
+        if(hit) sId=hit.subject_id;
+        else{
+          const res=await resolveOrCreateReference({sel:{id:"",name:sName},refType:"subjects",options:curSubjects.map(s=>({id:s.subject_id,name:s.subject_name})),gasSecret,sheet:mode,push});
+          if(!res.ok) return{ok:false,reason:`Subject "${sName}" যোগ/খুঁজে পাওয়া যায়নি`};
+          sId=res.id;
+          if(res.created){ anyCreated=true; curSubjects=[...curSubjects,{subject_id:sId,subject_name:sName,sheet:mode}]; }
+        }
+        subjCache.set(sKey,sId);
+      }
+      const tKey=sId+"|"+tName.toLowerCase();
+      let tId=topicCache.get(tKey);
+      if(!tId){
+        const hit=curTopics.find(t=>t.subject_id===sId && t.topic_name.trim().toLowerCase()===tName.toLowerCase());
+        if(hit) tId=hit.topic_id;
+        else{
+          const res=await resolveOrCreateReference({sel:{id:"",name:tName},refType:"topics",options:curTopics.filter(t=>t.subject_id===sId).map(t=>({id:t.topic_id,name:t.topic_name})),gasSecret,parentId:sId,push});
+          if(!res.ok) return{ok:false,reason:`Topic "${tName}" যোগ/খুঁজে পাওয়া যায়নি`};
+          tId=res.id;
+          if(res.created){ anyCreated=true; curTopics=[...curTopics,{topic_id:tId,topic_name:tName,subject_id:sId}]; }
+        }
+        topicCache.set(tKey,tId);
+      }
+      resolved.push({item,subjectId:sId,topicId:tId,subjectName:sName,topicName:tName});
+    }
+    return{ok:true,resolved,anyCreated};
+  };
+
   /* Main upload */
   const startUpload=async()=>{
-    if(!subjectId){push("warn","⚠️ Subject বাছাই করুন","");return;}
-    if(!bulkText.trim()){push("warn","⚠️ প্রশ্ন লিখুন","");return;}
     const eff=getEffectiveType(mode,qtype);
+    if(eff==="Study" && !subjectId){push("warn","⚠️ Subject বাছাই করুন","");return;}
+    if(!bulkText.trim()){push("warn","⚠️ প্রশ্ন লিখুন","");return;}
     const entries=getEntries(bulkText).map(l=>parseEntry(l,eff)).filter(r=>r.ok);
     if(!entries.length){push("warn","⚠️ কোনো valid প্রশ্ন নেই — Validation chips-এ ক্লিক করে দেখুন","");return;}
 
@@ -220,6 +268,18 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     setProgress({done:0,total:entries.length,sent:0,failed:0});
     const addLog=(msg,type)=>setLog(p=>[...p.slice(-99),{msg,type,id:Date.now()+Math.random()}]);
 
+    // ── MCQ/Written হলে প্রতি লাইনের subject;topic থেকে subject_id/topic_id রেজলভ করা হয়
+    // (নেটওয়ার্ক কল লাগতে পারে নতুন subject/topic হলে, তাই progress bar আগেই দেখানো শুরু হয়) ──
+    const isInline=(eff==="MCQ"||eff==="Written");
+    let perEntry=null;
+    if(isInline){
+      addLog("🔎 Subject/Topic মিলিয়ে দেখা হচ্ছে...","ok");
+      const r=await resolveSubjectTopicPerEntry(entries);
+      if(!r.ok){ setRunning(false); push("error","❌ "+r.reason,""); return; }
+      perEntry=r.resolved;
+      if(r.anyCreated) loadRefData(); // নতুন subject/topic তৈরি হলে dropdown-ও রিফ্রেশ হোক
+    }
+
     // ── group_id: groupMode ON থাকলে এই পুরো ব্যাচের সব প্রশ্ন একই group_id
     // পাবে (multi-part প্রশ্ন — "কারক নির্ণয় কর" ৫টা sub-question একসাথে
     // দেখানোর জন্য), sub_index ক্রমিক (1,2,3...) ──
@@ -229,19 +289,27 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে। GAS-এর
     // bulk_save_rows handler examAppearance ফিল্ড এখন সাপোর্ট করে (gas-patches
     // ফোল্ডারের প্যাচটা এখন কোর কোডেই বসানো আছে)।
-    const rows=entries.map((item,idx)=>buildSheetRow({
-      item, subject:subjectName,
-      subtopic:topicName, // legacy sub_topic কলাম
-      qtype:eff, audienceTags:tagNames,
-      subjectId, topicId, tagIds,
-      groupId:batchGroupId, subIndex:batchGroupId?(idx+1):null,
-    }));
+    const rows=isInline
+      ? perEntry.map(({item,subjectId:sId,topicId:tId,subjectName:sName,topicName:tName},idx)=>buildSheetRow({
+          item, subject:sName, subtopic:tName,
+          qtype:eff, audienceTags:tagNames,
+          subjectId:sId, topicId:tId, tagIds,
+          groupId:batchGroupId, subIndex:batchGroupId?(idx+1):null,
+        }))
+      : entries.map((item,idx)=>buildSheetRow({
+          item, subject:subjectName,
+          subtopic:topicName, // legacy sub_topic কলাম
+          qtype:eff, audienceTags:tagNames,
+          subjectId, topicId, tagIds,
+          groupId:batchGroupId, subIndex:batchGroupId?(idx+1):null,
+        }));
     const result=await saveRowsToSheet({rows,targetTab:mode,gasSecret,push,examAppearance});
     entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
     setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setRunning(false);setDone(true);
     if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার","sheet",mode,result.failedRows);
-    if(result.added>0)push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${mode} — ${subjectName}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:"")+(batchGroupId?` · group: ${batchGroupId}`:""));
+    const subjLabel=isInline?[...new Set(perEntry.map(p=>p.subjectName))].join(", "):subjectName;
+    if(result.added>0)push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${mode} — ${subjLabel}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:"")+(batchGroupId?` · group: ${batchGroupId}`:""));
     if(examAppearance && !result.examAppearancesAdded) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
     if(result.examAppearancesAdded)push("success",`🧾 ${result.examAppearancesAdded}টা Exam Appearance-ও যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
     if(result.failedRows.length)push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
@@ -257,7 +325,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       {/* Header */}
       <div style={{background:`linear-gradient(135deg,${C.accent},#7c3aed)`,borderRadius:14,padding:"14px 16px",marginBottom:16,color:"#fff"}}>
         <div style={{fontWeight:900,fontSize:15,marginBottom:2}}>⚡ বাল্ক প্রশ্ন আপলোড</div>
-        <div style={{fontSize:11,opacity:.8}}>একসাথে একাধিক প্রশ্ন Google Sheet অথবা Firebase-এ যোগ করুন</div>
+        <div style={{fontSize:11,opacity:.8}}>একসাথে একাধিক প্রশ্ন Google Sheet-এ যোগ করুন</div>
       </div>
 
       <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={setGasSecretP}/>
@@ -303,26 +371,35 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         </div>
       </div>
 
-      {/* Subject / Topic — Reference-টেবিল থেকে dropdown */}
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
-        <div className="fld" style={{marginBottom:0}}>
-          <label>📚 Subject</label>
-          <select className="inp" value={subjectId} onChange={e=>setSubjectId(e.target.value)}>
-            <option value="">— বাছাই করো —</option>
-            {subjectOptions.map(s=>(<option key={s.subject_id} value={s.subject_id}>{s.subject_name}</option>))}
-          </select>
+      {/* Subject / Topic — MCQ ও Written দুটোতেই এখন প্রতি লাইনে টাইপ করা হয় (নতুন প্যাটার্ন,
+          দেখো নিচের ফরম্যাট গাইড), তাই dropdown শুধু Study-তে দেখানো হয় */}
+      {(getEffectiveType(mode,qtype)==="MCQ"||getEffectiveType(mode,qtype)==="Written")?(
+        <div style={{background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
+          📚 <b style={{color:C.text}}>Subject ও Topic এখন প্রতি লাইনে টাইপ করবে</b> (নিচের ফরম্যাট গাইড দেখো) — নতুন নাম দিলে Reference-এ নিজে থেকেই তৈরি হয়ে যাবে, আলাদা করে dropdown থেকে বাছাই করার দরকার নেই।
         </div>
-        <div className="fld" style={{marginBottom:0}}>
-          <label>📌 Topic</label>
-          <select className="inp" value={topicId} onChange={e=>setTopicId(e.target.value)} disabled={!subjectId}>
-            <option value="">— বাছাই করো —</option>
-            {topicOptions.map(t=>(<option key={t.topic_id} value={t.topic_id}>{t.topic_name}</option>))}
-          </select>
-        </div>
-      </div>
-      <div style={{fontSize:10,color:C.muted,marginBottom:12,marginTop:-6}}>
-        তালিকায় না থাকলে আগে "🗂️ Reference" ট্যাব থেকে নতুন Subject/Topic যোগ করে নাও।
-      </div>
+      ):(
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+            <div className="fld" style={{marginBottom:0}}>
+              <label>📚 Subject</label>
+              <select className="inp" value={subjectId} onChange={e=>setSubjectId(e.target.value)}>
+                <option value="">— বাছাই করো —</option>
+                {subjectOptions.map(s=>(<option key={s.subject_id} value={s.subject_id}>{s.subject_name}</option>))}
+              </select>
+            </div>
+            <div className="fld" style={{marginBottom:0}}>
+              <label>📌 Topic</label>
+              <select className="inp" value={topicId} onChange={e=>setTopicId(e.target.value)} disabled={!subjectId}>
+                <option value="">— বাছাই করো —</option>
+                {topicOptions.map(t=>(<option key={t.topic_id} value={t.topic_id}>{t.topic_name}</option>))}
+              </select>
+            </div>
+          </div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:12,marginTop:-6}}>
+            তালিকায় না থাকলে আগে "🗂️ Reference" ট্যাব থেকে নতুন Subject/Topic যোগ করে নাও।
+          </div>
+        </>
+      )}
 
       {/* পদ/প্রতিষ্ঠান/সাল — শুধু QBank mode-এ, ঐচ্ছিক। দিলে এই পুরো ব্যাচের প্রতিটা নতুন
           প্রশ্নের জন্য একই সাথে একটা Exam_Appearances রো-ও যোগ হয়ে যায়। ড্রপডাউন না, টাইপ
@@ -376,8 +453,8 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       {/* Format Guide */}
       <div style={{background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:10,fontSize:11,color:C.muted,lineHeight:1.7}}>
         <div style={{fontWeight:800,color:C.text,marginBottom:4}}>📋 ফরম্যাট (প্রতি লাইন = একটি প্রশ্ন):</div>
-        <div><span style={{color:"#10b981",fontWeight:700}}>MCQ →</span> প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; ব্যাখ্যা(optional)</div>
-        <div><span style={{color:"#f59e0b",fontWeight:700}}>Written →</span> প্রশ্ন ; উত্তর ; ব্যাখ্যা(optional)</div>
+        <div><span style={{color:"#10b981",fontWeight:700}}>MCQ →</span> প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; Subject ; Topic ; ব্যাখ্যা(optional)</div>
+        <div><span style={{color:"#f59e0b",fontWeight:700}}>Written →</span> প্রশ্ন ; উত্তর ; Subject ; Topic ; ব্যাখ্যা(optional)</div>
         <div><span style={{color:"#818cf8",fontWeight:700}}>Study →</span> {"{"} প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২... {"}"}</div>
       </div>
 
@@ -435,6 +512,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
                     </div>
                     {r.ok&&<div style={{fontSize:10,color:"#10b981",marginTop:4}}>
                       ❓ {(r.q||"").substring(0,60)}{r.q?.length>60?"...":""}
+                      {(r.subject||r.topic)&&<span style={{color:"#818cf8"}}> · 📚 {r.subject}{r.topic?` / ${r.topic}`:""}</span>}
                     </div>}
                   </div>
                 ))
@@ -475,8 +553,8 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           placeholder={mode==="Study"
             ?"{ প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২ }\n{ পরের প্রশ্ন ; উত্তর }"
             :qtype==="Written"
-            ?"{ প্রশ্ন ; উত্তর ; ব্যাখ্যা }\n{ পরের প্রশ্ন ; উত্তর }"
-            :"{ প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; ব্যাখ্যা }\n{ প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর }"}
+            ?"{ আকাশ থেকে বৃষ্টি পড়ে — রেখাঙ্কিত পদের কারক নির্ণয় করো ; কর্তৃকারক ; বাংলা ব্যাকরণ ; কারক ; ব্যাখ্যা(optional) }\n{ পরের প্রশ্ন ; উত্তর ; Subject ; Topic }"
+            :"{ বাংলাদেশ কত সালে স্বাধীনতা লাভ করেছে? ; ১৯৬৬ ; ১৯৬৯ ; ১৯৭১ ; ১৯৭৪ ; ১৯৭১ ; বাংলাদেশ বিষয়াবলী ; মুক্তিযুদ্ধ ; ১৯৭১ সালের ১৬ই ডিসেম্বর... }\n{ প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; Subject ; Topic }"}
         />
       </div>
 
