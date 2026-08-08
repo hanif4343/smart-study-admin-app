@@ -772,7 +772,7 @@ function MultiSubjectImportPage({push}){
           })()}
           <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
             <button className="btn bp bb" disabled={submitting||!totalIncludedG} onClick={confirmAndSubmit} style={{justifyContent:"center"}}>
-              {submitting?"⏳ Submit হচ্ছে...":`✅ Confirm করে Submit করো (${targetMode} → ${saveLoc==="sheet"?"Sheet":"Firebase"})`}
+              {submitting?"⏳ Submit হচ্ছে...":`✅ Confirm করে Submit করো (${targetMode} → Sheet)`}
             </button>
             <button className="btn" disabled={submitting} onClick={backToEdit}
               style={{justifyContent:"center",background:"transparent",color:C.muted,borderColor:C.border,fontSize:11}}>
@@ -907,7 +907,7 @@ function MultiSubjectImportPage({push}){
             <div style={{background:"#052e16",border:"1px solid #10b98144",borderRadius:12,padding:"10px 14px",marginBottom:12}}>
               <div style={{fontSize:12,fontWeight:800,color:"#10b981",marginBottom:6}}>✅ Submit সম্পন্ন</div>
               <div style={{fontSize:11,color:C.text}}>যোগ হয়েছে: <b style={{color:"#10b981"}}>{result.added}</b>{result.skipped>0&&<> · duplicate বাদ: <b>{result.skipped}</b></>}{result.failed>0&&<> · ব্যর্থ: <b style={{color:"#ef4444"}}>{result.failed}</b></>}</div>
-              <div style={{fontSize:11,color:C.muted,marginTop:2}}>{result.groupCount}টি subject/sub-topic গ্রুপ — {targetMode} ({saveLoc==="sheet"?"Sheet":"Firebase"})</div>
+              <div style={{fontSize:11,color:C.muted,marginTop:2}}>{result.groupCount}টি subject/sub-topic গ্রুপ — {targetMode} (Sheet)</div>
               <button className="btn" onClick={startOver} style={{marginTop:8,justifyContent:"center",width:"100%",fontSize:11,background:"transparent",color:C.muted,borderColor:C.border}}>🔄 নতুন ব্যাচ শুরু করো</button>
             </div>
           )}
