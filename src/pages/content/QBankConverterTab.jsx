@@ -427,7 +427,7 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
         </div>
         <label style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,cursor:"pointer"}}>
           <input type="checkbox" checked={autoSave} onChange={e=>setAutoSaveP(e.target.checked)} style={{accentColor:C.green,width:16,height:16}}/>
-          <span style={{fontSize:12,color:C.text}}>⚡ Auto-save — কনভার্ট শেষ হলেই সাথে সাথে <b style={{color:saveLoc==="sheet"?C.green:C.yellow}}>{saveLoc==="sheet"?"Google Sheet":"Firebase"}</b>-এ সেভ হয়ে যাবে (approval তো এমনিতেই অটো)</span>
+          <span style={{fontSize:12,color:C.text}}>⚡ Auto-save — কনভার্ট শেষ হলেই সাথে সাথে <b style={{color:C.green}}>Google Sheet</b>-এ সেভ হয়ে যাবে (approval তো এমনিতেই অটো)</span>
         </label>
         {/* ⚡ এখন সবসময় দেখানো হয় (আগে শুধু auto-save চালু থাকলে দেখাতো) — ম্যানুয়াল সেভ-এও
             এই একই saveLoc ব্যবহার হয়। নিচে রিভিউ সেকশনে আর আলাদা কপি রাখা হয়নি — একটাই জায়গা। */}
@@ -542,7 +542,7 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
           {/* ⚡ Save Location এখানে আর আলাদা করে দেখানো হয় না — উপরের "AI দিয়ে কনভার্ট করো" কার্ডেই
               একবার সেট করা থাকে, দুই জায়গায় ডুপ্লিকেট রাখা হয়নি। */}
           <div style={{fontSize:11,color:C.muted,margin:"2px 0 8px"}}>
-            💾 সেভ হবে: <b style={{color:saveLoc==="sheet"?C.green:C.accent}}>{saveLoc==="sheet"?"Google Sheet":"Firebase"}</b> — পরিবর্তনের জন্য উপরের কার্ডে যাও
+            💾 সেভ হবে: <b style={{color:C.green}}>Google Sheet</b> — পরিবর্তনের জন্য উপরের কার্ডে যাও
           </div>
           <div className="fld">
             <label>সেভ চাংক সাইজ (কয়টা করে একসাথে পাঠানো হবে — ছোট মানে প্রোগ্রেস বার বেশি "লাইভ" দেখাবে, কিন্তু একটু ধীর হবে)</label>
@@ -555,7 +555,7 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
           <div style={{position:"sticky",bottom:70,zIndex:20,marginTop:6,paddingTop:8,
             background:`linear-gradient(180deg, transparent, ${C.card} 35%)`}}>
             <button className="btn" disabled={saving||!approvedCount} style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:12,fontSize:14,fontWeight:700,boxShadow:"0 6px 20px #3b82f655"}} onClick={()=>saveApproved()}>
-              {saving?`⏳ সেভ হচ্ছে... (${saveProgress.done}/${saveProgress.total}) • ${saveElapsedSec}s`:`💾 ${approvedCount}টা প্রশ্ন ${saveLoc==="sheet"?"Sheet":"Firebase"}-এ সেভ করো`}
+              {saving?`⏳ সেভ হচ্ছে... (${saveProgress.done}/${saveProgress.total}) • ${saveElapsedSec}s`:`💾 ${approvedCount}টা প্রশ্ন Sheet-এ সেভ করো`}
             </button>
             {saving && (
               <div style={{marginTop:8}}>
@@ -576,7 +576,7 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
       <FailedQueuePanel push={push} sourceFilter="QBank→Quiz"/>
 
       <div style={{fontSize:11,color:C.muted,lineHeight:1.6}}>
-        Save Location দিয়ে Google Sheet অথবা Firebase — যেকোনো একটাতে সরাসরি সেভ করা যায়। কোনো রো সেভ করতে ব্যর্থ হলে সেটা ক্যাশে জমা থাকে — উপরে "ব্যর্থ হওয়া আইটেম ক্যাশ" থেকে পরে আবার পাঠানো যাবে।
+        কনভার্ট শেষে সব approved প্রশ্ন সরাসরি Google Sheet-এ সেভ হয়। কোনো রো সেভ করতে ব্যর্থ হলে সেটা ক্যাশে জমা থাকে — উপরে "ব্যর্থ হওয়া আইটেম ক্যাশ" থেকে পরে আবার পাঠানো যাবে।
       </div>
     </div>
   );
