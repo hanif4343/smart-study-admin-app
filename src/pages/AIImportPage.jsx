@@ -28,7 +28,10 @@ function AIImportPage({push,onSendToBulk}){
   const stopRef=useRef(false);
   const[archivedEntryId,setArchivedEntryId]=useState(null); // এই OCR ব্যাচের Archive এন্ট্রি — সফল Submit হলে ডিলিট হবে
 
-  /* ── Direct-submit metadata (Subject/Subtopic/Tags) — Bulk পেজে না গিয়ে সরাসরি Firebase-এ পাঠানোর জন্য ── */
+  /* ── Direct-submit metadata (Subject/Subtopic/Tags) — Bulk পেজে না গিয়ে সরাসরি Google Sheet-এ পাঠানোর জন্য।
+     MCQ-তে এখন প্রতি লাইনে নিজস্ব subject;topic থাকে (নতুন প্যাটার্ন) — নিচের subject/subtopic
+     ফিল্ড তখন শুধু fallback (লাইনে খালি থাকলে ব্যবহার হবে)। Written/Study-তে আগের মতোই সব
+     এন্ট্রির জন্য এই একটাই subject/subtopic ব্যবহার হয়। ── */
   const[targetMode,setTargetMode]=useState("Quiz"); // Quiz | QBank — শুধু ocrQtype "Study" না হলে relevant
   const[subject,setSubject]=useState("");
   const[subtopic,setSubtopic]=useState("");
@@ -43,7 +46,7 @@ function AIImportPage({push,onSendToBulk}){
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
-  const effMode=ocrQtype==="Study"?"Study":targetMode; // Firebase sheet
+  const effMode=ocrQtype==="Study"?"Study":targetMode; // টার্গেট Sheet
   const effQtype=ocrQtype==="Study"?"Study":ocrQtype;  // MCQ | Written | Study
 
   /* Subject autocomplete — target sheet অনুযায়ী লোড হয় */
@@ -62,11 +65,13 @@ function AIImportPage({push,onSendToBulk}){
   };
   const removeTag=(t)=>setAudienceTags(p=>p.filter(x=>x!==t));
 
-  /* ── Direct submit — Bulk পেজে না গিয়ে এখান থেকেই সরাসরি Google Sheet অথবা Firebase-এ পাঠায় ── */
+  /* ── Direct submit — Bulk পেজে না গিয়ে এখান থেকেই সরাসরি Google Sheet-এ পাঠায় ── */
   const directSubmit=async()=>{
     const toParse=(parsedAll&&parsedAll.trim())?parsedAll:ocrAll;
     if(!toParse.trim()){push("warn","আগে OCR চালান","");return;}
-    if(!subject.trim()){push("warn","⚠️ Subject লিখুন","");return;}
+    // MCQ-তে subject/topic প্রতি লাইনে টাইপ করা থাকে (নতুন প্যাটার্ন) — তাই এখানে
+    // আগে থেকে Subject লেখা বাধ্যতামূলক না, শুধু Written/Study-তে দরকার।
+    if(effQtype!=="MCQ" && effQtype!=="Written" && !subject.trim()){push("warn","⚠️ Subject লিখুন","");return;}
     const entries=getBulkEntries(toParse).map(l=>parseBulkEntry(l,effQtype)).filter(r=>r.ok);
     if(!entries.length){
       push("warn","⚠️ কোনো valid প্রশ্ন পাওয়া যায়নি","Prompt Copy দিয়ে Gemini-তে format করে আবার আনুন");
@@ -75,14 +80,21 @@ function AIImportPage({push,onSendToBulk}){
     setDirectRunning(true);
     setDirectProgress({done:0,total:entries.length,sent:0,failed:0});
 
-    // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
-    // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
-    const rows=entries.map(item=>buildSheetRow({item,subject,subtopic,qtype:effQtype,audienceTags}));
+    // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে)।
+    // MCQ-তে প্রতিটা লাইনের নিজস্ব subject/topic (item.subject/item.topic) ব্যবহার হয়,
+    // লাইনে খালি থাকলেই শুধু ওপরের global subject/subtopic ফিল্ড fallback হিসেবে বসে।
+    const rows=entries.map(item=>buildSheetRow({
+      item,
+      subject:(item.subject&&item.subject.trim())||subject,
+      subtopic:(item.topic&&item.topic.trim())||subtopic,
+      qtype:effQtype,audienceTags
+    }));
     const result=await saveRowsToSheet({rows,targetTab:effMode,gasSecret,push});
     setDirectProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setDirectRunning(false);
     if(result.failedRows.length) pushFailedItems("AI Import (OCR)","sheet",effMode,result.failedRows);
-    if(result.added>0) push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${effMode} — ${subject}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
+    const subjLabel=(effQtype==="MCQ"||effQtype==="Written")?[...new Set(entries.map(e=>e.subject).filter(Boolean))].join(", ")||subject:subject;
+    if(result.added>0) push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${effMode} — ${subjLabel}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
     if(result.failedRows.length) push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if((result.added>0||result.skipped>0)&&archivedEntryId){ archiveDelete(archivedEntryId); setArchivedEntryId(null); }
   };
@@ -540,18 +552,24 @@ function AIImportPage({push,onSendToBulk}){
               </div>
             )}
 
-            {/* Subject & Subtopic */}
+            {/* Subject & Subtopic — MCQ-তে এখন প্রতি লাইনে টাইপ করা থাকে (নতুন প্যাটার্ন), তাই
+                এখানে "ঐচ্ছিক/fallback" — লাইনে খালি থাকলেই শুধু এটা ব্যবহার হবে */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
               <div className="fld" style={{marginBottom:0}}>
-                <label>📚 Subject</label>
-                <input className="inp" list="ocr-sl" value={subject} onChange={e=>setSubject(e.target.value)} placeholder="Subject..."/>
+                <label>📚 Subject{(effQtype==="MCQ"||effQtype==="Written")?" (fallback, ঐচ্ছিক)":""}</label>
+                <input className="inp" list="ocr-sl" value={subject} onChange={e=>setSubject(e.target.value)} placeholder={(effQtype==="MCQ"||effQtype==="Written")?"লাইনে না থাকলে এটা ব্যবহার হবে":"Subject..."}/>
                 <datalist id="ocr-sl">{subjectList.map((s,i)=><option key={i} value={s}/>)}</datalist>
               </div>
               <div className="fld" style={{marginBottom:0}}>
-                <label>📌 Sub-Topic</label>
+                <label>📌 Sub-Topic{(effQtype==="MCQ"||effQtype==="Written")?" (fallback, ঐচ্ছিক)":""}</label>
                 <input className="inp" value={subtopic} onChange={e=>setSubtopic(e.target.value)} placeholder="Sub topic..."/>
               </div>
             </div>
+            {(effQtype==="MCQ"||effQtype==="Written")&&(
+              <div style={{fontSize:10,color:C.muted,marginTop:-4,marginBottom:8}}>
+                📝 MCQ/Written — দুটোতেই এখন প্রতিটা লাইনের শেষে Subject;Topic টাইপ করবে — এই বক্স দুটো শুধু fallback।
+              </div>
+            )}
 
             {/* Audience Tags */}
             <div style={{marginBottom:10}}>
@@ -594,7 +612,7 @@ function AIImportPage({push,onSendToBulk}){
 
             <button className="btn" disabled={directRunning} onClick={directSubmit}
               style={{background:"#052e16",color:"#10b981",borderColor:"#10b981",justifyContent:"center",width:"100%"}}>
-              {directRunning?`⏳ Submit হচ্ছে... (${directProgress.done}/${directProgress.total})`:`🚀 ${effMode} → ${saveLoc==="sheet"?"Sheet":"Firebase"}-এ সরাসরি Submit করুন`}
+              {directRunning?`⏳ Submit হচ্ছে... (${directProgress.done}/${directProgress.total})`:`🚀 ${effMode} → Sheet-এ সরাসরি Submit করুন`}
             </button>
             <button className="btn" onClick={sendToBulk}
               style={{justifyContent:"center",width:"100%",marginTop:6,fontSize:11,background:"transparent",color:C.muted,borderColor:C.border}}>
