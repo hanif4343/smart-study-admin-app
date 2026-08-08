@@ -1,170 +1,120 @@
-name: Build Smart Study APK
-
-on:
-  push:
-    branches: [ "**" ]        # সব branch এ build হবে
-  workflow_dispatch:
+name: Build APK
+on: [push]
 
 jobs:
   build:
     runs-on: ubuntu-latest
-
-    env:
-      FCM_PROJECT_ID:   ${{ secrets.FCM_PROJECT_ID }}
-      FCM_CLIENT_EMAIL: ${{ secrets.FCM_CLIENT_EMAIL }}
-      FCM_PRIVATE_KEY:  ${{ secrets.FCM_PRIVATE_KEY }}
-      GAS_URL:          ${{ secrets.GAS_URL }}
-      GAS_SECRET:       ${{ secrets.GAS_SECRET }}
-
     steps:
-      - name: Checkout
+      - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Install Dependencies
+        run: npm install
 
-      - name: Accept licenses & install SDK
-        run: |
-          yes | sdkmanager --licenses || true
-          sdkmanager "build-tools;34.0.0" "platforms;android-34" "platform-tools"
-
-      # ── Gradle wrapper ──
-      - name: Install Gradle & generate wrapper
-        run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.4-bin.zip -O /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d /tmp/
-          export GRADLE_BIN="/tmp/gradle-8.4/bin/gradle"
-          chmod +x "$GRADLE_BIN"
-          mkdir -p gradle/wrapper
-          "$GRADLE_BIN" wrapper --gradle-version=8.4 --distribution-type=bin
-          chmod +x gradlew
-          echo "✅ Wrapper generated"
-
-      # ── google-services.json ──
-      - name: Create google-services.json
-        run: echo "${{ secrets.GOOGLE_SERVICES_JSON }}" | base64 --decode > app/google-services.json
-
-      # ── Bengali fonts ──
-      - name: Download Noto Sans Bengali fonts
-        run: |
-          mkdir -p app/src/main/res/font
-          BASE="https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSansBengali"
-          curl -fsSL "${BASE}/NotoSansBengali-Regular.ttf"   -o app/src/main/res/font/noto_sans_bengali_regular.ttf
-          curl -fsSL "${BASE}/NotoSansBengali-Medium.ttf"    -o app/src/main/res/font/noto_sans_bengali_medium.ttf
-          curl -fsSL "${BASE}/NotoSansBengali-SemiBold.ttf"  -o app/src/main/res/font/noto_sans_bengali_semibold.ttf
-          curl -fsSL "${BASE}/NotoSansBengali-Bold.ttf"      -o app/src/main/res/font/noto_sans_bengali_bold.ttf
-          curl -fsSL "${BASE}/NotoSansBengali-ExtraBold.ttf" -o app/src/main/res/font/noto_sans_bengali_extrabold.ttf
-          ls -lh app/src/main/res/font/
-
-      # ── App icons ──
-      - name: Generate app icons
-        run: |
-          sudo apt-get install -y imagemagick 2>/dev/null || true
-          for entry in "mdpi:48" "hdpi:72" "xhdpi:96" "xxhdpi:144" "xxxhdpi:192"; do
-            density="${entry%%:*}"
-            px="${entry##*:}"
-            dir="app/src/main/res/mipmap-${density}"
-            mkdir -p "$dir"
-            convert -size "${px}x${px}" xc:"#4F46E5" \
-              -fill white -font DejaVu-Sans-Bold \
-              -pointsize $((px * 35 / 100)) \
-              -gravity Center -annotate 0 "SS" \
-              "${dir}/ic_launcher.png" 2>/dev/null || \
-            python3 -c "
-          import struct,zlib
-          w,h=$px,$px
-          raw=b''.join(b'\x00'+bytes([79,70,229]*w) for _ in range(h))
-          c=zlib.compress(raw)
-          def ch(t,d):
-              return struct.pack('>I',len(d))+t+d+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)
-          png=b'\x89PNG\r\n\x1a\n'+ch(b'IHDR',struct.pack('>IIBBBBB',w,h,8,2,0,0,0))+ch(b'IDAT',c)+ch(b'IEND',b'')
-          open('${dir}/ic_launcher.png','wb').write(png)
-          "
-            cp "${dir}/ic_launcher.png" "${dir}/ic_launcher_round.png"
-            cp "${dir}/ic_launcher.png" "${dir}/ic_launcher_foreground.png"
-          done
-          echo "Icons done"
-
-      # ── Remove duplicate files ──
-      - name: Remove duplicate files
-        run: |
-          rm -f app/src/main/java/com/hanif/smartstudy/ui/menu/sections/StatsScreen.kt
-          rm -f app/src/main/java/com/hanif/smartstudy/ui/menu/sections/ProfileScreen.kt
-          rm -f app/src/main/java/com/hanif/smartstudy/ui/menu/sections/MenuScreen.kt
-          echo "Cleaned"
-
-      # ── Inject secrets ──
-      - name: Inject API keys
-        run: |
-          sed -i 's|%%FIREBASE_URL%%|${{ secrets.FIREBASE_URL }}|g'     app/build.gradle
-          sed -i 's|%%GEMINI_API_KEY%%|${{ secrets.GEMINI_API_KEY }}|g' app/build.gradle
-          sed -i 's|%%IMGBB_API_KEY%%|${{ secrets.IMGBB_API_KEY }}|g'   app/build.gradle
-          sed -i 's|%%TYPING_AI_ENDPOINT%%|${{ secrets.TYPING_AI_ENDPOINT }}|g' app/build.gradle
-          sed -i 's|%%TYPING_AI_SECRET%%|${{ secrets.TYPING_AI_SECRET }}|g'     app/build.gradle
-
-      # ── Auto versionCode ──
-      - name: Set versionCode
-        run: sed -i "s/versionCode [0-9]*/versionCode ${{ github.run_number }}/" app/build.gradle
-
-      # ── Keystore ──
-      - name: Decode Keystore
-        run: echo -n "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/smartstudy.jks
-
-      # ── Signed Release APK — এখন সব branch এই build হবে (আগে শুধু main/master) ──
-      - name: Build Signed Release APK
+      - name: Web Build
         env:
-          KEYSTORE_FILE: "smartstudy.jks"
-          KEYSTORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
-          KEY_ALIAS: "hanif-alias"
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: ./gradlew assembleRelease --no-daemon
+          VITE_FB_API_KEY:         ${{ secrets.VITE_FB_API_KEY }}
+          VITE_FB_AUTH_DOMAIN:     ${{ secrets.VITE_FB_AUTH_DOMAIN }}
+          VITE_FB_DATABASE_URL:    ${{ secrets.VITE_FB_DATABASE_URL }}
+          VITE_FB_PROJECT_ID:      ${{ secrets.VITE_FB_PROJECT_ID }}
+          VITE_FB_DB_SECRET:       ${{ secrets.VITE_FB_DB_SECRET }}
+          VITE_IMGBB_API_KEY:      ${{ secrets.VITE_IMGBB_API_KEY }}
+          VITE_FCM_CLIENT_EMAIL:   ${{ secrets.VITE_FCM_CLIENT_EMAIL }}
+          VITE_FCM_PRIVATE_KEY:    ${{ secrets.VITE_FCM_PRIVATE_KEY }}
+          VITE_GAS_URL:            ${{ secrets.VITE_GAS_URL }}
+        run: npm run build
 
-      - name: Rename Release APK
+      - name: Initialize Capacitor
         run: |
-          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -1)
-          if [ -n "$APK" ]; then
-            mv "$APK" app/build/outputs/apk/release/SmartStudy.apk
-            echo "✅ Renamed: SmartStudy.apk"
-          else
-            echo "No release APK found!"
+          npx cap init "SmartAdmin" "com.smartstudy.admin" --web-dir dist
+          # cap init overwrites capacitor.config.json — restore server block
+          printf '{\n  "appId": "com.smartstudy.admin",\n  "appName": "Smart Admin",\n  "webDir": "dist",\n  "server": {\n    "hostname": "localhost",\n    "androidScheme": "https"\n  }\n}\n' > capacitor.config.json
+
+      - name: Add Android Platform
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Add google-services.json (Admin app FCM config)
+        run: |
+          printf '%s' "${{ secrets.ADMIN_GOOGLE_SERVICES_JSON_BASE64 }}" | base64 --decode > android/app/google-services.json
+          echo "── google-services.json byte size: $(wc -c < android/app/google-services.json) bytes"
+          if ! python3 -m json.tool android/app/google-services.json > /dev/null 2>&1; then
+            echo "❌ google-services.json is NOT valid JSON after decode — the ADMIN_GOOGLE_SERVICES_JSON_BASE64 secret is likely truncated or corrupted."
+            echo "── First 200 chars of decoded file: ──"
+            head -c 200 android/app/google-services.json
+            echo ""
+            echo "── Last 200 chars of decoded file: ──"
+            tail -c 200 android/app/google-services.json
             exit 1
           fi
+          echo "✅ google-services.json decoded and is valid JSON"
 
-      - name: Upload Release APK (artifact — backup, zip আকারে)
+      - name: Final Capacitor Sync (Camera + other @capacitor/* plugins)
+        run: |
+          npx cap sync android
+          echo "── settings.gradle ──"
+          cat android/settings.gradle
+          echo "── app/build.gradle dependencies ──"
+          grep -A 30 "^dependencies" android/app/build.gradle | head -40
+          echo "── capacitor.plugins.json ──"
+          cat android/app/src/main/assets/capacitor.plugins.json
+
+      - name: Inject Custom Plugins + Permissions (MLKit OCR + Background Sync)
+        run: |
+          PKG_DIR="android/app/src/main/java/com/smartstudy/admin"
+          mkdir -p "$PKG_DIR"
+          python3 android-src/add_mlkit.py
+          echo "── capacitor.plugins.json after inject ──"
+          cat android/app/src/main/assets/capacitor.plugins.json
+          echo "── MainActivity.kt content check ──"
+          grep "registerPlugin\|CameraPlugin\|import com.capacitorjs" "$PKG_DIR/MainActivity.kt" || echo "❌ MainActivity.kt missing or registerPlugin not found"
+          echo "── All .kt files in pkg dir ──"
+          ls -la "$PKG_DIR/"
+          echo "── settings.gradle camera check ──"
+          grep -i "camera" android/settings.gradle || echo "camera NOT in settings.gradle"
+          echo "── app/build.gradle camera check ──"
+          grep -i "camera" android/app/build.gradle || echo "camera NOT in app/build.gradle"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Decode Keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
+
+      - name: Build Android Release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: hanif-alias
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/release.keystore \
+            -Pandroid.injected.signing.store.password=$KEYSTORE_PASSWORD \
+            -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
+            -Pandroid.injected.signing.key.password=$KEY_PASSWORD
+
+      - name: Upload Signed APK
         uses: actions/upload-artifact@v4
         with:
-          name: SmartStudy-Release-${{ github.run_number }}
-          path: app/build/outputs/apk/release/SmartStudy.apk
-          if-no-files-found: error
-
-      # ── GitHub Release — এখন সব branch এই তৈরি হবে, সরাসরি .apk ডাউনলোড হবে (zip না) ──
-      - name: Get version
-        id: ver
-        run: |
-          VN=$(grep 'versionName' app/build.gradle | sed 's/.*"\(.*\)".*/\1/' | tr -d ' ')
-          echo "tag=v${VN}-b${{ github.run_number }}" >> $GITHUB_OUTPUT
-          echo "title=Smart Study v${VN} (Build ${{ github.run_number }}) [${{ github.ref_name }}]" >> $GITHUB_OUTPUT
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.ver.outputs.tag }}
-          name:     ${{ steps.ver.outputs.title }}
-          body: |
-            ## 📚 Smart Study
-
-            নিচের **SmartStudy.apk** ডাউনলোড করো (সরাসরি .apk, zip extract করা লাগবে না)।
-            > Settings → Unknown sources চালু করে install করো।
-
-            🔨 Build \#${{ github.run_number }} | Branch: ${{ github.ref_name }} | 💬 ${{ github.event.head_commit.message }}
-          files: app/build/outputs/apk/release/SmartStudy.apk
-          make_latest: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: SmartAdmin-Release-APK
+          path: android/app/build/outputs/apk/release/app-release.apk
