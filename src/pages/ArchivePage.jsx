@@ -8,14 +8,15 @@
    — কোনো কারণে কাজ কেটে গেলে/হারিয়ে গেলে AI-কে আবার কল না করেই
      (limit বাঁচিয়ে) এখান থেকে ফিরে পাওয়া যায়
    ══════════════════════════════════════════════════════════════════ */
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { C } from "../core/config.js";
 import { nowTs } from "../core/utils.js";
 import {
   getBulkEntries, parseBulkEntry, buildBulkRecord, buildSheetRow,
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
 } from "../core/uploaderUtils.js";
-import { saveRowsToSheet } from "../core/sheetSave.js";
+import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
+import { resolveSubjectTopicForEntries } from "../core/referenceHelpers.js";
 import { archiveList, archiveUpdate, archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
@@ -35,6 +36,12 @@ function ArchivePage({push,onSendToBulk}){
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[submittingId,setSubmittingId]=useState(null);
+
+  /* ── Subjects/Topics রেফারেন্স টেবিল — Submit-এর আগে subject/topic টেক্সট থেকে
+     subject_id/topic_id বের করতে লাগে (raw text sheet-এ যায় না) ── */
+  const[refData,setRefData]=useState(null);
+  useEffect(()=>{ fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); },[gasSecret]);
+  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===targetMode):[];
 
   const sources=useMemo(()=>["All",...new Set(entries.map(e=>e.source))],[entries]);
   const filtered=useMemo(()=>entries.filter(e=>{
@@ -76,23 +83,32 @@ function ArchivePage({push,onSendToBulk}){
     const effQtype=src.qtype||"Written";
     const items=getBulkEntries(src.text).map(l=>parseBulkEntry(l,effQtype)).filter(r=>r.ok);
     if(!items.length){push("warn","⚠️ কোনো valid প্রশ্ন পাওয়া যায়নি","format ঠিক আছে কিনা দেখুন");return;}
-    const subject=(src.subject||"").trim()||"(অজানা বিষয়)";
+    const subject=(src.subject||"").trim();
     const subtopic=(src.subtopic||"").trim()||subject;
+    if(!subject && !items.some(i=>i.subject)){
+      push("warn","⚠️ Subject লিখুন (উপরে এডিট করে, অথবা প্রতিটা লাইনে Subject;Topic টাইপ করো)","");return;
+    }
+    if(!refData){push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো","");return;}
     setSubmittingId(e.id);
 
-    // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে)।
-    // MCQ-তে প্রতিটা লাইনের নিজস্ব subject;topic (item.subject/item.topic) থাকলে সেটাই
-    // ব্যবহার হয়, না থাকলে ওপরের Archive entry-র subject/subtopic fallback হিসেবে বসে।
-    const rows=items.map(item=>buildSheetRow({
-      item,
-      subject:(item.subject&&item.subject.trim())||subject,
-      subtopic:(item.topic&&item.topic.trim())||subtopic,
-      qtype:effQtype,audienceTags:[]
+    // ── প্রতিটা এন্ট্রির subject/topic (বা fallback হিসেবে Archive entry-র subject/subtopic)
+    // থেকে subject_id/topic_id রেজলভ করা হয় — raw text কখনো sheet-এ যায় না (QBank-এ তো
+    // plain "subject" কলামই নেই) ──
+    const r=await resolveSubjectTopicForEntries({
+      entries:items, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:targetMode, push,
+      fallbackSubject:subject, fallbackTopic:subtopic,
+    });
+    if(!r.ok){ setSubmittingId(null); push("error","❌ "+r.reason,""); return; }
+    if(r.anyCreated) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+
+    const rows=r.resolved.map(({item,subjectId,topicId,subjectName,topicName})=>buildSheetRow({
+      item, subject:subjectName, subtopic:topicName,
+      qtype:effQtype, audienceTags:[], subjectId, topicId,
     }));
     const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
     if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
     setSubmittingId(null);
-    const subjLabel=(effQtype==="MCQ"||effQtype==="Written")?[...new Set(items.map(i=>i.subject).filter(Boolean))].join(", ")||subject:subject;
+    const subjLabel=[...new Set(r.resolved.map(x=>x.subjectName))].join(", ");
     if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,`${targetMode} — ${subjLabel}`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
     if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if(res.added>0||res.skipped>0){
