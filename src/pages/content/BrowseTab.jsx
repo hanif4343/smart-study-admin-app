@@ -18,7 +18,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../../core/config.js";
 import { useSheetRows, invalidate } from "../../core/dataCache.js";
 import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
-import { deleteIdsInSheet, saveRowsToSheet } from "../../core/sheetSave.js";
+import { deleteIdsInSheet, saveRowsToSheet, fetchReferenceData, fetchAllExamAppearances } from "../../core/sheetSave.js";
 import { buildSheetRow } from "../../core/uploaderUtils.js";
 import { callAiProviderRotatingRaw, buildKeyPool, OCR_SPLIT_RULES, OCR_NOISE_RULES, OCR_CORRECTION_RULES } from "../../core/ocrProviders.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
@@ -106,7 +106,14 @@ function BrowseTab({push,tick}){
 
   const{data:raw,loading}=useSheetRows(sheet, (tick||0)+localTick*1000);
   const[search,setSearch]=useState("");
-  const[filterSub,setFilterSub]=useState("all");
+  // ── পুরনো raw-text ভিত্তিক filterSub সরিয়ে subject_id/topic_id (Quiz/Study) ও
+  // post_id/institution_id/year (QBank, Exam_Appearances দিয়ে) ভিত্তিক ফিল্টার —
+  // অর্ডার: Audience → Sheet → Subject→Topic (Quiz/Study) অথবা Post→Institution→Year (QBank) ──
+  const[filterSubjectId,setFilterSubjectId]=useState("all");
+  const[filterTopicId,setFilterTopicId]=useState("all");
+  const[filterPostId,setFilterPostId]=useState("all");
+  const[filterInstId,setFilterInstId]=useState("all");
+  const[filterYear,setFilterYear]=useState("all");
   const[filterAudience,setFilterAudience]=useState("all");
   const[viewMode,setViewMode]=useState("all"); // "all" | "duplicates" | "suspicious"
   const[editing,setEditing]=useState(null);
@@ -126,8 +133,63 @@ function BrowseTab({push,tick}){
   const PAGE=20;
 
   const allQ=useMemo(()=>toArr(raw).reverse(),[raw]);
-  const subjects=useMemo(()=>["all",...new Set(allQ.map(q=>(q.Subject||q.subject||"").trim()).filter(Boolean))]
-  ,[allQ]);
+
+  /* ── Subjects/Topics/Posts/Institutions রেফারেন্স টেবিল + পুরো Exam_Appearances —
+     নতুন ধাপে ধাপে ফিল্টারের জন্য (Subject→Topic / Post→Institution→Year) ── */
+  const[refData,setRefData]=useState(null);
+  const[allAppearances,setAllAppearances]=useState([]);
+  useEffect(()=>{
+    if(!gasSecret)return;
+    fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+    fetchAllExamAppearances({gasSecret}).then(r=>setAllAppearances(r.ok?r.appearances:[])).catch(()=>{});
+  },[gasSecret,localTick]);
+
+  const subjectOptions=useMemo(()=>refData?(refData.subjects||[]).filter(s=>s.sheet===sheet):[],[refData,sheet]);
+  const topicOptions=useMemo(()=>filterSubjectId==="all"||!refData?[]:(refData.topics||[]).filter(t=>String(t.subject_id)===String(filterSubjectId)),[refData,filterSubjectId]);
+  // ── নাম-দিয়ে-খোঁজার fallback map — পুরনো এন্ট্রিতে subject_id/topic_id না থাকলে
+  // (আগের raw-text সময়ের ডেটা) নামের সাথে মিলিয়ে ধরার জন্য ──
+  const subjectNameOf=useMemo(()=>{const m={};subjectOptions.forEach(s=>{m[s.subject_id]=s.subject_name;});return m;},[subjectOptions]);
+  const topicNameOf=useMemo(()=>{const m={};(refData?.topics||[]).forEach(t=>{m[t.topic_id]=t.topic_name;});return m;},[refData]);
+
+  // ── QBank appearances থেকে Post/Institution/Year অপশন — শুধু যেগুলোর অন্তত ১টা
+  // প্রশ্ন আছে সেগুলোই দেখানো হয় (খালি ফিল্টার দেখিয়ে লাভ নেই) ──
+  const postNameOf=useMemo(()=>{const m={};(refData?.posts||[]).forEach(p=>{m[p.post_id]=p.post_name;});return m;},[refData]);
+  const instNameOf=useMemo(()=>{const m={};(refData?.institutions||[]).forEach(i=>{m[i.institution_id]=i.institution_name;});return m;},[refData]);
+  const postOptions=useMemo(()=>{
+    const cnt={};
+    allAppearances.forEach(a=>{cnt[a.post_id]=(cnt[a.post_id]||0)+1;});
+    return Object.entries(cnt).map(([id,count])=>({id,name:postNameOf[id]||id,count})).sort((a,b)=>b.count-a.count);
+  },[allAppearances,postNameOf]);
+  const instOptions=useMemo(()=>{
+    const scoped=filterPostId==="all"?allAppearances:allAppearances.filter(a=>String(a.post_id)===String(filterPostId));
+    const cnt={};
+    scoped.forEach(a=>{cnt[a.institution_id]=(cnt[a.institution_id]||0)+1;});
+    return Object.entries(cnt).map(([id,count])=>({id,name:instNameOf[id]||id,count})).sort((a,b)=>b.count-a.count);
+  },[allAppearances,filterPostId,instNameOf]);
+  const yearOptions=useMemo(()=>{
+    let scoped=filterPostId==="all"?allAppearances:allAppearances.filter(a=>String(a.post_id)===String(filterPostId));
+    if(filterInstId!=="all")scoped=scoped.filter(a=>String(a.institution_id)===String(filterInstId));
+    const cnt={};
+    scoped.forEach(a=>{cnt[a.year]=(cnt[a.year]||0)+1;});
+    return Object.entries(cnt).map(([y,count])=>({year:y,count})).sort((a,b)=>b.year.localeCompare(a.year));
+  },[allAppearances,filterPostId,filterInstId]);
+
+  // ── নির্বাচিত Post/Institution/Year অনুযায়ী কোন question_id-গুলো ম্যাচ করে, সেই Set —
+  // QBank রো ফিল্টার করার সময় q.id/q.ID এই Set-এ আছে কিনা চেক হয় ──
+  const matchingQuestionIds=useMemo(()=>{
+    if(filterPostId==="all"&&filterInstId==="all"&&filterYear==="all")return null; // কোনো filter নেই
+    let scoped=allAppearances;
+    if(filterPostId!=="all")scoped=scoped.filter(a=>String(a.post_id)===String(filterPostId));
+    if(filterInstId!=="all")scoped=scoped.filter(a=>String(a.institution_id)===String(filterInstId));
+    if(filterYear!=="all")scoped=scoped.filter(a=>String(a.year)===String(filterYear));
+    return new Set(scoped.map(a=>String(a.question_id)));
+  },[allAppearances,filterPostId,filterInstId,filterYear]);
+
+  // ── sheet বদলালে বা parent filter বদলালে dependent filter রিসেট ──
+  useEffect(()=>{ setFilterSubjectId("all");setFilterTopicId("all");setFilterPostId("all");setFilterInstId("all");setFilterYear("all"); },[sheet]);
+  useEffect(()=>{ setFilterTopicId("all"); },[filterSubjectId]);
+  useEffect(()=>{ setFilterInstId("all");setFilterYear("all"); },[filterPostId]);
+  useEffect(()=>{ setFilterYear("all"); },[filterInstId]);
 
   // ── group_id → সব সদস্যের ম্যাপ (একই sheet-এর মধ্যে) — ডিলিটের আগে group
   // চেক করার জন্য। allQ পুরো sheet-এর সব রো (Sheet-সোর্স, পুরনো Firebase-only
@@ -203,15 +265,36 @@ function BrowseTab({push,tick}){
         return tagRaw.split(",").map(t=>t.trim()).includes(filterAudience);
       });
     }
-    if(filterSub!=="all")arr=arr.filter(q=>(q.Subject||q.subject||"").trim()===filterSub);
+    if(sheet==="QBank"){
+      // ── Post/Institution/Year (Exam_Appearances-ভিত্তিক) ──
+      if(matchingQuestionIds) arr=arr.filter(q=>matchingQuestionIds.has(String(q.id||q.ID||"")));
+    } else {
+      // ── Subject → Topic (subject_id/topic_id, পুরনো raw-text এন্ট্রির জন্য নাম-ফলব্যাক সহ) ──
+      if(filterSubjectId!=="all"){
+        const wantName=(subjectNameOf[filterSubjectId]||"").trim().toLowerCase();
+        arr=arr.filter(q=>{
+          const sid=(q.subject_id||q.Subject_id||"").toString();
+          if(sid) return sid===String(filterSubjectId);
+          return (q.Subject||q.subject||"").trim().toLowerCase()===wantName; // fallback: subject_id নেই এমন পুরনো রো
+        });
+      }
+      if(filterTopicId!=="all"){
+        const wantName=(topicNameOf[filterTopicId]||"").trim().toLowerCase();
+        arr=arr.filter(q=>{
+          const tid=(q.topic_id||q.Topic_id||"").toString();
+          if(tid) return tid===String(filterTopicId);
+          return (q.Sub_topic||q.sub_topic||q.Topics||q.topic||"").trim().toLowerCase()===wantName; // fallback
+        });
+      }
+    }
     if(search.trim()){
       const qlo=search.toLowerCase();
       arr=arr.filter(q=>[(q.Question||q.question||""),(q.Subject||q.subject||""),(q.Sub_topic||q.sub_topic||""),(q.Correct||q.correct||"")].join(" ").toLowerCase().includes(qlo));
     }
     return arr;
-  },[viewMode,duplicateQs,suspiciousQs,allQ,filterSub,filterAudience,search]);
+  },[viewMode,duplicateQs,suspiciousQs,allQ,sheet,filterSubjectId,filterTopicId,matchingQuestionIds,subjectNameOf,topicNameOf,filterAudience,search]);
 
-  useEffect(()=>setPage(0),[sheet,filterSub,filterAudience,search]);
+  useEffect(()=>setPage(0),[sheet,filterSubjectId,filterTopicId,filterPostId,filterInstId,filterYear,filterAudience,search]);
 
   const pageSlice=useMemo(()=>filtered.slice(page*PAGE,(page+1)*PAGE),[filtered,page]);
   const totalPages=Math.ceil(filtered.length/PAGE);
@@ -345,7 +428,7 @@ function BrowseTab({push,tick}){
       {/* Sheet tabs + Audience selector row */}
       <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center",flexWrap:"wrap"}}>
         {["Quiz","QBank","Study"].map(s=>(
-          <button key={s} className={`ftab${sheet===s&&viewMode==="all"?" on":""}`} onClick={()=>{setSheet(s);setFilterSub("all");setFilterAudience("all");setSearch("");setViewMode("all");}}>{s}</button>
+          <button key={s} className={`ftab${sheet===s&&viewMode==="all"?" on":""}`} onClick={()=>{setSheet(s);setFilterAudience("all");setSearch("");setViewMode("all");}}>{s}</button>
         ))}
         <button
           onClick={()=>setViewMode(v=>v==="duplicates"?"all":"duplicates")}
@@ -441,17 +524,109 @@ function BrowseTab({push,tick}){
           {audienceTags.length===0&&!loading&&<span style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>কোনো audience tag নেই</span>}
         </div>
       </div>
+      {/* ── Quiz/Study: Subject → Topic (cascading) ── */}
+      {sheet!=="QBank"&&(
+        <>
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>📚 SUBJECT</div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              <button onClick={()=>setFilterSubjectId("all")}
+                style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterSubjectId==="all"?C.accent:C.border}`,background:filterSubjectId==="all"?C.accent+"22":"transparent",color:filterSubjectId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+                🌐 সব
+              </button>
+              {subjectOptions.map(s=>(
+                <button key={s.subject_id}
+                  onClick={()=>setFilterSubjectId(filterSubjectId===s.subject_id?"all":s.subject_id)}
+                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterSubjectId===s.subject_id?C.accent:C.border}`,background:filterSubjectId===s.subject_id?C.accent+"22":"transparent",color:filterSubjectId===s.subject_id?C.accent:C.muted,cursor:"pointer",fontWeight:filterSubjectId===s.subject_id?700:500}}>
+                  {s.subject_name}
+                </button>
+              ))}
+              {subjectOptions.length===0&&!loading&&<span style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>{gasSecret?"কোনো Subject নেই":"GAS Secret Key দাও"}</span>}
+            </div>
+          </div>
+          {filterSubjectId!=="all"&&(
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>📌 TOPIC</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                <button onClick={()=>setFilterTopicId("all")}
+                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterTopicId==="all"?C.accent:C.border}`,background:filterTopicId==="all"?C.accent+"22":"transparent",color:filterTopicId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+                  🌐 সব
+                </button>
+                {topicOptions.map(t=>(
+                  <button key={t.topic_id}
+                    onClick={()=>setFilterTopicId(filterTopicId===t.topic_id?"all":t.topic_id)}
+                    style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterTopicId===t.topic_id?C.accent:C.border}`,background:filterTopicId===t.topic_id?C.accent+"22":"transparent",color:filterTopicId===t.topic_id?C.accent:C.muted,cursor:"pointer",fontWeight:filterTopicId===t.topic_id?700:500}}>
+                    {t.topic_name}
+                  </button>
+                ))}
+                {topicOptions.length===0&&<span style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>এই Subject-এ কোনো Topic নেই</span>}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      {/* ── QBank: Post → Institution → Year (cascading, Exam_Appearances থেকে) ── */}
+      {sheet==="QBank"&&(
+        <>
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>🧑‍💼 পদ (POST)</div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              <button onClick={()=>setFilterPostId("all")}
+                style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterPostId==="all"?C.accent:C.border}`,background:filterPostId==="all"?C.accent+"22":"transparent",color:filterPostId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+                🌐 সব
+              </button>
+              {postOptions.map(p=>(
+                <button key={p.id}
+                  onClick={()=>setFilterPostId(filterPostId===p.id?"all":p.id)}
+                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterPostId===p.id?C.accent:C.border}`,background:filterPostId===p.id?C.accent+"22":"transparent",color:filterPostId===p.id?C.accent:C.muted,cursor:"pointer",fontWeight:filterPostId===p.id?700:500}}>
+                  {p.name} <span style={{fontSize:9,opacity:.6}}>({p.count})</span>
+                </button>
+              ))}
+              {postOptions.length===0&&!loading&&<span style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>{gasSecret?"কোনো Exam Appearance নেই — Tools → Reference + Appearance থেকে যোগ করো":"GAS Secret Key দাও"}</span>}
+            </div>
+          </div>
+          {filterPostId!=="all"&&(
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>🏢 প্রতিষ্ঠান (INSTITUTION)</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                <button onClick={()=>setFilterInstId("all")}
+                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterInstId==="all"?C.accent:C.border}`,background:filterInstId==="all"?C.accent+"22":"transparent",color:filterInstId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+                  🌐 সব
+                </button>
+                {instOptions.map(ins=>(
+                  <button key={ins.id}
+                    onClick={()=>setFilterInstId(filterInstId===ins.id?"all":ins.id)}
+                    style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterInstId===ins.id?C.accent:C.border}`,background:filterInstId===ins.id?C.accent+"22":"transparent",color:filterInstId===ins.id?C.accent:C.muted,cursor:"pointer",fontWeight:filterInstId===ins.id?700:500}}>
+                    {ins.name} <span style={{fontSize:9,opacity:.6}}>({ins.count})</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          {filterPostId!=="all"&&filterInstId!=="all"&&(
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>📅 সাল (YEAR)</div>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                <button onClick={()=>setFilterYear("all")}
+                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterYear==="all"?C.accent:C.border}`,background:filterYear==="all"?C.accent+"22":"transparent",color:filterYear==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+                  🌐 সব
+                </button>
+                {yearOptions.map(y=>(
+                  <button key={y.year}
+                    onClick={()=>setFilterYear(filterYear===y.year?"all":y.year)}
+                    style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterYear===y.year?C.accent:C.border}`,background:filterYear===y.year?C.accent+"22":"transparent",color:filterYear===y.year?C.accent:C.muted,cursor:"pointer",fontWeight:filterYear===y.year?700:500}}>
+                    {y.year} <span style={{fontSize:9,opacity:.6}}>({y.count})</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </>
+      )}
       <div className="sw" style={{marginBottom:8}}>
         <span className="si">🔍</span>
         <input className="inp" placeholder="প্রশ্ন, বিষয়..." value={search} onChange={e=>setSearch(e.target.value)}/>
       </div>
-      {subjects.length>2&&(
-        <div className="ftabs" style={{marginBottom:8}}>
-          {subjects.slice(0,8).map(s=>(
-            <button key={s} className={`ftab${filterSub===s?" on":""}`} onClick={()=>setFilterSub(s)}>{s==="all"?"সব":s}</button>
-          ))}
-        </div>
-      )}
       <div style={{fontSize:11,color:C.muted,marginBottom:8,display:"flex",justifyContent:"space-between"}}>
         <span>{loading?"⏳":`${filtered.length} / ${allQ.length}টি`}</span>
         {totalPages>1&&<span style={{color:C.accent}}>{page+1}/{totalPages}</span>}
