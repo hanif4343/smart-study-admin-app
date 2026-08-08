@@ -1,0 +1,184 @@
+name: Release Admin APK
+
+# ── android_build.yml প্রতি push-এ শুধু Actions "Artifacts" ট্যাবে zip আকারে
+#    APK রাখে (সেটা extract না করে সরাসরি ইনস্টল করা যায় না)। এই workflow
+#    একই বিল্ড স্টেপ ব্যবহার করে কিন্তু শেষে GitHub এর "Releases" সেকশনে
+#    raw .apk ফাইল পাবলিশ করে — সেখান থেকে সরাসরি ট্যাপ করে ডাউনলোড+ইনস্টল
+#    করা যায়, zip না। Actions ট্যাব → "Release Admin APK" → "Run workflow"
+#    বাটনে ম্যানুয়ালি চালানো যায় (যেকোনো branch থেকে), অথবা vX.Y.Z ট্যাগ
+#    push করলেও অটো চলবে। ──
+on:
+  push:
+    branches: [ "main", "master" ]   # main/master-এ push হলেই অটো Release হবে
+    tags:
+      - "v*"                         # vX.Y.Z ট্যাগ push করলেও অটো
+  workflow_dispatch:                 # চাইলে অন্য যেকোনো branch থেকে ম্যানুয়ালিও চালানো যায়
+    inputs:
+      release_tag:
+        description: "Release tag (খালি রাখলে auto — vBUILD_NUMBER)"
+        required: false
+        default: ""
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Web Build
+        env:
+          VITE_FB_API_KEY:         ${{ secrets.VITE_FB_API_KEY }}
+          VITE_FB_AUTH_DOMAIN:     ${{ secrets.VITE_FB_AUTH_DOMAIN }}
+          VITE_FB_DATABASE_URL:    ${{ secrets.VITE_FB_DATABASE_URL }}
+          VITE_FB_PROJECT_ID:      ${{ secrets.VITE_FB_PROJECT_ID }}
+          VITE_FB_DB_SECRET:       ${{ secrets.VITE_FB_DB_SECRET }}
+          VITE_IMGBB_API_KEY:      ${{ secrets.VITE_IMGBB_API_KEY }}
+          VITE_FCM_CLIENT_EMAIL:   ${{ secrets.VITE_FCM_CLIENT_EMAIL }}
+          VITE_FCM_PRIVATE_KEY:    ${{ secrets.VITE_FCM_PRIVATE_KEY }}
+          VITE_GAS_URL:            ${{ secrets.VITE_GAS_URL }}
+        run: npm run build
+
+      - name: Initialize Capacitor
+        run: |
+          npx cap init "SmartAdmin" "com.smartstudy.admin" --web-dir dist
+          # cap init overwrites capacitor.config.json — restore server block
+          printf '{\n  "appId": "com.smartstudy.admin",\n  "appName": "Smart Admin",\n  "webDir": "dist",\n  "server": {\n    "hostname": "localhost",\n    "androidScheme": "https"\n  }\n}\n' > capacitor.config.json
+
+      - name: Add Android Platform
+        run: |
+          npx cap add android
+          npx cap sync android
+
+      - name: Add google-services.json (Admin app FCM config)
+        run: |
+          printf '%s' "${{ secrets.ADMIN_GOOGLE_SERVICES_JSON_BASE64 }}" | base64 --decode > android/app/google-services.json
+          echo "── google-services.json byte size: $(wc -c < android/app/google-services.json) bytes"
+          if ! python3 -m json.tool android/app/google-services.json > /dev/null 2>&1; then
+            echo "❌ google-services.json is NOT valid JSON after decode — the ADMIN_GOOGLE_SERVICES_JSON_BASE64 secret is likely truncated or corrupted."
+            echo "── First 200 chars of decoded file: ──"
+            head -c 200 android/app/google-services.json
+            echo ""
+            echo "── Last 200 chars of decoded file: ──"
+            tail -c 200 android/app/google-services.json
+            exit 1
+          fi
+          echo "✅ google-services.json decoded and is valid JSON"
+
+      - name: Final Capacitor Sync (Camera + other @capacitor/* plugins)
+        run: |
+          npx cap sync android
+          echo "── settings.gradle ──"
+          cat android/settings.gradle
+          echo "── app/build.gradle dependencies ──"
+          grep -A 30 "^dependencies" android/app/build.gradle | head -40
+          echo "── capacitor.plugins.json ──"
+          cat android/app/src/main/assets/capacitor.plugins.json
+
+      - name: Inject Custom Plugins + Permissions (MLKit OCR + Background Sync)
+        run: |
+          PKG_DIR="android/app/src/main/java/com/smartstudy/admin"
+          mkdir -p "$PKG_DIR"
+          python3 android-src/add_mlkit.py
+          echo "── capacitor.plugins.json after inject ──"
+          cat android/app/src/main/assets/capacitor.plugins.json
+          echo "── MainActivity.kt content check ──"
+          grep "registerPlugin\|CameraPlugin\|import com.capacitorjs" "$PKG_DIR/MainActivity.kt" || echo "❌ MainActivity.kt missing or registerPlugin not found"
+          echo "── All .kt files in pkg dir ──"
+          ls -la "$PKG_DIR/"
+          echo "── settings.gradle camera check ──"
+          grep -i "camera" android/settings.gradle || echo "camera NOT in settings.gradle"
+          echo "── app/build.gradle camera check ──"
+          grep -i "camera" android/app/build.gradle || echo "camera NOT in app/build.gradle"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-
+
+      - name: Decode Keystore
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > android/app/release.keystore
+
+      - name: Build Android Release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: hanif-alias
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleRelease \
+            -Pandroid.injected.signing.store.file=$GITHUB_WORKSPACE/android/app/release.keystore \
+            -Pandroid.injected.signing.store.password=$KEYSTORE_PASSWORD \
+            -Pandroid.injected.signing.key.alias=$KEY_ALIAS \
+            -Pandroid.injected.signing.key.password=$KEY_PASSWORD
+
+      - name: Rename Release APK
+        run: |
+          APK="android/app/build/outputs/apk/release/app-release.apk"
+          if [ -f "$APK" ]; then
+            mv "$APK" android/app/build/outputs/apk/release/SmartAdmin.apk
+            echo "✅ Renamed: SmartAdmin.apk"
+          else
+            echo "❌ কোনো release APK পাওয়া যায়নি!"
+            exit 1
+          fi
+
+      # ── Release tag ঠিক করা — input দিলে সেটাই, tag push হলে সেই tag, নাহলে build number দিয়ে অটো ──
+      - name: Resolve version & tag
+        id: ver
+        run: |
+          VN=$(node -p "require('./package.json').version" 2>/dev/null || echo "1.0.0")
+          if [ -n "${{ github.event.inputs.release_tag }}" ]; then
+            TAG="${{ github.event.inputs.release_tag }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            TAG="v${VN}-b${{ github.run_number }}"
+          fi
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "title=Smart Admin ${TAG} (Build ${{ github.run_number }})" >> $GITHUB_OUTPUT
+
+      # ── GitHub Release — raw .apk ফাইল আপলোড হয়, সরাসরি ডাউনলোড+ইনস্টল করা যাবে ──
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name:     ${{ steps.ver.outputs.title }}
+          body: |
+            ## 🛠️ Smart Study — Admin App Release
+
+            নিচের **SmartAdmin.apk** ফাইলে ট্যাপ করে সরাসরি ডাউনলোড করো (zip না, সরাসরি APK)।
+            > প্রথমবার ইনস্টলের সময় "Install from unknown sources" পারমিশন চাইলে Allow করে দাও।
+
+            🔨 Build #${{ github.run_number }} | Branch: ${{ github.ref_name }} | 💬 ${{ github.event.head_commit.message }}
+          files: android/app/build/outputs/apk/release/SmartAdmin.apk
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── ব্যাকআপ হিসেবে Artifacts ট্যাবেও রাখা হলো (ঐচ্ছিক — Release-ই মূল ডাউনলোড পথ) ──
+      - name: Upload Signed APK (backup artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartAdmin-Release-${{ github.run_number }}
+          path: android/app/build/outputs/apk/release/SmartAdmin.apk
+          if-no-files-found: error
