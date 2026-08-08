@@ -9,7 +9,8 @@ import {
   getBulkEntries, parseBulkEntry, buildBulkRecord, buildSheetRow,
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
 } from "../core/uploaderUtils.js";
-import { saveRowsToSheet } from "../core/sheetSave.js";
+import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
+import { resolveSubjectTopicForEntries } from "../core/referenceHelpers.js";
 import { getOcrCacheEntry, setOcrCacheEntry, clearOcrCache } from "../core/ocrCache.js";
 import { archiveAdd, archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
@@ -58,6 +59,13 @@ function AIImportPage({push,onSendToBulk}){
     }).catch(()=>{});
   },[effMode]);
 
+  /* ── Subjects/Topics রেফারেন্স টেবিল — সাবমিটের আগে subject/topic টেক্সট থেকে
+     subject_id/topic_id বের করতে লাগে (raw text কখনো sheet-এ যায় না, বিশেষ করে
+     QBank-এ তো plain "subject" কলামই নেই) ── */
+  const[refData,setRefData]=useState(null);
+  useEffect(()=>{ fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); },[gasSecret]);
+  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===effMode):[];
+
   const addTag=()=>{
     const t=tagInput.trim();
     if(t&&!audienceTags.includes(t)){setAudienceTags(p=>[...p,t]);}
@@ -69,9 +77,13 @@ function AIImportPage({push,onSendToBulk}){
   const directSubmit=async()=>{
     const toParse=(parsedAll&&parsedAll.trim())?parsedAll:ocrAll;
     if(!toParse.trim()){push("warn","আগে OCR চালান","");return;}
-    // MCQ-তে subject/topic প্রতি লাইনে টাইপ করা থাকে (নতুন প্যাটার্ন) — তাই এখানে
-    // আগে থেকে Subject লেখা বাধ্যতামূলক না, শুধু Written/Study-তে দরকার।
-    if(effQtype!=="MCQ" && effQtype!=="Written" && !subject.trim()){push("warn","⚠️ Subject লিখুন","");return;}
+    // MCQ/Written-এ subject/topic প্রতি লাইনে টাইপ করা থাকতে পারে (নতুন প্যাটার্ন) — তবে
+    // লাইনে না থাকলে নিচের global Subject/Sub-topic ফিল্ড বাধ্যতামূলক fallback হিসেবে লাগে,
+    // কারণ শেষমেশ subject_id/topic_id ছাড়া কোনো এন্ট্রিই সেভ হবে না।
+    if(!subject.trim() && !getBulkEntries(toParse).some(l=>{const r=parseBulkEntry(l,effQtype);return r.ok&&r.subject;})){
+      push("warn","⚠️ Subject লিখুন (অথবা প্রতিটা লাইনে Subject;Topic টাইপ করো)","");return;
+    }
+    if(!refData){push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো","");return;}
     const entries=getBulkEntries(toParse).map(l=>parseBulkEntry(l,effQtype)).filter(r=>r.ok);
     if(!entries.length){
       push("warn","⚠️ কোনো valid প্রশ্ন পাওয়া যায়নি","Prompt Copy দিয়ে Gemini-তে format করে আবার আনুন");
@@ -80,20 +92,25 @@ function AIImportPage({push,onSendToBulk}){
     setDirectRunning(true);
     setDirectProgress({done:0,total:entries.length,sent:0,failed:0});
 
+    // ── প্রতিটা এন্ট্রির subject/topic (বা fallback হিসেবে ওপরের গ্লোবাল ফিল্ড) থেকে
+    // subject_id/topic_id রেজলভ করা হয় — raw text কখনো sheet-এ পাঠানো হয় না ──
+    const r=await resolveSubjectTopicForEntries({
+      entries, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:effMode, push,
+      fallbackSubject:subject, fallbackTopic:subtopic||subject,
+    });
+    if(!r.ok){ setDirectRunning(false); push("error","❌ "+r.reason,""); return; }
+    if(r.anyCreated) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); // নতুন subject/topic হলে refData রিফ্রেশ
+
     // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে)।
-    // MCQ-তে প্রতিটা লাইনের নিজস্ব subject/topic (item.subject/item.topic) ব্যবহার হয়,
-    // লাইনে খালি থাকলেই শুধু ওপরের global subject/subtopic ফিল্ড fallback হিসেবে বসে।
-    const rows=entries.map(item=>buildSheetRow({
-      item,
-      subject:(item.subject&&item.subject.trim())||subject,
-      subtopic:(item.topic&&item.topic.trim())||subtopic,
-      qtype:effQtype,audienceTags
+    const rows=r.resolved.map(({item,subjectId,topicId,subjectName,topicName})=>buildSheetRow({
+      item, subject:subjectName, subtopic:topicName,
+      qtype:effQtype, audienceTags, subjectId, topicId,
     }));
     const result=await saveRowsToSheet({rows,targetTab:effMode,gasSecret,push});
     setDirectProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setDirectRunning(false);
     if(result.failedRows.length) pushFailedItems("AI Import (OCR)","sheet",effMode,result.failedRows);
-    const subjLabel=(effQtype==="MCQ"||effQtype==="Written")?[...new Set(entries.map(e=>e.subject).filter(Boolean))].join(", ")||subject:subject;
+    const subjLabel=[...new Set(r.resolved.map(x=>x.subjectName))].join(", ");
     if(result.added>0) push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${effMode} — ${subjLabel}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
     if(result.failedRows.length) push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if((result.added>0||result.skipped>0)&&archivedEntryId){ archiveDelete(archivedEntryId); setArchivedEntryId(null); }
