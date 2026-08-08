@@ -12,7 +12,7 @@
    — পুরনো AIImportPage/BulkUploaderPage অপরিবর্তিত — সম্পূর্ণ নতুন,
      আলাদা পেজ
    ══════════════════════════════════════════════════════════════════ */
-import React, { useState, useRef } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { C } from "../core/config.js";
 import { _LC } from "../core/logger.js";
 import { nowTs, uploadImageSrcToImgbb } from "../core/utils.js";
@@ -22,7 +22,9 @@ import {
   buildBulkRecord, buildSheetRow,
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
 } from "../core/uploaderUtils.js";
-import { saveRowsToSheet } from "../core/sheetSave.js";
+import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
+import { resolveOrCreateReference, resolveSubjectTopicForEntries } from "../core/referenceHelpers.js";
+import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 import { getOcrCacheEntry, setOcrCacheEntry } from "../core/ocrCache.js";
 import { archiveAdd, archiveDeleteMany } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
@@ -208,6 +210,22 @@ function MultiSubjectImportPage({push}){
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[draftGroups,setDraftGroups]=useState([]); // [{id,subject,subtopic,rows:[{q,correct}],pages:[n],included}]
   const[result,setResult]=useState(null); // {added,skipped,failed,groupCount}
+
+  /* ── Subjects/Topics রেফারেন্স টেবিল — Submit-এর আগে প্রতিটা group-এর subject/subtopic
+     টেক্সট থেকে subject_id/topic_id বের করতে লাগে (raw text sheet-এ যায় না, QBank-এ তো
+     plain "subject" কলামই নেই) ── */
+  const[refData,setRefData]=useState(null);
+  useEffect(()=>{ fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); },[gasSecret]);
+  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===targetMode):[];
+
+  /* ── QBank-এ পদ/প্রতিষ্ঠান/সাল (Exam Appearance) — ঐচ্ছিক, দিলে এই পুরো ব্যাচ একটা
+     Exam_Appearances এন্ট্রি পাবে। QBank প্রশ্ন user app-এ appearance দিয়ে ব্রাউজ হয়,
+     তাই এটা ছাড়া QBank-এ প্রশ্ন যোগ হলেও exam-appearance browse-এ দেখা যাবে না। ── */
+  const[postSel,setPostSel]=useState({id:"",name:""});
+  const[instSel,setInstSel]=useState({id:"",name:""});
+  const[examYear,setExamYear]=useState("");
+  const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
+  const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
   const[submitting,setSubmitting]=useState(false);
   const stopRef=useRef(false);
 
@@ -533,6 +551,24 @@ function MultiSubjectImportPage({push}){
       push("warn",`⚠️ ${blockedGroups.length}টা group বাদ পড়েছে`,"Subject/Sub-topic ফাঁকা — পূরণ করে আবার Submit চাপো, এখন শুধু বাকিগুলো যাচ্ছে");
     }
 
+    if(!refData){push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো","");return;}
+
+    // ── QBank + পদ/প্রতিষ্ঠান/সালের অন্তত ১টা দেওয়া থাকলে → resolve/create করে
+    // {postId,institutionId,year} বানানো হয়, পুরো ব্যাচের জন্য একবারই (BulkUploaderPage-এর
+    // মতোই) — এটা ছাড়া QBank প্রশ্ন appearance দিয়ে ব্রাউজে দেখা যাবে না। ──
+    let examAppearance=null;
+    if(targetMode==="QBank" && (postSel.name.trim()||instSel.name.trim()||examYear.trim())){
+      if(!postSel.name.trim()||!instSel.name.trim()||!examYear.trim()){
+        push("warn","⚠️ পদ, প্রতিষ্ঠান ও সাল — একটা দিলে তিনটাই দিতে হবে (অথবা তিনটাই খালি রাখো)","");
+        return;
+      }
+      const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
+      if(!postRes.ok){ push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
+      if(!instRes.ok){ push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
+    }
+
     setSubmitting(true);
     await _BGM.guard(async()=>{
 
@@ -558,17 +594,29 @@ function MultiSubjectImportPage({push}){
       const subject=g.subject.trim();
       const subtopic=g.subtopic.trim();
       const mainQpaper=groupQpaper[g.id]||"";
-      g.rows.forEach(r=>allRows.push({q:r.q,correct:r.correct,subject,subtopic,mainQpaper}));
+      g.rows.forEach(r=>allRows.push({q:r.q,correct:r.correct,subject,topic:subtopic,mainQpaper}));
     });
+
+    // ── প্রতিটা row-এর group-subject/subtopic টেক্সট থেকে subject_id/topic_id রেজলভ করা হয়
+    // (raw text sheet-এ যায় না — QBank-এ তো plain "subject" কলামই নেই) ──
+    const resolveResult=await resolveSubjectTopicForEntries({
+      entries:allRows, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:targetMode, push,
+    });
+    if(!resolveResult.ok){
+      setSubmitting(false);
+      push("error","❌ "+resolveResult.reason,"");
+      return;
+    }
+    if(resolveResult.anyCreated) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
 
     // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
     // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
-    const rows=allRows.map(item=>buildSheetRow({
+    const rows=resolveResult.resolved.map(({item,subjectId,topicId,subjectName,topicName})=>buildSheetRow({
       item:{q:item.q,correct:item.correct,explanation:""},
-      subject:item.subject,subtopic:item.subtopic,qtype:"Written",audienceTags:[],
-      mainQpaper:item.mainQpaper,
+      subject:subjectName,subtopic:topicName,qtype:"Written",audienceTags:[],
+      subjectId,topicId,mainQpaper:item.mainQpaper,
     }));
-    const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
+    const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance});
     if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
     setResult({added:res.added,skipped:res.skipped,failed:res.failedRows.length,groupCount:readyGroups.length});
     setSubmitting(false);
@@ -809,6 +857,42 @@ function MultiSubjectImportPage({push}){
             </div>
             <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={setGasSecretP}/>
           </div>
+
+          {/* পদ/প্রতিষ্ঠান/সাল — শুধু QBank mode-এ, ঐচ্ছিক। QBank প্রশ্ন user app-এ
+              exam-appearance (পদ+প্রতিষ্ঠান+সাল) দিয়ে ব্রাউজ হয় — এটা না দিলে প্রশ্ন
+              QBank-এ যোগ হবে ঠিকই, কিন্তু appearance-browse-এ কখনো দেখা যাবে না। */}
+          {targetMode==="QBank"&&(
+            <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12}}>
+              <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? (ঐচ্ছিক)</div>
+              <div style={{fontSize:10,color:C.muted,marginBottom:8}}>দিলে এই পুরো ব্যাচ একটা Exam Appearance পাবে — খালি রাখলে প্রশ্নগুলো QBank-এ যোগ হবে, কিন্তু appearance-browse-এ দেখা যাবে না।</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div className="fld" style={{marginBottom:0}}>
+                  <label>পদ (Post)</label>
+                  <TypeaheadCombo
+                    options={postOptions}
+                    value={postSel}
+                    onChange={setPostSel}
+                    placeholder="যেমন: সহকারী শিক্ষক"
+                    newLabel={`🆕 "${postSel.name.trim()}" নতুন পদ হিসেবে যোগ হবে`}
+                  />
+                </div>
+                <div className="fld" style={{marginBottom:0}}>
+                  <label>প্রতিষ্ঠান (Institution)</label>
+                  <TypeaheadCombo
+                    options={instOptions}
+                    value={instSel}
+                    onChange={setInstSel}
+                    placeholder="যেমন: প্রাথমিক বিদ্যালয়"
+                    newLabel={`🆕 "${instSel.name.trim()}" নতুন প্রতিষ্ঠান হিসেবে যোগ হবে`}
+                  />
+                </div>
+              </div>
+              <div className="fld" style={{marginBottom:0}}>
+                <label>সাল</label>
+                <input className="inp" placeholder="যেমন: 2025" value={examYear} onChange={e=>setExamYear(e.target.value)}/>
+              </div>
+            </div>
+          )}
 
           {/* Image Picker Buttons */}
           <div style={{display:"flex",gap:8,marginBottom:12}}>
