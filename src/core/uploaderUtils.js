@@ -27,29 +27,45 @@ function parseBulkEntry(entry, effectiveType){
     return{ok:true,q,correct:ans,explanation:""};
 
   } else if(effectiveType==="Written"){
-    const si=tr.indexOf(";");
-    if(si===-1)return{err:true,reason:"Written: ';' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
-    const q=tr.substring(0,si).trim();
-    const rest=tr.substring(si+1);
-    const lastSemi=rest.lastIndexOf(";");
-    let ans,exp;
-    if(lastSemi>0){
-      ans=rest.substring(0,lastSemi).trim();
-      exp=rest.substring(lastSemi+1).trim();
-    } else {
-      ans=rest.trim();exp="";
-    }
+    // ── Written প্যাটার্ন (Phase 7, MCQ-র মতোই): প্রশ্ন;উত্তর;subject;topic;ব্যাখ্যা(optional)
+    // অপশন (opt1-4) নেই, বাকি নিয়ম MCQ-র সাথে সামঞ্জস্যপূর্ণ — ২-৩ কলাম হলে পুরনো ফরম্যাট
+    // (subject/topic ছাড়া, OCR/AI Import compatibility), ৪+ কলাম হলে নতুন ফরম্যাট। ──
+    const flat=tr.replace(/\r?\n/g," ").replace(/\s+/g," ");
+    const parts=flat.split(";").map(p=>p.trim());
+    if(parts.length<2)return{err:true,reason:"Written: ';' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
+    const q=parts[0], ans=parts[1];
     if(!q)return{err:true,reason:"Written: প্রশ্ন খালি"};
     if(!ans)return{err:true,reason:"Written: উত্তর খালি"};
-    return{ok:true,q,correct:ans,explanation:exp};
+    let subject="",topic="",explanation="";
+    if(parts.length>=4){ // নতুন প্যাটার্ন: subject;topic ইনলাইন
+      subject=parts[2]; topic=parts[3]; explanation=parts[4]||"";
+      if(!subject)return{err:true,reason:"Written: Subject খালি"};
+      if(!topic)return{err:true,reason:"Written: Topic খালি"};
+    } else if(parts.length===3){ // পুরনো প্যাটার্ন: প্রশ্ন;উত্তর;ব্যাখ্যা (subject/topic ছাড়া)
+      explanation=parts[2]||"";
+    }
+    return{ok:true,q,correct:ans,subject,topic,explanation};
 
   } else {
+    // ── MCQ প্যাটার্ন (Phase 7): প্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;সঠিকউত্তর;subject;topic;ব্যাখ্যা(optional)
+    // subject/topic এখন প্রতি প্রশ্নে আলাদা করে টাইপ করা হয় (একই bulk-paste-এ ভিন্ন ভিন্ন
+    // বিষয়/টপিকের প্রশ্ন মিশিয়ে দেওয়া যায়)। ৬-৭ কলামের পুরনো ফরম্যাটও (subject/topic ছাড়া —
+    // যেমন OCR/AI Import যেখানে subject আলাদা field থেকে আসে) এখনো চলবে, সেক্ষেত্রে
+    // subject/topic খালি ফেরত যায় আর caller নিজের fallback ব্যবহার করে। ──
     const flat=tr.replace(/\r?\n/g," ").replace(/\s+/g," ");
     const parts=flat.split(";").map(p=>p.trim());
     if(parts.length<6)return{err:true,reason:`MCQ: ${parts.length}টি কলাম পেয়েছি, দরকার কমপক্ষে ৬টি (প্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;উত্তর)`};
     if(!parts[0])return{err:true,reason:"MCQ: প্রশ্ন খালি"};
     if(!parts[5])return{err:true,reason:"MCQ: সঠিক উত্তর খালি"};
-    return{ok:true,q:parts[0],opt1:parts[1],opt2:parts[2],opt3:parts[3],opt4:parts[4],correct:parts[5],explanation:parts[6]||""};
+    let subject="",topic="",explanation="";
+    if(parts.length>=8){ // নতুন প্যাটার্ন: subject;topic ইনলাইন
+      subject=parts[6]; topic=parts[7]; explanation=parts[8]||"";
+      if(!subject)return{err:true,reason:"MCQ: Subject খালি"};
+      if(!topic)return{err:true,reason:"MCQ: Topic খালি"};
+    } else if(parts.length===7){ // পুরনো প্যাটার্ন: প্রশ্ন;অপ১-৪;উত্তর;ব্যাখ্যা (subject/topic ছাড়া)
+      explanation=parts[6]||"";
+    }
+    return{ok:true,q:parts[0],opt1:parts[1],opt2:parts[2],opt3:parts[3],opt4:parts[4],correct:parts[5],subject,topic,explanation};
   }
 }
 const getBulkEffectiveType=(m,qt)=> m==="Study"?"Study":qt;
