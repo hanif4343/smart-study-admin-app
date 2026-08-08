@@ -13,17 +13,19 @@ const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
 
 /**
  * sel: {id,name} — TypeaheadCombo-র value (id ফাঁকা মানে বিদ্যমান তালিকায় হুবহু মিল নেই)
- * refType: "posts" | "institutions" (addReferenceItem-এর refType)
+ * refType: "posts" | "institutions" | "subjects" | "topics" (addReferenceItem-এর refType)
  * options: [{id,name}] — বর্তমান বিদ্যমান তালিকা (matching-এর জন্য)
+ * parentId — শুধু refType==="topics" এ দরকার (কোন subject-এর আন্ডারে)
+ * sheet — শুধু refType==="subjects" এ দরকার (Quiz/QBank/Study — কোন ট্যাবের subject)
  * ফেরত: {ok, id, created?} — created:true মানে নতুন এন্ট্রি বানানো হয়েছে (caller চাইলে refData রিফ্রেশ করুক)
  */
-async function resolveOrCreateReference({sel,refType,options,gasSecret,push}){
+async function resolveOrCreateReference({sel,refType,options,gasSecret,push,parentId,sheet}){
   const name=(sel?.name||"").trim();
   if(!name) return{ok:false};
   if(sel?.id) return{ok:true,id:sel.id};
   const hit=(options||[]).find(o=>norm(o.name)===norm(name));
   if(hit) return{ok:true,id:hit.id};
-  const res=await addReferenceItem({refType,name,gasSecret,push});
+  const res=await addReferenceItem({refType,name,parentId,sheet,gasSecret,push});
   return res.ok?{ok:true,id:res.id,created:true}:{ok:false};
 }
 
