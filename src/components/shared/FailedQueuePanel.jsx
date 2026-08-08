@@ -45,7 +45,7 @@ function FailedQueuePanel({push,sourceFilter}){
         const groupKey=src+"|"+groupItems[0].location+"|"+groupItems[0].targetTab;
         return(
           <div key={groupKey} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,padding:"8px 0",borderTop:`1px solid ${C.border}`}}>
-            <div style={{fontSize:12,color:C.text}}>{src} — {groupItems.length}টা ({groupItems[0].targetTab} → {groupItems[0].location==="sheet"?"Sheet":"Firebase"})</div>
+            <div style={{fontSize:12,color:C.text}}>{src} — {groupItems.length}টা ({groupItems[0].targetTab} → {(groupItems[0].location==="sheet"||NO_FIREBASE_TABS.includes(groupItems[0].targetTab))?"Sheet":"Firebase"})</div>
             <div style={{display:"flex",gap:6}}>
               <button className="btn" disabled={retryingKey===groupKey} style={{fontSize:11,padding:"4px 10px",background:C.green,color:"#04180a"}} onClick={()=>retryGroup(groupKey,groupItems)}>{retryingKey===groupKey?"⏳":"🔁"} আবার পাঠাও</button>
               <button className="btn" disabled={retryingKey===groupKey} style={{fontSize:11,padding:"4px 10px",background:"transparent",color:C.red,border:`1px solid ${C.border}`}} onClick={()=>clearGroup(groupItems)}>🗑️</button>
