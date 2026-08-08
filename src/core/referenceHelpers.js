@@ -29,4 +29,62 @@ async function resolveOrCreateReference({sel,refType,options,gasSecret,push,pare
   return res.ok?{ok:true,id:res.id,created:true}:{ok:false};
 }
 
-export { resolveOrCreateReference, norm };
+/**
+ * ⚠️ Sheet-এ কখনোই raw subject/topic টেক্সট বসে না — শুধু subject_id/topic_id বসে
+ * (QBank-এর তো plain "subject"/"topic" কলামই নেই, Quiz/Study-তেও reference id-ই আসল সংযোগ)।
+ * তাই MCQ/Written/OCR-import — যেখান থেকেই subject/topic টেক্সট আসুক (bulk paste, OCR,
+ * archive-edit) — সবখানেই সাবমিটের আগে এই ফাংশন দিয়ে text → id রেজলভ (বা প্রয়োজনে
+ * নতুন Subject/Topic তৈরি) করে নিতে হবে।
+ *
+ * entries: [{q,...,subject,topic}] — প্রতিটার নিজস্ব subject/topic থাকতে পারে (খালিও হতে পারে)
+ * fallbackSubject/fallbackTopic — entry-তে subject/topic খালি থাকলে এটা ব্যবহার হয় (পাতার
+ *   গ্লোবাল ফিল্ড থেকে — OCR পাতাগুলোয় subject আলাদাভাবে টাইপ করা থাকে)
+ * subjectOptions: [{subject_id,subject_name}] — শুধু বর্তমান sheet-এর (মোড অনুযায়ী ফিল্টার করা)
+ * topicsAll: [{topic_id,topic_name,subject_id}] — সব টপিক (ফাংশন নিজেই subject_id দিয়ে ফিল্টার করে)
+ * sheet: "Quiz"|"QBank"|"Study" — নতুন Subject তৈরি হলে কোন ট্যাবে স্কোপ হবে
+ *
+ * ফেরত: {ok:true, resolved:[{item,subjectId,topicId,subjectName,topicName}], anyCreated}
+ *      | {ok:false, reason}
+ */
+async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,gasSecret,sheet,push,fallbackSubject,fallbackTopic}){
+  const subjCache=new Map(); // norm(name) -> subject_id
+  const topicCache=new Map(); // subject_id+"|"+norm(name) -> topic_id
+  let curSubjects=subjectOptions||[], curTopics=topicsAll||[];
+  let anyCreated=false;
+  const resolved=[];
+  for(const item of entries){
+    const sName=((item.subject&&item.subject.trim())||fallbackSubject||"").trim();
+    const tName=((item.topic&&item.topic.trim())||fallbackTopic||"").trim();
+    if(!sName||!tName) return{ok:false,reason:`"${(item.q||"").substring(0,40)}..." — Subject/Topic নেই (লাইনে টাইপ করো, অথবা ওপরের ফিল্ড পূরণ করো)`};
+    const sKey=norm(sName);
+    let sId=subjCache.get(sKey);
+    if(!sId){
+      const hit=curSubjects.find(s=>norm(s.subject_name)===sKey);
+      if(hit) sId=hit.subject_id;
+      else{
+        const res=await resolveOrCreateReference({sel:{id:"",name:sName},refType:"subjects",options:curSubjects.map(s=>({id:s.subject_id,name:s.subject_name})),gasSecret,sheet,push});
+        if(!res.ok) return{ok:false,reason:`Subject "${sName}" যোগ/খুঁজে পাওয়া যায়নি`};
+        sId=res.id;
+        if(res.created){ anyCreated=true; curSubjects=[...curSubjects,{subject_id:sId,subject_name:sName,sheet}]; }
+      }
+      subjCache.set(sKey,sId);
+    }
+    const tKey=sId+"|"+norm(tName);
+    let tId=topicCache.get(tKey);
+    if(!tId){
+      const hit=curTopics.find(t=>t.subject_id===sId && norm(t.topic_name)===norm(tName));
+      if(hit) tId=hit.topic_id;
+      else{
+        const res=await resolveOrCreateReference({sel:{id:"",name:tName},refType:"topics",options:curTopics.filter(t=>t.subject_id===sId).map(t=>({id:t.topic_id,name:t.topic_name})),gasSecret,parentId:sId,push});
+        if(!res.ok) return{ok:false,reason:`Topic "${tName}" যোগ/খুঁজে পাওয়া যায়নি`};
+        tId=res.id;
+        if(res.created){ anyCreated=true; curTopics=[...curTopics,{topic_id:tId,topic_name:tName,subject_id:sId}]; }
+      }
+      topicCache.set(tKey,tId);
+    }
+    resolved.push({item,subjectId:sId,topicId:tId,subjectName:sName,topicName:tName});
+  }
+  return{ok:true,resolved,anyCreated};
+}
+
+export { resolveOrCreateReference, resolveSubjectTopicForEntries, norm };
