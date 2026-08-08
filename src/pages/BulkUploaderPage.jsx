@@ -9,7 +9,7 @@ import {
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
-import { resolveOrCreateReference } from "../core/referenceHelpers.js";
+import { resolveOrCreateReference, resolveSubjectTopicForEntries } from "../core/referenceHelpers.js";
 import { archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
@@ -192,51 +192,13 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   /* Build Firebase record — শেয়ার্ড buildBulkRecord ব্যবহার করে (AIImportPage direct-submit ও একই ফাংশন ব্যবহার করে) */
   const buildRec=(item,ts,id)=>buildBulkRecord({item,subject:subjectName,subtopic:topicName,mode,qtype,audienceTags:tagNames,ts,id});
 
-  /* ── MCQ mode-এ প্রতি লাইনে নিজস্ব subject;topic টাইপ করা থাকে (Phase 7 নতুন প্যাটার্ন) —
-     তাই global dropdown লাগে না। প্রতিটা ইউনিক subject/topic নাম রেজলভ-অর-ক্রিয়েট করে
-     subject_id/topic_id বসানো হয়। একই ব্যাচে বারবার একই নাম এলে ক্যাশ থেকেই id মেলে
-     (duplicate reference row তৈরি হয় না)। Subject না থাকলে (sheet-এ প্রথমবার) নতুন
-     Subject + তার আন্ডারে নতুন Topic — দুটোই এক ধাক্কায় তৈরি হয়ে যায়। ── */
-  const resolveSubjectTopicPerEntry=async(entries)=>{
-    const subjCache=new Map(); // norm(name) -> subject_id
-    const topicCache=new Map(); // subject_id+"|"+norm(name) -> topic_id
-    let curSubjects=subjectOptions, curTopics=refData?.topics||[];
-    let anyCreated=false;
-    const resolved=[];
-    for(const item of entries){
-      const sName=(item.subject||"").trim();
-      const tName=(item.topic||"").trim();
-      if(!sName||!tName) return{ok:false,reason:`"${(item.q||"").substring(0,40)}..." — লাইনে Subject/Topic লেখা নেই (নতুন ফরম্যাট: প্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;উত্তর;Subject;Topic;ব্যাখ্যা)`};
-      const sKey=sName.toLowerCase();
-      let sId=subjCache.get(sKey);
-      if(!sId){
-        const hit=curSubjects.find(s=>s.subject_name.trim().toLowerCase()===sKey);
-        if(hit) sId=hit.subject_id;
-        else{
-          const res=await resolveOrCreateReference({sel:{id:"",name:sName},refType:"subjects",options:curSubjects.map(s=>({id:s.subject_id,name:s.subject_name})),gasSecret,sheet:mode,push});
-          if(!res.ok) return{ok:false,reason:`Subject "${sName}" যোগ/খুঁজে পাওয়া যায়নি`};
-          sId=res.id;
-          if(res.created){ anyCreated=true; curSubjects=[...curSubjects,{subject_id:sId,subject_name:sName,sheet:mode}]; }
-        }
-        subjCache.set(sKey,sId);
-      }
-      const tKey=sId+"|"+tName.toLowerCase();
-      let tId=topicCache.get(tKey);
-      if(!tId){
-        const hit=curTopics.find(t=>t.subject_id===sId && t.topic_name.trim().toLowerCase()===tName.toLowerCase());
-        if(hit) tId=hit.topic_id;
-        else{
-          const res=await resolveOrCreateReference({sel:{id:"",name:tName},refType:"topics",options:curTopics.filter(t=>t.subject_id===sId).map(t=>({id:t.topic_id,name:t.topic_name})),gasSecret,parentId:sId,push});
-          if(!res.ok) return{ok:false,reason:`Topic "${tName}" যোগ/খুঁজে পাওয়া যায়নি`};
-          tId=res.id;
-          if(res.created){ anyCreated=true; curTopics=[...curTopics,{topic_id:tId,topic_name:tName,subject_id:sId}]; }
-        }
-        topicCache.set(tKey,tId);
-      }
-      resolved.push({item,subjectId:sId,topicId:tId,subjectName:sName,topicName:tName});
-    }
-    return{ok:true,resolved,anyCreated};
-  };
+  /* ── MCQ/Written mode-এ প্রতি লাইনে নিজস্ব subject;topic টাইপ করা থাকে (Phase 7 নতুন প্যাটার্ন) —
+     তাই global dropdown লাগে না। শেয়ার্ড resolveSubjectTopicForEntries() (referenceHelpers.js)
+     দিয়ে প্রতিটা ইউনিক subject/topic নাম resolve-or-create করে subject_id/topic_id বসানো হয়
+     (raw text কখনো sheet-এ যায় না — QBank-এ তো plain subject কলামই নেই)। ── */
+  const resolveSubjectTopicPerEntry=(entries)=>resolveSubjectTopicForEntries({
+    entries, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:mode, push,
+  });
 
   /* Main upload */
   const startUpload=async()=>{
