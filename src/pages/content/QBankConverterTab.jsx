@@ -7,11 +7,13 @@ import { useFB, invalidate, loadPath } from "../../core/dataCache.js";
 import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { callAiProviderRotatingRaw } from "../../core/ocrProviders.js";
 import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
-import { pushFailedItems } from "../../core/uploaderUtils.js";
+import { pushFailedItems, buildSheetRow } from "../../core/uploaderUtils.js";
+import { resolveOrCreateReference, resolveSubjectTopicForEntries } from "../../core/referenceHelpers.js";
 import { JOB_NONE_TAG } from "../../core/ghConfig.js";
 import {
   LS_QBC_TAXONOMY, LS_QBC_RESULTS_DRAFT, loadQbcSaveLoc, saveQbcSaveLoc,
-  loadQbcAutoSave, saveQbcAutoSave, QBANK_CONV_TAXONOMY_DEFAULT, normalizeQbankQ
+  loadQbcAutoSave, saveQbcAutoSave, QBANK_CONV_TAXONOMY_DEFAULT, normalizeQbankQ,
+  stripEmoji, buildTaxonomyFromRefData
 } from "../../core/qbankConverterShared.js";
 import { JobCheckList } from "../../components/shared/JobCheckList.jsx";
 import { SaveLocationPicker } from "../../components/shared/SaveLocationPicker.jsx";
@@ -22,27 +24,17 @@ function QBankConverterTab({push,tick}){
   // ── Phase 5: এই কনভার্টার AI দিয়ে QBank প্রশ্নকে Quiz ফরম্যাটে বদলায়, subject/sub_topic
   // নাম "canonical taxonomy" থেকে বেছে নেয়। কিন্তু নতুন schema-তে Quiz-এর প্রশ্ন
   // subject_id/topic_id দিয়ে reference করে — তাই AI-এর দেওয়া নাম Subjects/Topics
-  // reference-টেবিলের সাথে মিলিয়ে id বসানো হচ্ছে (নিচে matchSubjectTopicId দেখো),
+  // reference-টেবিলের সাথে মিলিয়ে id বসানো হচ্ছে (নিচে saveApproved-এর resolveSubjectTopicForEntries দেখো),
   // নাহলে এই পাথ দিয়ে যোগ হওয়া প্রশ্ন নতুন lazy-load সিস্টেমে "অদৃশ্য" থেকে যেত। ──
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const saveGasSecret0=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[refData,setRefData]=useState(null);
-  useEffect(()=>{
+  const loadRefData=useCallback(()=>{
     if(!gasSecret){ setRefData(null); return; }
-    let cancelled=false;
-    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled) setRefData(d); });
-    return()=>{ cancelled=true; };
+    fetchReferenceData({gasSecret}).then(d=>setRefData(d));
   },[gasSecret]);
-
-  // নাম মিলিয়ে subject_id/topic_id বের করা (Quiz sheet-scoped) — case/space-insensitive
-  const matchSubjectTopicId=useCallback((subjectName,topicName)=>{
-    if(!refData) return {subjectId:"",topicId:""};
-    const norm=s=>(s||"").toString().trim().toLowerCase();
-    const s=(refData.subjects||[]).find(x=>x.sheet==="Quiz" && norm(x.subject_name)===norm(subjectName));
-    if(!s) return {subjectId:"",topicId:""};
-    const t=(refData.topics||[]).find(x=>x.subject_id===s.subject_id && norm(x.topic_name)===norm(topicName));
-    return {subjectId:s.subject_id, topicId:t?t.topic_id:""};
-  },[refData]);
+  useEffect(()=>{ loadRefData(); },[loadRefData]);
+  const subjectOptionsQuiz=useMemo(()=>refData?(refData.subjects||[]).filter(s=>s.sheet==="Quiz"):[],[refData]);
 
   // ⚡ Firebase quota বন্ধ থাকলেও কাজ চালু থাকে — useFB()-এর ভেতরের loadPath() এখন
   // Firebase read ব্যর্থ হলে নিজে থেকেই Google Sheet fallback (GAS "getSheetRows")
@@ -142,14 +134,32 @@ function QBankConverterTab({push,tick}){
     return {dedupedPool:Array.from(seen.values()), alreadyInQuizCount:alreadySeen.size};
   },[scopedRows,existingQuizKeys]);
 
-  // ── Taxonomy এডিটর ──
+  // ── Taxonomy এডিটর — 🐛 ফিক্স (Issue #2): আগে সবসময় স্ট্যাটিক QBANK_CONV_TAXONOMY_DEFAULT
+  // (emoji-সহ, Reference টেবিলের সাথে সম্পর্কহীন) দিয়ে শুরু হতো। এখন refData লোড হওয়ার পর,
+  // যদি admin নিজে থেকে taxonomy কাস্টমাইজ না করে থাকে (localStorage-এ সেভ করা কিছু না থাকে),
+  // তাহলে লাইভ Subjects/Topics reference টেবিল থেকেই taxonomy অটো-জেনারেট হয় — তাই AI যে
+  // নামই বাছুক, সেটা ইতিমধ্যে বিদ্যমান বিশুদ্ধ (no emoji) subject/topic নাম হবে। ──
   const[taxonomyText,setTaxonomyText]=useState(()=>{
     try{ return localStorage.getItem(LS_QBC_TAXONOMY) || JSON.stringify(QBANK_CONV_TAXONOMY_DEFAULT,null,2); }
     catch{ return JSON.stringify(QBANK_CONV_TAXONOMY_DEFAULT,null,2); }
   });
+  const[hasCustomTaxonomy,setHasCustomTaxonomy]=useState(()=>{ try{ return !!localStorage.getItem(LS_QBC_TAXONOMY); }catch{ return false; } });
+  useEffect(()=>{
+    if(hasCustomTaxonomy) return; // admin নিজে কাস্টমাইজ করলে সেটাই থাকবে, অটো-ওভাররাইট হবে না
+    const live=buildTaxonomyFromRefData(refData);
+    if(live) setTaxonomyText(JSON.stringify(live,null,2));
+  },[refData,hasCustomTaxonomy]);
+  const syncTaxonomyFromReference=()=>{
+    const live=buildTaxonomyFromRefData(refData);
+    if(!live){ push("warn","⚠️ Reference টেবিলে কোনো Quiz Subject নেই","আগে Reference ট্যাব থেকে অন্তত একটা Subject/Topic যোগ করো, অথবা GAS Secret Key দাও"); return; }
+    setTaxonomyText(JSON.stringify(live,null,2));
+    try{ localStorage.removeItem(LS_QBC_TAXONOMY); }catch{} // সিঙ্কের পর আবার "custom" ধরা হবে না, ভবিষ্যতের refData বদলেও অটো-আপডেট হবে
+    setHasCustomTaxonomy(false);
+    push("success","🔄 Reference থেকে taxonomy সিঙ্ক হলো",`${Object.keys(live).length}টা Subject লোড হয়েছে`);
+  };
   const[showTaxEdit,setShowTaxEdit]=useState(false);
   const saveTaxonomy=()=>{
-    try{ JSON.parse(taxonomyText); localStorage.setItem(LS_QBC_TAXONOMY,taxonomyText); push("success","✅ Taxonomy সেভ হয়েছে","পরের ব্যাচ থেকেই এটা ব্যবহার হবে"); }
+    try{ JSON.parse(taxonomyText); localStorage.setItem(LS_QBC_TAXONOMY,taxonomyText); setHasCustomTaxonomy(true); push("success","✅ Taxonomy সেভ হয়েছে (কাস্টম — এখন থেকে অটো-সিঙ্ক বন্ধ)","পরের ব্যাচ থেকেই এটা ব্যবহার হবে"); }
     catch{ push("error","❌ ভুল JSON ফরম্যাট","ঠিক করে আবার চেষ্টা করো"); }
   };
 
@@ -313,27 +323,50 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
     // তাই এখানে Array.isArray চেক করে নেওয়া হলো, আর বাটনের onClick-ও ()=>saveApproved() করা হয়েছে।
     const approved=Array.isArray(overrideItems)?overrideItems:results.filter(r=>r.approved);
     if(!approved.length){ push("warn","কিছুই approve করা নেই",""); return; }
+    if(!refData){ push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো",""); return; }
     setSaving(true);
     setSaveProgress({done:0,total:approved.length});
     const saveStartedAt=Date.now();
-    const audienceTags=selAud.filter(a=>a!==JOB_NONE_TAG).join(",")||"Job";
-    let unmatchedCount=0;
-    const rows=approved.map(r=>{
-      const {subjectId,topicId}=matchSubjectTopicId(r.subject,r.sub_topic);
-      if(!subjectId) unmatchedCount++;
-      return{
-        question:r.question, opt1:r.opt1, opt2:r.opt2, opt3:r.opt3, opt4:r.opt4,
-        correct:r.correct, subject:r.subject, sub_topic:r.sub_topic,
-        explanation:r.explanation, technique:"", prevExam:r.prevExam||"",
-        qType:"MCQ", audienceTags,
-        // ── নতুন schema fields — Subjects/Topics reference-টেবিলের সাথে নাম মিলিয়ে ──
-        subject_id:subjectId, topic_id:topicId,
-      };
+    const audienceTagList=selAud.filter(a=>a!==JOB_NONE_TAG);
+    const audienceTags=audienceTagList.join(",")||"Job";
+
+    // ── 🐛 ফিক্স (Issue #2): AI-এর দেওয়া subject/sub_topic নাম আগে শুধু "মেলানো" হতো
+    // (matchSubjectTopicId) — না মিললে subject_id/topic_id ফাঁকা থেকে যেত। এখন
+    // resolveSubjectTopicForEntries দিয়ে VLOOKUP-এর মতো: মিললে সেই id, না মিললে নতুন
+    // Subject/Topic নিজে থেকেই তৈরি হয়ে যায় — তাই subject_id/topic_id কখনো ফাঁকা থাকে না।
+    // stripEmoji দিয়ে AI-এর টেক্সট থেকে emoji ছেঁটে নেওয়া হয় — সেভ হওয়া নাম সবসময় বিশুদ্ধ। ──
+    const entries=approved.map(r=>({...r,q:r.question,subject:stripEmoji(r.subject),topic:stripEmoji(r.sub_topic)}));
+    const resolveResult=await resolveSubjectTopicForEntries({
+      entries, subjectOptions:subjectOptionsQuiz, topicsAll:refData?.topics||[], gasSecret, sheet:"Quiz", push,
     });
-    if(unmatchedCount) push("warn",`⚠️ ${unmatchedCount}টা প্রশ্নের subject_id মেলেনি`,"AI-এর দেওয়া subject/sub_topic নাম Reference ট্যাবের কোনোটার সাথে হুবহু মেলেনি — এগুলো সেভ হবে ঠিকই, কিন্তু নতুন app-এ subject_id ছাড়া দেখাবে না, পরে Reference ট্যাবে গিয়ে বা Browse থেকে ঠিক করতে হবে");
+    if(!resolveResult.ok){ setSaving(false); push("error","❌ "+resolveResult.reason,""); return; }
+    if(resolveResult.anyCreated) loadRefData();
+
+    // ── Audience Tag নামও Tags reference-টেবিলের সাথে resolve-or-create করে tagIds বসানো হয়
+    // (AudienceTags_ids কলাম আগে সবসময় ফাঁকা থাকতো, কারণ QBankConverterTab আগে buildSheetRow-ই
+    // ব্যবহার করতো না) ──
+    const tagOptions=(refData?.tags||[]).map(t=>({id:t.tag_id,name:t.tag_name}));
+    const tagIds=[];
+    for(const name of audienceTagList){
+      const res=await resolveOrCreateReference({sel:{id:"",name},refType:"tags",options:tagOptions,gasSecret,push});
+      if(res.ok){ tagIds.push(res.id); if(res.created) tagOptions.push({id:res.id,name}); }
+    }
+    if(tagIds.length!==audienceTagList.length) loadRefData(); // নতুন ট্যাগ তৈরি হয়ে থাকলে refData রিফ্রেশ
+
+    // NO-FIREBASE POLICY: Quiz এখন শুধু Google Sheet-এ যায় (GAS দিয়ে), Firebase-এ
+    // সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে। buildSheetRow ব্যবহার করা হচ্ছে
+    // (আগে ম্যানুয়ালি row বানানো হতো, যেটা group_id/sub_index/audienceTagsIds বাদ দিয়ে যেত)।
+    const rows=resolveResult.resolved.map(({item,subjectId,topicId,subjectName,topicName})=>{
+      const row=buildSheetRow({
+        item:{q:item.question,opt1:item.opt1,opt2:item.opt2,opt3:item.opt3,opt4:item.opt4,correct:item.correct,explanation:item.explanation},
+        subject:subjectName, subtopic:topicName, qtype:"MCQ",
+        audienceTags:audienceTagList, tagIds,
+        subjectId, topicId,
+      });
+      row.prevExam=item.prevExam||""; // buildSheetRow ডিফল্টে খালি রাখে — QBank→Quiz-এ উৎস exam paper-এর নাম এখানে বসে
+      return row;
+    });
     try{
-      // NO-FIREBASE POLICY: Quiz এখন শুধু Google Sheet-এ যায় (GAS দিয়ে), Firebase-এ
-      // সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
       const result=await saveRowsToSheet({rows,targetTab:"Quiz",gasSecret,push,onProgress:setSaveProgress,chunkSize:saveChunkSize});
       // ⚡ Quiz sheet-এ নতুন প্রশ্ন যোগ হলো — কাশ করা Quiz ডাটা invalidate করা হলো যাতে
       // dedup-এর "ইতিমধ্যে Quiz-এ আছে" চেক সাথে সাথেই এই নতুন প্রশ্নগুলো ধরে ফেলে।
@@ -413,8 +446,16 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
         </div>
         {showTaxEdit && (
           <div style={{marginTop:10}}>
+            <div style={{fontSize:11,color:hasCustomTaxonomy?"#f59e0b":C.green,marginBottom:8,lineHeight:1.6}}>
+              {hasCustomTaxonomy
+                ? "⚠️ এটা কাস্টম taxonomy (ম্যানুয়ালি এডিট করা) — Reference টেবিলে নতুন Subject/Topic যোগ হলেও এটা অটো-আপডেট হবে না।"
+                : "✅ Reference টেবিল (Subjects/Topics, Quiz) থেকে অটো-সিঙ্ক করা আছে — নতুন Subject/Topic যোগ হলে এখানেও এমনি এমনি চলে আসবে।"}
+            </div>
             <textarea className="inp" style={{minHeight:220,fontFamily:"monospace",fontSize:12}} value={taxonomyText} onChange={e=>setTaxonomyText(e.target.value)}/>
-            <button className="btn" style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:10,fontSize:13,marginTop:8}} onClick={saveTaxonomy}>💾 Taxonomy সেভ করো</button>
+            <div style={{display:"flex",gap:8,marginTop:8}}>
+              <button className="btn" style={{flex:1,justifyContent:"center",background:C.accent,color:"#fff",padding:10,fontSize:13}} onClick={saveTaxonomy}>💾 কাস্টম হিসেবে সেভ করো</button>
+              <button className="btn" style={{flex:1,justifyContent:"center",background:"transparent",color:C.green,border:`1px solid ${C.green}44`,padding:10,fontSize:13}} onClick={syncTaxonomyFromReference}>🔄 Reference থেকে Sync করো</button>
+            </div>
             <div style={{fontSize:11,color:C.muted,marginTop:8,lineHeight:1.6}}>AI এই তালিকা থেকেই subject/sub_topic বেছে নেবে — নতুন নাম নিজে বানাবে না। JSON ফরম্যাট: {"{"}"subject": ["subtopic1","subtopic2"...]{"}"}</div>
           </div>
         )}
