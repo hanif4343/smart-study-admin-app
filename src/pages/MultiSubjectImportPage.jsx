@@ -112,29 +112,31 @@ function isNoiseWatermark(text){
 // এখানে জোর করে আলাদা আলাদা {q,a} entry-তে ভেঙে দেওয়া হয় — AI নিজে split
 // করুক বা না করুক, এই ধাপ সবসময় প্রয়োগ হবে।
 const BULLET_LINE_RE=/^\s*([কখগঘঙচছজঝঞটঠডঢণa-hA-H])[.।)]\s*(.+)$/;
-function splitBundledAnswer(q,a){
+function splitBundledAnswer(q,a,subject){
   const lines=(a||"").split(/\n+/).map(s=>s.trim()).filter(Boolean);
-  if(lines.length<2)return[{q,a}];
+  if(lines.length<2)return[{q,a,subject}];
   const matches=lines.map(l=>l.match(BULLET_LINE_RE));
   const matchCount=matches.filter(Boolean).length;
   // অন্তত ২টা লাইন এবং বেশিরভাগ লাইনই বুলেট-প্যাটার্নে না মিললে অক্ষত রাখো (ভুলভাবে ভেঙে ফেলার ঝুঁকি এড়াতে)
-  if(matchCount<2||matchCount<lines.length*0.6)return[{q,a}];
+  if(matchCount<2||matchCount<lines.length*0.6)return[{q,a,subject}];
   const baseQ=(q||"").replace(/[:।]\s*$/,"").trim();
   return lines.map((l,i)=>{
     const m=matches[i];
     const content=m?m[2].trim():l;
     // "ক. বিদ্যালয় = বিদ্যা + আলয়" এর মতো হলে "=/ — / :" দিয়ে ভেঙে টার্গেট শব্দটাকেই প্রশ্নে বসাই
     const sep=content.match(/^(.{1,40}?)\s*[=:—–]\s*(.+)$/);
-    if(sep) return{q:`${baseQ}: ${sep[1].trim()}`,a:sep[2].trim()};
-    return{q:`${baseQ} (${m?m[1]:i+1})`,a:content};
+    if(sep) return{q:`${baseQ}: ${sep[1].trim()}`,a:sep[2].trim(),subject};
+    return{q:`${baseQ} (${m?m[1]:i+1})`,a:content,subject};
   });
 }
-/* ── উপরের দুটো ফিল্টার প্রয়োগ করে raw AI entries থেকে চূড়ান্ত, পরিষ্কার entries বানায় ── */
+/* ── উপরের দুটো ফিল্টার প্রয়োগ করে raw AI entries থেকে চূড়ান্ত, পরিষ্কার entries বানায় ──
+   🐛 ফিক্স: আগে e.subject এখানে হারিয়ে যেত (splitBundledAnswer শুধু {q,a} ফেরত দিত) —
+   এখন subject প্রতিটা split sub-entry-তেও (একই বিষয়) ঠিকভাবে বয়ে যায়। */
 function sanitizeEntries(rawEntries){
   const out=[];
   (rawEntries||[]).forEach(e=>{
     if(isNoiseWatermark(e.q)||isNoiseWatermark(e.a))return; // ওয়াটারমার্ক-দূষিত entry বাদ
-    splitBundledAnswer(e.q,e.a).forEach(s=>{
+    splitBundledAnswer(e.q,e.a,e.subject).forEach(s=>{
       if(s.q&&s.a&&!isNoiseWatermark(s.a)) out.push(s);
     });
   });
@@ -150,23 +152,31 @@ function buildDetectPrompt(ocrText){
 নিচের OCR text একটি বইয়ের একটি পাতা থেকে নেওয়া। প্রায় প্রতিটা পাতার একদম উপরে (সাধারণত প্রথম ১-৩ লাইনে) একটা হেডার/টাইটেল লাইন থাকে যেখানে চাকরির পদবী (Designation) ও প্রতিষ্ঠান/দপ্তরের নাম (Institution) লেখা থাকে — প্রায়ই তার ঠিক পরেই "তারিখ:", "সময়:", "পূর্ণমান:" জাতীয় মেটা-তথ্য থাকে (থাকলে সেটাই হেডার শেষ হওয়ার সংকেত হিসেবে ধরে নাও)।
 
 হেডার নানা রকম ফরম্যাটে আসতে পারে, যেমন (উদাহরণ):
-- "বন অধিদপ্তর-এর গাড়ী চালক ২০২৫" → designation="গাড়ী চালক", institution="বন অধিদপ্তর"
+- "বন অধিদপ্তর-এর গাড়ী চালক ২০২৫" → designation="গাড়ী চালক", institution="বন অধিদপ্তর", year="2025"
 - "স্বাস্থ্য সহকারী/স্টোর কিপ ... রাঙ্গামাটি পার্বত্য জেলা পরিষদ" → designation="স্বাস্থ্য সহকারী/স্টোর কিপ", institution="রাঙ্গামাটি পার্বত্য জেলা পরিষদ"
 - "অফিস সহায়ক, সহায়ক ... কারিগরি শিক্ষা অধিদপ্তর" → designation="অফিস সহায়ক, সহায়ক", institution="কারিগরি শিক্ষা অধিদপ্তর"
 - "পরিসংখ্যান সহকারী ... মৎস্য অধিদপ্তর" (institution-এর বানান/OCR কিছুটা অস্পষ্ট এলেও প্রাসঙ্গিক best-guess দাও)
 
 কাজ:
-১. হেডার থেকে designation ও institution আলাদা করে বের করো। সাল/বছরের সংখ্যা, "Written" শব্দ, পাতা নম্বর, "তারিখ/সময়/পূর্ণমান" — এসব বাদ দাও।
+১. হেডার থেকে designation, institution ও year (সাল, ৪-ডিজিট, বাংলা/ইংরেজি সংখ্যায় যা-ই থাকুক ইংরেজি সংখ্যায় দাও) আলাদা করে বের করো। "Written" শব্দ, পাতা নম্বর, "তারিখ/সময়/পূর্ণমান" — এসব বাদ দাও।
    — হেডারের বানান/OCR কিছুটা garbled বা অসম্পূর্ণ হলেও, যতটুকু পড়া যায় তা দিয়ে best-effort extract করো — পুরোপুরি নিশ্চিত না হলেও যুক্তিসঙ্গত best-guess দেওয়া ভালো, শুধু সম্পূর্ণ বানিয়ে বসিও না।
-   — designation/institution শুধুমাত্র তখনই "" (খালি) দাও, যখন এই পাতার শুরুতে আদৌ কোনো heading/title-সদৃশ লাইনই নেই (শুধু প্রশ্ন-উত্তরের ধারাবাহিকতা, নতুন কোনো heading এই পাতায় দেখাই যাচ্ছে না)।
+   — designation/institution/year শুধুমাত্র তখনই "" (খালি) দাও, যখন এই পাতার শুরুতে আদৌ কোনো heading/title-সদৃশ লাইনই নেই (শুধু প্রশ্ন-উত্তরের ধারাবাহিকতা, নতুন কোনো heading এই পাতায় দেখাই যাচ্ছে না)।
 ২. এই পাতায় থাকা Written প্রশ্ন-উত্তরগুলো (নম্বরসহ, প্রতিটা প্রশ্নের সাথে থাকা উত্তর) বের করো। MCQ/option-ভিত্তিক প্রশ্ন থাকলেও শুধু প্রশ্ন ও সরাসরি সঠিক উত্তরটুকু নাও, option বাদ দাও।
    — কোনো নম্বরের নিচে একাধিক উপ-প্রশ্ন/ভাগ থাকলে (ক/খ/গ/ঘ/ঙ, a/b/c/d/e, ১/২/৩ ইত্যাদি দিয়ে চিহ্নিত) — প্রতিটা উপ-প্রশ্নকে সম্পূর্ণ আলাদা, স্বতন্ত্র entry (আলাদা {q,a}) বানাও। কখনোই একাধিক উপ-প্রশ্ন একসাথে জোড়া লাগিয়ে একটা entry বানাবে না।
    — প্রতিটা উপ-প্রশ্নের entry-তে মূল নির্দেশনা বাক্যটাও (যেমন "সন্ধিবিচ্ছেদ করুন", "Fill in the blank with appropriate preposition") পুনরাবৃত্তি করে জুড়ে দাও, যাতে entry-টা প্রসঙ্গ ছাড়াই একা পড়লেও বোঝা যায়। উদাহরণ: "৩. সন্ধিবিচ্ছেদ করুন: ক. বিদ্যালয় খ. নায়ক" থেকে দুটো আলাদা entry হবে — {"q":"সন্ধিবিচ্ছেদ করুন: বিদ্যালয়","a":"বিদ্যা + আলয়"} এবং {"q":"সন্ধিবিচ্ছেদ করুন: নায়ক","a":"নৈ + অক"} — একটাতে সব জোড়া লাগানো entry বানাবে না।
 ৩. ছবির কোণায় ফোন/ক্যামেরা অ্যাপ নিজে থেকে যা বসিয়ে দেয় (ফোনের মডেল নাম যেমন "Vivo Y56", মালিকের নাম, তারিখ/সময় স্ট্যাম্প — যেমন "Vivo Y56 · Hanif Sarder", "Jul 25, 2026, 10:27") — এগুলো প্রশ্ন-উত্তরের অংশ নয়, সম্পূর্ণ উপেক্ষা করো, কোনো entry-তে বসাবে না।
+৪. (গুরুত্বপূর্ণ, best-effort) — এই ধরনের বই/শীটে প্রায়ই প্রশ্নগুলো বড় বড় বিষয়-সেকশনে ভাগ করা থাকে, প্রতিটা সেকশনের শুরুতে একটা আলাদা, বোল্ড হেডিং লাইন থাকে যেমন "গণিত-১৫", "সাধারণ জ্ঞান-১৫", "বাংলা-২৫", "ইংরেজি-২৫", "বিজ্ঞান-১০" (সংখ্যাটা সেই সেকশনে কতগুলো প্রশ্ন আছে তার ইঙ্গিত, বিষয় বোঝার জন্য এটা লাগবে না)। এই পাতায় এমন কোনো সেকশন-হেডিং থাকলে সেটা top-level "sectionSubject" ফিল্ডে দাও — সবসময় এই ৫টার একটাতে normalize করে দাও:
+   — "বাংলা" (বাংলা ব্যাকরণ + বাংলা সাহিত্য দুটোই এর আন্ডারে)
+   — "ইংরেজি" (English Grammar + English Literature দুটোই এর আন্ডারে)
+   — "গণিত" (পাটিগণিত + বীজগণিত + জ্যামিতি — সব ধরনের অংক এর আন্ডারে)
+   — "বিজ্ঞান" (বৈজ্ঞানিক/সাধারণ বিজ্ঞান বিষয়ক প্রশ্ন)
+   — "সাধারণ জ্ঞান" (বাংলাদেশ বিষয়াবলি + আন্তর্জাতিক বিষয়াবলি + কম্পিউটার/আইসিটি + বাকি সাধারণ জ্ঞান — সবকিছু একত্রে এই একটাতেই পড়বে, "বাংলাদেশ বিষয়াবলি"/"আন্তর্জাতিক" আলাদা category বানিও না)
+   এই পাতায় এমন কোনো নতুন সেকশন-হেডিং দেখতেই না পেলে (আগের পাতা থেকেই চলমান একটা সেকশনের প্রশ্ন, নতুন heading নেই) "sectionSubject":"" খালি রাখো — আগের পাতার সেকশনটাই এখানে ধরে নেওয়া হবে, তোমাকে অনুমান করে বসাতে হবে না।
+৫. (ঐচ্ছিক, best-effort) — যদি কোনো নির্দিষ্ট প্রশ্নের ঠিক আগেই আলাদা একটা ছোট sub-heading থাকে (উপরের sectionSubject-এর চেয়েও নির্দিষ্ট, যেমন সেকশনের ভেতরে "প্রবাদ-প্রবচন" জাতীয় উপ-ভাগ), সেটা সেই entry-র "subject" ফিল্ডে দাও (এটা sectionSubject override করবে)। বেশিরভাগ ক্ষেত্রেই এমন কিছু থাকবে না — তখন "subject":"" রাখো, sectionSubject থেকেই বিষয় বসে যাবে।
 ${OCR_CORRECTION_RULES}
 
 শুধু নিচের বিশুদ্ধ JSON ফরম্যাটে উত্তর দাও — কোনো markdown code fence (\`\`\`), কোনো ব্যাখ্যা, কোনো অতিরিক্ত টেক্সট ছাড়া:
-{"designation":"...","institution":"...","entries":[{"q":"...","a":"..."}]}
+{"designation":"...","institution":"...","year":"...","sectionSubject":"...","entries":[{"q":"...","a":"...","subject":"..."}]}
 
 RULES:
 - Serial number বাদ দাও
@@ -178,7 +188,7 @@ RULES:
 ${ocrText}`;
 }
 
-/* ── AI response → {designation, institution, entries:[{q,a}]} ── */
+/* ── AI response → {designation, institution, year, sectionSubject, entries:[{q,a,subject}]} ── */
 function parseDetectResponse(text){
   let t=(text||"").trim();
   t=t.replace(/^```json/i,"").replace(/^```/,"").replace(/```$/,"").trim();
@@ -187,17 +197,22 @@ function parseDetectResponse(text){
   const obj=JSON.parse(t.slice(start,end+1));
   const designation=(obj.designation||"").toString().trim();
   const institution=(obj.institution||"").toString().trim();
+  const year=(obj.year||"").toString().trim().replace(/[^\d]/g,"").slice(0,4);
+  const sectionSubject=(obj.sectionSubject||"").toString().trim();
   const entries=Array.isArray(obj.entries)
     ?obj.entries.filter(e=>e&&e.q&&e.a).map(e=>({
         q:String(e.q).trim(),
         a:(Array.isArray(e.a)?e.a.join("\n"):String(e.a)).trim(),
+        subject:(e.subject||"").toString().trim(),
       })).filter(e=>e.q&&e.a)
     :[];
-  return{designation,institution,entries};
+  return{designation,institution,year,sectionSubject,entries};
 }
 
 function MultiSubjectImportPage({push}){
   // images: [{id,webPath,base64,status,designation,institution,entryCount,error,groupBreak}]
+  // (designation/institution এখানে শুধু ছবি-কার্ডে preview দেখানোর জন্য — draftGroups-এ
+  // এগুলো এখন সঠিক নামে post/institution/year হিসেবে থাকে, Subject আলাদা ফিল্ড)
   // groupBreak=true মানে "এই ছবি থেকে নতুন group শুরু" (ইউজার নিজে মার্ক করে) — index 0 সবসময় group শুরু (মার্ক ছাড়াই)
   const[images,setImages]=useState([]);
   const[phase,setPhase]=useState("idle"); // idle | processing | confirm | done
@@ -418,7 +433,7 @@ function MultiSubjectImportPage({push}){
     return res.text||"";
   };
 
-  /* ── একটা page-unit (base64) প্রসেস করে {designation,institution,entries} রিটার্ন করে, ক্যাশসহ ──
+  /* ── একটা page-unit (base64) প্রসেস করে {designation,institution,year,entries} রিটার্ন করে, ক্যাশসহ ──
      ক্যাশ base64+CACHE_QTYPE দিয়ে key হয় — grouping বদলালেও (✂️ টগল) একই ছবি আবার AI call করতে হয় না */
   const detectAndParsePage=async(b64)=>{
     const cached=getOcrCacheEntry(b64,CACHE_QTYPE);
@@ -427,11 +442,15 @@ function MultiSubjectImportPage({push}){
       return{...cached.detected,archiveId:cached.archiveId||null,raw:cached.raw||""};
     }
     const raw=await nativeOcr(b64);
-    if(!raw.trim()) return{designation:"",institution:"",entries:[],archiveId:null,raw:""};
+    if(!raw.trim()) return{designation:"",institution:"",year:"",entries:[],archiveId:null,raw:""};
     const aiText=await callAiProviderRotatingRaw(buildDetectPrompt(raw));
     const detected=parseDetectResponse(aiText);
     let archiveId=null;
     if(detected.entries.length){
+      // 🐛 ফিক্স: আগে এখানে designation/institution-কে ভুল subject/sub_topic হিসেবে ধরে
+      // group-এ বসতো। এখানে archiveStore-এর generic subject/subtopic প্যারামিটার নামেই
+      // পাঠাতে হয় (আর্কাইভের স্টোরেজ স্কিমা এটাই), কিন্তু আসলে এখানে post/institution বসছে —
+      // ArchivePage-এ এই এন্ট্রি রি-সাবমিট করার সময় এটাই দেখাবে "Subject/Sub-topic" হিসেবে।
       const arc=archiveAdd({
         source:SRC_NAME,subject:detected.designation,subtopic:detected.institution,qtype:"Written",
         rows:detected.entries.map(e=>({q:e.q,correct:e.a}))
@@ -443,7 +462,12 @@ function MultiSubjectImportPage({push}){
   };
 
 
-  /* ── ধাপ ১: সব ছবি OCR+Detect+Parse করে draftGroups বানায় — কোনো সাবমিট হয় না, শুধু Confirm স্ক্রিনে নিয়ে যায় ── */
+  /* ── ধাপ ১: সব ছবি OCR+Detect+Parse করে draftGroups বানায় — কোনো সাবমিট হয় না, শুধু Confirm স্ক্রিনে নিয়ে যায় ──
+     🐛 ফিক্স: আগে AI-এর detect করা designation/institution ভুলভাবে group.subject/group.subtopic-এ বসতো
+     (Reference/Post/Institution সিস্টেম আসার আগের পুরনো ডিজাইন)। এখন designation/institution ঠিকভাবে
+     group.post/group.institution-এ বসে (QBank-এ Exam Appearance-এর জন্য), আর group.subject/group.subtopic
+     এখন আসল একাডেমিক বিষয়/টপিকের জন্য — AI যদি per-entry subject ধরতে পারে সেটা ব্যবহার হয়, নাহলে
+     অ্যাডমিন এখানে সহজ একটা "fallback subject" টাইপ করে দেবে (নিচের Confirm UI-তে)। ── */
   const processImages=async()=>{
     if(!images.length){push("warn","ছবি যোগ করুন","");return;}
     if(!buildKeyPool().length){push("warn","⚠️ কোনো AI provider active নেই","⚙️ থেকে অন্তত একটা key active করো");return;}
@@ -466,7 +490,7 @@ function MultiSubjectImportPage({push}){
     }
     const imgIndexOf={}; images.forEach((im,idx)=>{imgIndexOf[im.id]=idx+1;});
 
-    let curSubject="", curSubtopic="";
+    let curPost="", curInstitution="", curYear="", curSectionSubject="";
     let gid=-1;
     const groups=[]; // local working array
     setProgress({cur:0,total:units.length});
@@ -478,27 +502,36 @@ function MultiSubjectImportPage({push}){
       // group boundary: প্রথম unit সবসময় নতুন group, বা ইউজার-মার্কড manualBreak
       if(gid===-1||unit.manualBreak){
         gid++;
-        curSubject=""; curSubtopic="";
-        groups.push({id:gid,subject:"",subtopic:"",rows:[],pages:[],included:true,archiveIds:[]});
+        curPost=""; curInstitution=""; curYear=""; curSectionSubject="";
+        groups.push({id:gid,post:postSel.name.trim(),institution:instSel.name.trim(),year:examYear.trim(),subject:"",subtopic:"",rows:[],pages:[],included:true,archiveIds:[]});
       }
       setImages(p=>p.map(x=>x.id===unit.imgId&&x.status!=="error"?{...x,status:"running"}:x));
       try{
         const detected=await detectAndParsePage(unit.base64);
-        if(detected.designation) curSubject=detected.designation;
-        if(detected.institution) curSubtopic=detected.institution;
+        if(detected.designation) curPost=detected.designation;
+        if(detected.institution) curInstitution=detected.institution;
+        if(detected.year) curYear=detected.year;
+        // ── 🐛 এই ফিচার (তোমার প্রশ্নের উত্তর): "গণিত-১৫"/"সাধারণ জ্ঞান-১৫" জাতীয়
+        // সেকশন-হেডিং সাধারণত শুধু সেই সেকশনের প্রথম পাতাতেই লেখা থাকে, পরের পাতাগুলোয়
+        // থাকে না — তাই designation/institution-এর মতোই carry-forward করা হচ্ছে: নতুন
+        // sectionSubject পাওয়া গেলে আপডেট হয়, না পেলে আগেরটাই (একই সেকশনের বাকি
+        // পাতা ধরে) চলতে থাকে। ──
+        if(detected.sectionSubject) curSectionSubject=detected.sectionSubject;
         const grp=groups[gid];
-        if(!grp.subject&&curSubject) grp.subject=curSubject;
-        if(!grp.subtopic&&curSubtopic) grp.subtopic=curSubtopic;
+        // AI যা পেয়েছে সেটাকেই প্রাধান্য দেওয়া হয় — শুধু ব্যাচের ডিফল্ট (seed) না পেলে সেটা থেকে যায়
+        if(curPost) grp.post=curPost;
+        if(curInstitution) grp.institution=curInstitution;
+        if(curYear) grp.year=curYear;
         // ── AI যতই বলুক, এখানে আবার নিশ্চিত করে নিচ্ছি: বান্ডিল উত্তর split + watermark noise বাদ ──
         const cleanEntries=sanitizeEntries(detected.entries);
-        cleanEntries.forEach(e=>grp.rows.push({q:e.q,correct:e.a}));
+        cleanEntries.forEach(e=>grp.rows.push({q:e.q,correct:e.a,subject:e.subject||curSectionSubject||""}));
         if(detected.archiveId&&!grp.archiveIds.includes(detected.archiveId)) grp.archiveIds.push(detected.archiveId);
         const pageNo=imgIndexOf[unit.imgId];
         if(pageNo&&!grp.pages.includes(pageNo)) grp.pages.push(pageNo);
 
         setImages(p=>p.map(x=>x.id===unit.imgId?{
           ...x,status:"done",
-          designation:x.designation||curSubject, institution:x.institution||curSubtopic,
+          designation:x.designation||curPost, institution:x.institution||curInstitution,
           entryCount:(x.entryCount||0)+cleanEntries.length,
           rawOcr:(x.rawOcr?x.rawOcr+"\n---\n":"")+(detected.raw||"(OCR টেক্সট খালি এসেছে — ছবিতে লেখা স্পষ্ট পড়া যায়নি)"),
         }:x));
@@ -536,38 +569,22 @@ function MultiSubjectImportPage({push}){
     const included=draftGroups.filter(g=>g.included&&g.rows.length>0);
     if(!included.length){push("warn","⚠️ অন্তত একটা group রাখো","সব group বাদ দিলে সাবমিট করার কিছু নেই");return;}
 
-    // ── Subject/Sub-topic ফাঁকা থাকলে সেই group কখনোই সাবমিট হবে না — আগে "(অজানা বিষয়)" বসিয়ে
-    //    চুপচাপ সাবমিট হয়ে যেত, এখন সম্পূর্ণ বন্ধ। ফাঁকা group-গুলো Confirm লিস্টেই থেকে যাবে
-    //    (আগে থেকেই থাকা কমলা রঙের হাইলাইট-সহ) যাতে Subject/Sub-topic পূরণ করে পরে আবার
-    //    Submit চাপা যায় — কিছু হারায় না, শুধু আটকে থাকে। ──
-    const readyGroups=included.filter(g=>g.subject.trim()&&g.subtopic.trim());
-    const blockedGroups=included.filter(g=>!g.subject.trim()||!g.subtopic.trim());
+    // ── Subject ফাঁকা থাকলে (QBank হলে Post/Institution/Year-ও) সেই group কখনোই সাবমিট
+    //    হবে না — চুপচাপ "(অজানা বিষয়)" বসিয়ে সাবমিট হয়ে যাওয়া বন্ধ। ফাঁকা group-গুলো
+    //    Confirm লিস্টেই থেকে যাবে (কমলা হাইলাইট-সহ) যাতে পূরণ করে পরে আবার Submit চাপা যায়। ──
+    const needsAppearance=targetMode==="QBank";
+    const readyGroups=included.filter(g=>g.subject.trim() && (!needsAppearance || (g.post.trim()&&g.institution.trim()&&g.year.trim())));
+    const blockedGroups=included.filter(g=>!(g.subject.trim() && (!needsAppearance || (g.post.trim()&&g.institution.trim()&&g.year.trim()))));
 
     if(readyGroups.length===0){
-      push("warn","⚠️ কোনো group-ই Submit হয়নি","সবগুলোতে Subject/Sub-topic ফাঁকা — আগে পূরণ করো");
+      push("warn","⚠️ কোনো group-ই Submit হয়নি",needsAppearance?"সবগুলোতে Subject/পদ/প্রতিষ্ঠান/সাল-এর কোনো একটা ফাঁকা — আগে পূরণ করো":"সবগুলোতে Subject ফাঁকা — আগে পূরণ করো");
       return;
     }
     if(blockedGroups.length>0){
-      push("warn",`⚠️ ${blockedGroups.length}টা group বাদ পড়েছে`,"Subject/Sub-topic ফাঁকা — পূরণ করে আবার Submit চাপো, এখন শুধু বাকিগুলো যাচ্ছে");
+      push("warn",`⚠️ ${blockedGroups.length}টা group বাদ পড়েছে`,"Subject/পদ/প্রতিষ্ঠান/সাল ফাঁকা — পূরণ করে আবার Submit চাপো, এখন শুধু বাকিগুলো যাচ্ছে");
     }
 
     if(!refData){push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো","");return;}
-
-    // ── QBank + পদ/প্রতিষ্ঠান/সালের অন্তত ১টা দেওয়া থাকলে → resolve/create করে
-    // {postId,institutionId,year} বানানো হয়, পুরো ব্যাচের জন্য একবারই (BulkUploaderPage-এর
-    // মতোই) — এটা ছাড়া QBank প্রশ্ন appearance দিয়ে ব্রাউজে দেখা যাবে না। ──
-    let examAppearance=null;
-    if(targetMode==="QBank" && (postSel.name.trim()||instSel.name.trim()||examYear.trim())){
-      if(!postSel.name.trim()||!instSel.name.trim()||!examYear.trim()){
-        push("warn","⚠️ পদ, প্রতিষ্ঠান ও সাল — একটা দিলে তিনটাই দিতে হবে (অথবা তিনটাই খালি রাখো)","");
-        return;
-      }
-      const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
-      if(!postRes.ok){ push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
-      const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
-      if(!instRes.ok){ push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
-      examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
-    }
 
     setSubmitting(true);
     await _BGM.guard(async()=>{
@@ -589,50 +606,68 @@ function MultiSubjectImportPage({push}){
       groupQpaper[g.id]=urls.join(",");
     }
 
-    const allRows=[];
-    readyGroups.forEach(g=>{
+    // ── 🐛 ফিক্স: প্রতিটা group ভিন্ন ভিন্ন পরীক্ষা (পদ/প্রতিষ্ঠান/সাল) থেকে হতে পারে,
+    // তাই আগের মতো একটামাত্র ব্যাচ-ওয়াইড examAppearance দিয়ে হবে না — প্রতিটা group-এর
+    // জন্য আলাদা saveRowsToSheet কল হয়, নিজের পদ/প্রতিষ্ঠান/সাল দিয়ে। ফলাফলগুলো একসাথে
+    // যোগ করে শেষে একটা সামারি দেখানো হয়। ──
+    let totalAdded=0, totalSkipped=0, totalFailed=[], totalLinkedExisting=0;
+    const submittedGroupIds=[];
+    for(const g of readyGroups){
+      let examAppearance=null;
+      if(needsAppearance){
+        const postRes=await resolveOrCreateReference({sel:{id:"",name:g.post.trim()},refType:"posts",options:postOptions,gasSecret,push});
+        if(!postRes.ok){ push("error",`❌ "${g.post}" পদ যোগ/খুঁজে পাওয়া যায়নি`,"এই group বাদ পড়লো, বাকিগুলো চলছে"); continue; }
+        const instRes=await resolveOrCreateReference({sel:{id:"",name:g.institution.trim()},refType:"institutions",options:instOptions,gasSecret,push});
+        if(!instRes.ok){ push("error",`❌ "${g.institution}" প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি`,"এই group বাদ পড়লো, বাকিগুলো চলছে"); continue; }
+        examAppearance={postId:postRes.id,institutionId:instRes.id,year:g.year.trim()};
+        if(postRes.created||instRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+      }
+
       const subject=g.subject.trim();
-      const subtopic=g.subtopic.trim();
+      const subtopicFallback=g.subtopic.trim()||subject;
       const mainQpaper=groupQpaper[g.id]||"";
-      g.rows.forEach(r=>allRows.push({q:r.q,correct:r.correct,subject,topic:subtopic,mainQpaper}));
-    });
+      // ── প্রতিটা প্রশ্নের নিজস্ব AI-detected subject থাকলে সেটাই ব্যবহার হয় (topic
+      // per-entry কখনো detect হয় না, তাই সবসময় group-এর fallback Topic ব্যবহার হয়,
+      // resolveSubjectTopicForEntries-এর fallbackTopic প্যারামিটার দিয়ে) ──
+      const entries=g.rows.map(r=>({q:r.q,correct:r.correct,subject:r.subject||"",topic:"",mainQpaper}));
 
-    // ── প্রতিটা row-এর group-subject/subtopic টেক্সট থেকে subject_id/topic_id রেজলভ করা হয়
-    // (raw text sheet-এ যায় না — QBank-এ তো plain "subject" কলামই নেই) ──
-    const resolveResult=await resolveSubjectTopicForEntries({
-      entries:allRows, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:targetMode, push,
-    });
-    if(!resolveResult.ok){
-      setSubmitting(false);
-      push("error","❌ "+resolveResult.reason,"");
-      return;
+      const resolveResult=await resolveSubjectTopicForEntries({
+        entries, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:targetMode, push,
+        fallbackSubject:subject, fallbackTopic:subtopicFallback,
+      });
+      if(!resolveResult.ok){ push("error",`❌ "${subject}" গ্রুপে সমস্যা: `+resolveResult.reason,""); continue; }
+      if(resolveResult.anyCreated) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+
+      // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
+      // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
+      const rows=resolveResult.resolved.map(({item,subjectId,topicId,subjectName,topicName})=>buildSheetRow({
+        item:{q:item.q,correct:item.correct,explanation:""},
+        subject:subjectName,subtopic:topicName,qtype:"Written",audienceTags:[],
+        subjectId,topicId,mainQpaper:item.mainQpaper,
+      }));
+      const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance});
+      totalAdded+=res.added||0; totalSkipped+=res.skipped||0;
+      totalLinkedExisting+=res.examAppearancesLinkedToExisting||0;
+      if(res.failedRows.length) totalFailed=totalFailed.concat(res.failedRows);
+      if(res.added>0||res.skipped>0) submittedGroupIds.push(g.id);
     }
-    if(resolveResult.anyCreated) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
 
-    // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
-    // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
-    const rows=resolveResult.resolved.map(({item,subjectId,topicId,subjectName,topicName})=>buildSheetRow({
-      item:{q:item.q,correct:item.correct,explanation:""},
-      subject:subjectName,subtopic:topicName,qtype:"Written",audienceTags:[],
-      subjectId,topicId,mainQpaper:item.mainQpaper,
-    }));
-    const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance});
-    if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
-    setResult({added:res.added,skipped:res.skipped,failed:res.failedRows.length,groupCount:readyGroups.length});
+    if(totalFailed.length) pushFailedItems(SRC_NAME,"sheet",targetMode,totalFailed);
+    setResult({added:totalAdded,skipped:totalSkipped,failed:totalFailed.length,groupCount:submittedGroupIds.length});
     setSubmitting(false);
-    // ── যেসব group Submit হলো, শুধু ওগুলোই লিস্ট থেকে সরাও — Subject/Sub-topic ফাঁকা থাকা group-গুলো
-    //    Confirm স্ক্রিনেই থেকে যাবে, পূরণ করে আবার Submit চাপার জন্য ──
-    const readyIds=new Set(readyGroups.map(g=>g.id));
-    setDraftGroups(p=>p.filter(g=>!readyIds.has(g.id)));
-    setPhase(blockedGroups.length>0?"confirm":"done");
-    if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,
-      `${readyGroups.length}টি subject/sub-topic গ্রুপ`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
+    // ── যেসব group সফলভাবে Submit হলো, শুধু ওগুলোই লিস্ট থেকে সরাও — ফাঁকা/ব্যর্থ group-গুলো
+    //    Confirm স্ক্রিনেই থেকে যাবে, পূরণ/ঠিক করে আবার Submit চাপার জন্য ──
+    const doneIds=new Set(submittedGroupIds);
+    setDraftGroups(p=>p.filter(g=>!doneIds.has(g.id)));
+    setPhase((blockedGroups.length>0||doneIds.size<readyGroups.length)?"confirm":"done");
+    if(totalAdded>0) push("success",`✅ ${totalAdded}টি Sheet-এ যোগ হয়েছে!`,
+      `${submittedGroupIds.length}টি group`+(totalSkipped?`, ${totalSkipped}টা duplicate বাদ পড়েছে`:""));
     // 🐛 ফিক্স: duplicate QBank প্রশ্ন পেলেও এখন appearance হারায় না — বিদ্যমান প্রশ্নের
     // সাথেই জুড়ে যায় (BulkUploaderPage-এর মতোই, GAS-এর bulk_save_rows-এর একই ফিক্স)।
-    if(res.examAppearancesLinkedToExisting>0) push("success",`🔗 ${res.examAppearancesLinkedToExisting}টা প্রশ্ন আগে থেকেই QBank-এ ছিল`,"নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
-    if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
-    if(res.added>0||res.skipped>0){
-      const ids=readyGroups.flatMap(g=>g.archiveIds||[]);
+    if(totalLinkedExisting>0) push("success",`🔗 ${totalLinkedExisting}টা প্রশ্ন আগে থেকেই QBank-এ ছিল`,"নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
+    if(totalFailed.length) push("error",`${totalFailed.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
+    if(totalAdded>0||totalSkipped>0){
+      const ids=readyGroups.filter(g=>doneIds.has(g.id)).flatMap(g=>g.archiveIds||[]);
       if(ids.length) archiveDeleteMany(ids);
     }
 
@@ -709,11 +744,12 @@ function MultiSubjectImportPage({push}){
         <>
           <div style={{background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 12px",fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.7}}>
             <div style={{color:C.text,fontWeight:700,marginBottom:3}}>🔎 এক নজরে দেখে নাও — সব ঠিক থাকলে Confirm করো</div>
-            <div>নিচে {draftGroups.length}টা group পাওয়া গেছে। Subject/Sub-topic ভুল বা ফাঁকা থাকলে ঠিক করে দাও, ভুল group হলে বাদ দাও (❌)।</div>
+            <div>নিচে {draftGroups.length}টা group পাওয়া গেছে। {targetMode==="QBank"?"পদ/প্রতিষ্ঠান/সাল ও Subject ":"Subject "}ভুল বা ফাঁকা থাকলে ঠিক করে দাও, ভুল group হলে বাদ দাও (❌)।</div>
           </div>
           <div className="ss-scroll" style={{maxHeight:"58vh",overflowY:"auto",paddingRight:6,marginBottom:4}}>
           {draftGroups.map(g=>{
-            const isEmpty=!g.subject.trim()||!g.subtopic.trim();
+            const needsAppearance=targetMode==="QBank";
+            const isEmpty=!g.subject.trim() || (needsAppearance&&(!g.post.trim()||!g.institution.trim()||!g.year.trim()));
             const imgsOpen=expandedGroupId===g.id;
             return(
               <div key={g.id} style={{background:g.included?C.panel:"#1a1a1a",opacity:g.included?1:.5,
@@ -787,24 +823,61 @@ function MultiSubjectImportPage({push}){
                     })}
                   </div>
                 )}
+                {needsAppearance&&(
+                  <>
+                    <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:4,marginTop:2}}>🧾 এই পাতাগুলো কোন পরীক্ষার (Post/Institution ভুল হলে ঠিক করে দাও)</div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                      <div className="fld" style={{marginBottom:0}}>
+                        <label>🧑‍💼 পদ{!g.post.trim()&&<span style={{color:"#f59e0b"}}> ⚠️</span>}</label>
+                        <TypeaheadCombo
+                          options={postOptions}
+                          value={{id:"",name:g.post}}
+                          onChange={sel=>updateGroupField(g.id,"post",sel.name)}
+                          placeholder="যেমন: গাড়ী চালক"
+                          newLabel={`🆕 "${g.post.trim()}" নতুন পদ হিসেবে যোগ হবে`}
+                        />
+                      </div>
+                      <div className="fld" style={{marginBottom:0}}>
+                        <label>🏢 প্রতিষ্ঠান{!g.institution.trim()&&<span style={{color:"#f59e0b"}}> ⚠️</span>}</label>
+                        <TypeaheadCombo
+                          options={instOptions}
+                          value={{id:"",name:g.institution}}
+                          onChange={sel=>updateGroupField(g.id,"institution",sel.name)}
+                          placeholder="যেমন: বন অধিদপ্তর"
+                          newLabel={`🆕 "${g.institution.trim()}" নতুন প্রতিষ্ঠান হিসেবে যোগ হবে`}
+                        />
+                      </div>
+                    </div>
+                    <div className="fld" style={{marginBottom:8}}>
+                      <label>📅 সাল{!g.year.trim()&&<span style={{color:"#f59e0b"}}> ⚠️</span>}</label>
+                      <input className="inp" value={g.year} onChange={e=>updateGroupField(g.id,"year",e.target.value)} placeholder="যেমন: 2025"/>
+                    </div>
+                  </>
+                )}
+                <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:4}}>📚 বিষয় (এই গ্রুপের প্রশ্নগুলো কোন বিষয়ের — AI যেটা ধরতে পারেনি সেখানে এটাই বসবে)</div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                   <div className="fld" style={{marginBottom:0}}>
-                    <label>📚 Subject{isEmpty&&<span style={{color:"#f59e0b"}}> ⚠️ খালি</span>}</label>
+                    <label>📚 Subject{!g.subject.trim()&&<span style={{color:"#f59e0b"}}> ⚠️ খালি</span>}</label>
                     <input className="inp" value={g.subject} onChange={e=>updateGroupField(g.id,"subject",e.target.value)} placeholder="Subject লিখুন..."/>
                   </div>
                   <div className="fld" style={{marginBottom:0}}>
-                    <label>📌 Sub-topic</label>
-                    <input className="inp" value={g.subtopic} onChange={e=>updateGroupField(g.id,"subtopic",e.target.value)} placeholder="Sub-topic লিখুন..."/>
+                    <label>📌 Topic (ঐচ্ছিক)</label>
+                    <input className="inp" value={g.subtopic} onChange={e=>updateGroupField(g.id,"subtopic",e.target.value)} placeholder="খালি রাখলে Subject-ই বসবে"/>
                   </div>
                 </div>
+                {g.rows.some(r=>r.subject)&&(
+                  <div style={{fontSize:9,color:"#22c55e",marginTop:6}}>✨ {g.rows.filter(r=>r.subject).length}/{g.rows.length}টা প্রশ্নে AI সেকশন-হেডিং ("বাংলা-২৫", "গণিত-১৫" ইত্যাদি) দেখে বিষয় ধরে ফেলেছে — বাকিগুলোর জন্য উপরের Subject fallback হিসেবে বসবে</div>
+                )}
               </div>
             );
           })}
           </div>
           {(()=>{
             const incGroups=draftGroups.filter(g=>g.included);
-            const readyG=incGroups.filter(g=>g.subject.trim()&&g.subtopic.trim());
-            const blockedG=incGroups.filter(g=>!g.subject.trim()||!g.subtopic.trim());
+            const needsAppearance2=targetMode==="QBank";
+            const isReady=g=>g.subject.trim() && (!needsAppearance2 || (g.post.trim()&&g.institution.trim()&&g.year.trim()));
+            const readyG=incGroups.filter(isReady);
+            const blockedG=incGroups.filter(g=>!isReady(g));
             const readyQ=readyG.reduce((s,g)=>s+g.rows.length,0);
             return(
               <div style={{background:C.panel,border:`1px solid ${blockedG.length>0?"#f59e0b":C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
@@ -814,7 +887,7 @@ function MultiSubjectImportPage({push}){
                 </div>
                 {blockedG.length>0&&(
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginTop:6,paddingTop:6,borderTop:`1px dashed ${C.border}`}}>
-                    <span style={{color:"#f59e0b",fontWeight:700}}>⚠️ Subject/Sub-topic ফাঁকা — বাদ যাবে</span>
+                    <span style={{color:"#f59e0b",fontWeight:700}}>⚠️ {needsAppearance2?"Subject/পদ/প্রতিষ্ঠান/সাল":"Subject"} ফাঁকা — বাদ যাবে</span>
                     <span style={{color:"#f59e0b",fontWeight:900}}>{blockedG.length}টি group</span>
                   </div>
                 )}
@@ -861,13 +934,15 @@ function MultiSubjectImportPage({push}){
             <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={setGasSecretP}/>
           </div>
 
-          {/* পদ/প্রতিষ্ঠান/সাল — শুধু QBank mode-এ, ঐচ্ছিক। QBank প্রশ্ন user app-এ
-              exam-appearance (পদ+প্রতিষ্ঠান+সাল) দিয়ে ব্রাউজ হয় — এটা না দিলে প্রশ্ন
-              QBank-এ যোগ হবে ঠিকই, কিন্তু appearance-browse-এ কখনো দেখা যাবে না। */}
+          {/* পদ/প্রতিষ্ঠান/সাল — শুধু QBank mode-এ, ঐচ্ছিক ডিফল্ট। এখানে যা দেওয়া থাকবে সেটা
+              "Process" করার সময় প্রতিটা নতুন group-এর শুরুর মান হিসেবে বসে যাবে (AI যদি পাতা
+              থেকে নিজে থেকেই পদ/প্রতিষ্ঠান/সাল ধরে ফেলে, সেটাই override করে) — Confirm স্ক্রিনে
+              প্রতিটা group আলাদাভাবে এডিট করা যায়, তাই একই ব্যাচে ভিন্ন ভিন্ন পরীক্ষার পাতা
+              থাকলেও সমস্যা নেই। */}
           {targetMode==="QBank"&&(
             <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12}}>
-              <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? (ঐচ্ছিক)</div>
-              <div style={{fontSize:10,color:C.muted,marginBottom:8}}>দিলে এই পুরো ব্যাচ একটা Exam Appearance পাবে — খালি রাখলে প্রশ্নগুলো QBank-এ যোগ হবে, কিন্তু appearance-browse-এ দেখা যাবে না।</div>
+              <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:2}}>🧾 ডিফল্ট পদ/প্রতিষ্ঠান/সাল (ঐচ্ছিক)</div>
+              <div style={{fontSize:10,color:C.muted,marginBottom:8}}>সব পাতা একই পরীক্ষার হলে এখানে একবার দিয়ে রাখো — Process করার পর প্রতিটা group-এ এটাই বসে যাবে (AI নিজে ধরতে পারলে সেটাই থাকবে)। প্রতিটা group Confirm স্ক্রিনে আলাদাভাবে বদলানো যাবে।</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
                 <div className="fld" style={{marginBottom:0}}>
                   <label>পদ (Post)</label>
