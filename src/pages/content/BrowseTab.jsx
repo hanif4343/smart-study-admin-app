@@ -24,6 +24,7 @@ import { callAiProviderRotatingRaw, buildKeyPool, OCR_SPLIT_RULES, OCR_NOISE_RUL
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
 import { InlineEditModal } from "./InlineEditModal.jsx";
 import { ReformatReviewModal } from "./ReformatReviewModal.jsx";
+import { AppearanceQuickModal } from "./AppearanceQuickModal.jsx";
 import { useModalBack } from "../../hooks/useModalBack.js";
 
 /* ── প্রশ্নের group_id/sub_index — sheet header যেই casing-এই থাকুক (snake_case
@@ -117,6 +118,7 @@ function BrowseTab({push,tick}){
   const[filterAudience,setFilterAudience]=useState("all");
   const[viewMode,setViewMode]=useState("all"); // "all" | "duplicates" | "suspicious"
   const[editing,setEditing]=useState(null);
+  const[appearanceTarget,setAppearanceTarget]=useState(null); // 🧾 quick-appearance মডালের জন্য (শুধু QBank)
   const[delTarget,setDelTarget]=useState(null);
   const[delLoading,setDelLoading]=useState(false);
   const[groupDeleteCtx,setGroupDeleteCtx]=useState(null); // {target, group} — group-choice modal
@@ -676,6 +678,9 @@ function BrowseTab({push,tick}){
                 </span>
               )}
               <div style={{flex:1}}/>
+              {sheet==="QBank"&&(
+                <button className="btn" style={{padding:"3px 9px",fontSize:10,background:"#818cf822",color:"#818cf8",border:"1px solid #818cf844"}} onClick={()=>setAppearanceTarget(q)} title="Exam Appearance দেখো/যোগ করো">🧾</button>
+              )}
               <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}33`}} onClick={()=>setEditing(q)}>✏️</button>
               <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`}} onClick={()=>onDeleteClick(q)}>🗑️</button>
             </div>
@@ -751,6 +756,15 @@ function BrowseTab({push,tick}){
         </div>
       )}
       {editing&&<InlineEditModal q={editing} sheet={sheet} onClose={()=>setEditing(null)} onSaved={()=>{setEditing(null);refreshSheet();}} push={push}/>}
+      {appearanceTarget&&<AppearanceQuickModal
+        question={appearanceTarget}
+        questionText={appearanceTarget.Question||appearanceTarget.question||""}
+        refData={refData}
+        gasSecret={gasSecret}
+        onRefreshRef={()=>setLocalTick(t=>t+1)}
+        onClose={()=>setAppearanceTarget(null)}
+        push={push}
+      />}
       {groupDeleteCtx&&<GroupDeleteChoiceModal
         target={groupDeleteCtx.target} group={groupDeleteCtx.group}
         onCancel={()=>setGroupDeleteCtx(null)}
