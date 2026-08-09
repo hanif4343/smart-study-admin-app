@@ -794,12 +794,32 @@ function doGet(e) {
     var ribTopicsSh=ribSs.getSheetByName("Topics");
     var ribTopicsData=ribTopicsSh?ribTopicsSh.getDataRange().getValues():[];
     var ribTopicsHdr=ribTopicsData[0]||[];
-    // Topics ট্যাবে row_start/row_count কলাম না থাকলে যোগ করো
-    var ribRsCol=ribTopicsHdr.indexOf("row_start"), ribRcCol=ribTopicsHdr.indexOf("row_count");
-    if (ribTopicsSh && ribRsCol<0) { ribTopicsSh.getRange(1,ribTopicsHdr.length+1).setValue("row_start"); ribRsCol=ribTopicsHdr.length; }
-    if (ribTopicsSh && ribRcCol<0) { ribTopicsSh.getRange(1,ribTopicsHdr.length+(ribRsCol===ribTopicsHdr.length?2:1)).setValue("row_count"); ribRcCol=ribRsCol+1; }
 
-    var ribIndexMap={}; // topic_id -> {start,count,sheet}
+    // ── FIX (bug: Quiz/Study-তে প্রশ্ন 0 দেখাতো যদিও QBank-এ ঠিক দেখাতো) ──
+    // আগে row_start/row_count Topics-এ মাত্র ১টা কলাম-জোড়া ছিল, আর নিচের লুপে
+    // একটাই shared ribIndexMap (শুধু topic_id দিয়ে key করা) Quiz→QBank→Study
+    // তিনটা শিট প্রসেস করতো। কোনো topic_id একাধিক শিটে (যেমন Quiz আর QBank দুটোতেই)
+    // থাকলে পরের শিট আগেরটার index চুপচাপ ওভাররাইট করে দিতো — ফলে Quiz browse
+    // করার সময় getQuestionsPage ভুল sheet-এর row-range Quiz ট্যাবে apply করতে
+    // যেতো (range Quiz ট্যাবের বাইরে পড়লে getRange() এরর দেয়, ক্লায়েন্টে সেটাই
+    // "কোনো প্রশ্ন পাওয়া যায়নি — ইন্টারনেট চেক করো" হয়ে দেখা যায়)।
+    // এখন প্রতিটা শিটের জন্য আলাদা row_start_<sheet>/row_count_<sheet> কলাম-জোড়া
+    // রাখা হচ্ছে, তাই কোনো ওভাররাইট হয় না — একই topic_id তিন শিটেই থাকলেও
+    // প্রতিটার নিজের সঠিক row-range নিজের কলামে থাকে। ──
+    var ribColPairs={}; // sheetName -> {rsCol, rcCol}
+    for (var rp=0;rp<ribSheets.length;rp++){
+      var ribPName=ribSheets[rp].name;
+      var ribRsColName="row_start_"+ribPName.toLowerCase();
+      var ribRcColName="row_count_"+ribPName.toLowerCase();
+      var ribRsC=ribTopicsHdr.indexOf(ribRsColName), ribRcC=ribTopicsHdr.indexOf(ribRcColName);
+      if (ribTopicsSh && ribRsC<0) { ribTopicsSh.getRange(1,ribTopicsHdr.length+1).setValue(ribRsColName); ribRsC=ribTopicsHdr.length; ribTopicsHdr.push(ribRsColName); }
+      if (ribTopicsSh && ribRcC<0) { ribTopicsSh.getRange(1,ribTopicsHdr.length+1).setValue(ribRcColName); ribRcC=ribTopicsHdr.length; ribTopicsHdr.push(ribRcColName); }
+      ribColPairs[ribPName]={rsCol:ribRsC,rcCol:ribRcC};
+    }
+    // ⚠️ legacy generic row_start/row_count কলাম থাকলেও রেখে দেওয়া হলো (পুরনো ক্লায়েন্ট/
+    // স্ক্রিপ্ট এখনো পড়তে পারে বলে), কিন্তু নতুন লজিক এখন এগুলোর ওপর নির্ভর করে না।
+    var ribLegacyRsCol=ribTopicsHdr.indexOf("row_start"), ribLegacyRcCol=ribTopicsHdr.indexOf("row_count");
+
     for (var rs=0;rs<ribSheets.length;rs++) {
       var ribShName=ribSheets[rs].name;
       var ribSh=ribSs.getSheetByName(ribShName);
@@ -813,33 +833,44 @@ function doGet(e) {
       var ribSortCols=[{column:ribSubCol+1,ascending:true}];
       if (ribTopCol>=0) ribSortCols.push({column:ribTopCol+1,ascending:true});
       ribSh.getRange(2,1,ribSh.getLastRow()-1,ribSh.getLastColumn()).sort(ribSortCols);
-      // re-read after sort, build contiguous ranges per topic_id
+      // re-read after sort, build contiguous ranges per topic_id — এই শিটের নিজস্ব ম্যাপে
+      var ribIndexMap={}; // topic_id -> {start,count} — শুধু এই sheet-এর জন্য, আলাদা প্রতিবার
       var ribData2=ribSh.getDataRange().getValues();
       var curTopic=null, curStart=2, curCount=0;
       for (var i5=1;i5<ribData2.length;i5++){
         var tId=ribTopCol>=0?(ribData2[i5][ribTopCol]||"").toString():"";
         if (tId!==curTopic) {
-          if (curTopic) ribIndexMap[curTopic]={start:curStart,count:curCount,sheet:ribShName};
+          if (curTopic) ribIndexMap[curTopic]={start:curStart,count:curCount};
           curTopic=tId; curStart=i5+1; curCount=0;
         }
         curCount++;
       }
-      if (curTopic) ribIndexMap[curTopic]={start:curStart,count:curCount,sheet:ribShName};
+      if (curTopic) ribIndexMap[curTopic]={start:curStart,count:curCount};
       ribResults[ribShName]="sorted, "+(ribData2.length-1)+" rows";
-    }
-    // Topics ট্যাবে row_start/row_count বসাও (topic_id দিয়ে ম্যাচ করে)
-    if (ribTopicsSh) {
-      var ribTIdCol=ribTopicsHdr.indexOf("topic_id");
-      for (var t2=1;t2<ribTopicsData.length;t2++){
-        var ribTid=(ribTopicsData[t2][ribTIdCol]||"").toString();
-        var ribEntry=ribIndexMap[ribTid];
-        if (ribEntry) {
-          ribTopicsSh.getRange(t2+1,ribRsCol+1).setValue(ribEntry.start);
-          ribTopicsSh.getRange(t2+1,ribRcCol+1).setValue(ribEntry.count);
+
+      // এই শিটের row_start_<sheet>/row_count_<sheet> কলামে বসাও (topic_id ম্যাচ করে)
+      if (ribTopicsSh) {
+        var ribPair=ribColPairs[ribShName];
+        var ribTIdCol=ribTopicsHdr.indexOf("topic_id");
+        for (var t2=1;t2<ribTopicsData.length;t2++){
+          var ribTid=(ribTopicsData[t2][ribTIdCol]||"").toString();
+          var ribEntry=ribIndexMap[ribTid];
+          if (ribEntry) {
+            ribTopicsSh.getRange(t2+1,ribPair.rsCol+1).setValue(ribEntry.start);
+            ribTopicsSh.getRange(t2+1,ribPair.rcCol+1).setValue(ribEntry.count);
+            // legacy কলাম থাকলে সর্বশেষ প্রসেস হওয়া শিট দিয়ে রেফারেন্সের জন্য আপডেট (backward-compat only)
+            if (ribLegacyRsCol>=0) ribTopicsSh.getRange(t2+1,ribLegacyRsCol+1).setValue(ribEntry.start);
+            if (ribLegacyRcCol>=0) ribTopicsSh.getRange(t2+1,ribLegacyRcCol+1).setValue(ribEntry.count);
+          } else {
+            // এই sheet-এ এই topic_id-এর কোনো রো নেই — আগের স্টেল ভ্যালু মুছে দাও,
+            // নইলে পুরনো row_start_quiz স্টেল/ভুল range নিয়ে fast-path ভুলভাবে ট্রিগার হতে পারে
+            ribTopicsSh.getRange(t2+1,ribPair.rsCol+1).setValue("");
+            ribTopicsSh.getRange(t2+1,ribPair.rcCol+1).setValue("");
+          }
         }
       }
     }
-    return json({status:"success",result:"success",message:"Index rebuilt",details:ribResults});
+    return json({status:"success",result:"success",message:"Index rebuilt (per-sheet)",details:ribResults});
   }
 
   // ── getQuestionsPage — subject_id(+topic_id) অনুযায়ী ঠিক ৫০টা (বা limit)
@@ -869,12 +900,22 @@ function doGet(e) {
     var gqpHdr=gqpSh.getRange(1,1,1,gqpSh.getLastColumn()).getValues()[0];
     var gqpHdrNorm=gqpHdr.map(function(h){return h.toString().trim().toLowerCase();});
 
-    // ── index (row_start/row_count) খুঁজে দেখা — থাকলে ও বৈধ (start>0) হলে fast path ──
+    // ── index খুঁজে দেখা — থাকলে ও বৈধ হলে fast path ──
+    // ⚠️ FIX: আগে generic row_start/row_count কলাম পড়া হতো, যেটা rebuildIndex-এ
+    // Quiz/QBank/Study তিন শিটই শেয়ার করতো (শেষে যেটা প্রসেস হতো সেটাই টিকে থাকতো)।
+    // এখন এই request যে sheet-এর (gqpSheet) জন্য, ঠিক সেই sheet-স্কোপড
+    // row_start_<sheet>/row_count_<sheet> কলাম পড়া হচ্ছে — অন্য sheet-এর range
+    // এখানে ভুলবশত apply হওয়ার আর সুযোগ নেই।
     var gqpEntry=null;
     var gqpTopicsSh=gqpSs.getSheetByName("Topics");
     if (gqpTopicsSh) {
       var gqpTData=gqpTopicsSh.getDataRange().getValues(), gqpTHdr=gqpTData[0]||[];
-      var gqpTIdCol=gqpTHdr.indexOf("topic_id"), gqpRsCol=gqpTHdr.indexOf("row_start"), gqpRcCol=gqpTHdr.indexOf("row_count");
+      var gqpSheetKey=gqpSheet.toLowerCase();
+      var gqpTIdCol=gqpTHdr.indexOf("topic_id");
+      var gqpRsCol=gqpTHdr.indexOf("row_start_"+gqpSheetKey), gqpRcCol=gqpTHdr.indexOf("row_count_"+gqpSheetKey);
+      // পুরনো index (rebuildIndex আগের ভার্সনে চালানো, নতুন per-sheet কলাম এখনো নেই) হলে
+      // legacy generic কলামে fallback করো, নাহলে একদম নতুন সেটআপে সবাই fallback-scan করত
+      if (gqpRsCol<0 || gqpRcCol<0) { gqpRsCol=gqpTHdr.indexOf("row_start"); gqpRcCol=gqpTHdr.indexOf("row_count"); }
       if (gqpTIdCol>=0 && gqpRsCol>=0 && gqpRcCol>=0) {
         for (var g1=1;g1<gqpTData.length;g1++){
           if ((gqpTData[g1][gqpTIdCol]||"").toString()===gqpTopicId){
@@ -887,29 +928,43 @@ function doGet(e) {
     }
 
     var gqpRows=[], gqpTotal=0, gqpNextCursor=gqpCursor, gqpHasMore=false;
+    var gqpFastPathFailed=false;
 
     if (gqpEntry) {
       // ── FAST PATH: ইনডেক্স আছে ও বৈধ — সরাসরি row-range পড়ো ──
-      var gqpReadStart=gqpEntry.start+gqpCursor;
-      var gqpRemaining=gqpEntry.count-gqpCursor;
-      gqpTotal=gqpEntry.count;
-      if (gqpRemaining>0) {
-        var gqpReadCount=Math.min(gqpLimit, gqpRemaining);
-        var gqpVals=gqpSh.getRange(gqpReadStart,1,gqpReadCount,gqpSh.getLastColumn()).getValues();
-        for (var g2=0;g2<gqpVals.length;g2++){
-          var gqpRec={};
-          for (var g3=0;g3<gqpHdr.length;g3++){
-            var gqpKey=gqpHdr[g3].toString().trim();
-            if (!gqpKey) continue;
-            var gqpVal=gqpVals[g2][g3];
-            gqpRec[gqpKey]=(gqpVal instanceof Date)?Utilities.formatDate(gqpVal,"GMT+6","dd-MM-yyyy HH:mm:ss"):gqpVal;
-          }
-          gqpRows.push(gqpRec);
+      // ⚠️ try/catch যোগ করা হলো: index স্টেল/অন্য sheet-এর হলে (out-of-range) আগে
+      // getRange() সরাসরি এরর ছুঁড়তো আর সেটাই ক্লায়েন্টে "কোনো প্রশ্ন পাওয়া যায়নি —
+      // ইন্টারনেট চেক করো" হয়ে দেখাতো। এখন এমন হলে চুপচাপ live-scan fallback-এ নেমে যায়।
+      try {
+        var gqpReadStart=gqpEntry.start+gqpCursor;
+        var gqpRemaining=gqpEntry.count-gqpCursor;
+        if (gqpReadStart<1 || gqpReadStart+Math.max(gqpRemaining,0)-1>gqpSh.getLastRow()) {
+          throw new Error("stale index range for sheet "+gqpSheet);
         }
-        gqpNextCursor=gqpCursor+gqpReadCount;
+        gqpTotal=gqpEntry.count;
+        if (gqpRemaining>0) {
+          var gqpReadCount=Math.min(gqpLimit, gqpRemaining);
+          var gqpVals=gqpSh.getRange(gqpReadStart,1,gqpReadCount,gqpSh.getLastColumn()).getValues();
+          for (var g2=0;g2<gqpVals.length;g2++){
+            var gqpRec={};
+            for (var g3=0;g3<gqpHdr.length;g3++){
+              var gqpKey=gqpHdr[g3].toString().trim();
+              if (!gqpKey) continue;
+              var gqpVal=gqpVals[g2][g3];
+              gqpRec[gqpKey]=(gqpVal instanceof Date)?Utilities.formatDate(gqpVal,"GMT+6","dd-MM-yyyy HH:mm:ss"):gqpVal;
+            }
+            gqpRows.push(gqpRec);
+          }
+          gqpNextCursor=gqpCursor+gqpReadCount;
+        }
+        gqpHasMore=gqpNextCursor<gqpTotal;
+      } catch (gqpFastErr) {
+        Logger.log("getQuestionsPage fast-path failed, falling back to live scan: "+gqpFastErr);
+        gqpFastPathFailed=true;
+        gqpRows=[]; gqpTotal=0; gqpNextCursor=gqpCursor; gqpHasMore=false;
       }
-      gqpHasMore=gqpNextCursor<gqpTotal;
-    } else {
+    }
+    if (!gqpEntry || gqpFastPathFailed) {
       // ── FALLBACK PATH: ইনডেক্স নেই/স্টেল/এই topic_id-এর জন্য অনুপস্থিত —
       // sheet-এ topic_id কলাম দিয়ে সরাসরি লাইভ স্ক্যান করে ম্যাচিং রো বের করো ──
       var gqpTopicColIdx=gqpHdrNorm.indexOf("topic_id");
