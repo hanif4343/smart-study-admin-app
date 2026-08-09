@@ -255,4 +255,16 @@ async function fetchAllExamAppearances({gasSecret,push}){
   }catch(e){ push?.("error","❌ Appearance লোড ব্যর্থ",e.message); return{ok:false,appearances:[]}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances };
+/* ── একটা নির্দিষ্ট appearance-এন্ট্রি মুছে দেয় (ভুল করে যোগ হওয়া পদ/প্রতিষ্ঠান/সাল
+   সরানোর জন্য) — মূল প্রশ্ন বা বাকি appearance-গুলো touch হয় না ── */
+async function deleteExamAppearance({appearanceId,gasSecret,push}){
+  try{
+    const url=`${GAS}?action=deleteExamAppearance&secret=${encodeURIComponent(gasSecret)}&appearanceId=${encodeURIComponent(appearanceId)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status!=="success"){ push?.("error","❌ Appearance মুছতে ব্যর্থ",data.message||""); return{ok:false}; }
+    return{ok:true};
+  }catch(e){ push?.("error","❌ Appearance মুছতে ব্যর্থ",e.message); return{ok:false}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance };
