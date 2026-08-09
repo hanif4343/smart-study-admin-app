@@ -16,10 +16,11 @@ import {
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
-import { resolveSubjectTopicForEntries } from "../core/referenceHelpers.js";
+import { resolveSubjectTopicForEntries, resolveOrCreateReference } from "../core/referenceHelpers.js";
 import { archiveList, archiveUpdate, archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
+import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 
 const SRC_NAME="Archive";
 
@@ -42,6 +43,15 @@ function ArchivePage({push,onSendToBulk}){
   const[refData,setRefData]=useState(null);
   useEffect(()=>{ fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); },[gasSecret]);
   const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===targetMode):[];
+
+  // ── QBank + Post/Institution/Year — যেকোনো entry সরাসরি Submit করার সময় targetMode
+  // QBank হলে এটা ব্যবহার হয়, ঠিক AIImportPage/BulkUploaderPage-এর মতোই। এটা ছাড়া
+  // QBank প্রশ্ন appearance-browse-এ কখনো দেখা যাবে না। ──
+  const[postSel,setPostSel]=useState({id:"",name:""});
+  const[instSel,setInstSel]=useState({id:"",name:""});
+  const[examYear,setExamYear]=useState("");
+  const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
+  const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
 
   const sources=useMemo(()=>["All",...new Set(entries.map(e=>e.source))],[entries]);
   const filtered=useMemo(()=>entries.filter(e=>{
@@ -89,6 +99,23 @@ function ArchivePage({push,onSendToBulk}){
       push("warn","⚠️ Subject লিখুন (উপরে এডিট করে, অথবা প্রতিটা লাইনে Subject;Topic টাইপ করো)","");return;
     }
     if(!refData){push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো","");return;}
+
+    // ── QBank + পদ/প্রতিষ্ঠান/সালের অন্তত ১টা দেওয়া থাকলে → resolve/create করে
+    // {postId,institutionId,year} বানানো হয় (BulkUploaderPage/AIImportPage-এর মতোই) ──
+    let examAppearance=null;
+    if(targetMode==="QBank" && (postSel.name.trim()||instSel.name.trim()||examYear.trim())){
+      if(!postSel.name.trim()||!instSel.name.trim()||!examYear.trim()){
+        push("warn","⚠️ পদ, প্রতিষ্ঠান ও সাল — একটা দিলে তিনটাই দিতে হবে (অথবা তিনটাই খালি রাখো)","");
+        return;
+      }
+      const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
+      if(!postRes.ok){ push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
+      if(!instRes.ok){ push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
+      if(postRes.created||instRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+    }
+
     setSubmittingId(e.id);
 
     // ── প্রতিটা এন্ট্রির subject/topic (বা fallback হিসেবে Archive entry-র subject/subtopic)
@@ -105,11 +132,16 @@ function ArchivePage({push,onSendToBulk}){
       item, subject:subjectName, subtopic:topicName,
       qtype:effQtype, audienceTags:[], subjectId, topicId,
     }));
-    const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push});
+    const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance});
     if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
     setSubmittingId(null);
     const subjLabel=[...new Set(r.resolved.map(x=>x.subjectName))].join(", ");
     if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,`${targetMode} — ${subjLabel}`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
+    // 🐛 ফিক্স: duplicate QBank প্রশ্ন পেলেও এখন appearance হারায় না — বিদ্যমান প্রশ্নের
+    // সাথেই জুড়ে যায় (GAS-এর bulk_save_rows-এর একই ফিক্স)।
+    if(res.examAppearancesLinkedToExisting>0) push("success",`🔗 ${res.examAppearancesLinkedToExisting}টা প্রশ্ন আগে থেকেই QBank-এ ছিল`,"নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
+    if(examAppearance && !res.examAppearancesAdded && !res.examAppearancesLinkedToExisting) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
+    if(res.examAppearancesAdded>res.examAppearancesLinkedToExisting)push("success",`🧾 ${res.examAppearancesAdded-res.examAppearancesLinkedToExisting}টা নতুন প্রশ্নে Exam Appearance যোগ হয়েছে`,"পদ/প্রতিষ্ঠান/সাল যুক্ত হয়েছে");
     if(res.failedRows.length) push("error",`${res.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if(res.added>0||res.skipped>0){
       archiveDelete(e.id); refresh();
@@ -144,6 +176,40 @@ function ArchivePage({push,onSendToBulk}){
         </div>
         <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={setGasSecretP}/>
       </div>
+
+      {/* পদ/প্রতিষ্ঠান/সাল — শুধু QBank target-এ, ঐচ্ছিক */}
+      {targetMode==="QBank"&&(
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+          <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? (ঐচ্ছিক)</div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:8}}>যেসব entry এখান থেকে সরাসরি Submit করবে, সবগুলোই এই Exam Appearance পাবে।</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div className="fld" style={{marginBottom:0}}>
+              <label>পদ (Post)</label>
+              <TypeaheadCombo
+                options={postOptions}
+                value={postSel}
+                onChange={setPostSel}
+                placeholder="যেমন: সহকারী শিক্ষক"
+                newLabel={`🆕 "${postSel.name.trim()}" নতুন পদ হিসেবে যোগ হবে`}
+              />
+            </div>
+            <div className="fld" style={{marginBottom:0}}>
+              <label>প্রতিষ্ঠান (Institution)</label>
+              <TypeaheadCombo
+                options={instOptions}
+                value={instSel}
+                onChange={setInstSel}
+                placeholder="যেমন: প্রাথমিক বিদ্যালয়"
+                newLabel={`🆕 "${instSel.name.trim()}" নতুন প্রতিষ্ঠান হিসেবে যোগ হবে`}
+              />
+            </div>
+          </div>
+          <div className="fld" style={{marginBottom:0}}>
+            <label>সাল</label>
+            <input className="inp" placeholder="যেমন: 2025" value={examYear} onChange={ev=>setExamYear(ev.target.value)}/>
+          </div>
+        </div>
+      )}
 
       {/* Filter + Search */}
       <div style={{display:"flex",gap:6,overflowX:"auto",marginBottom:8,paddingBottom:2}}>
