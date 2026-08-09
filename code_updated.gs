@@ -1920,7 +1920,7 @@ function doPost(e) {
         if(col!==-1) arr[col]=fieldMap[fk];
       }
       return arr;
-    }
+    } 
 
     var fieldMap=null;
     if(tTab==="Quiz"){
