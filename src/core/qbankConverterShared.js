@@ -48,4 +48,34 @@ function normalizeLabel(s){
     .trim();
 }
 
-export { LS_QBC_TAXONOMY, LS_QBC_GAS_SECRET, LS_QBC_RESULTS_DRAFT, LS_QBC_SAVELOC, LS_QBC_AUTOSAVE, loadQbcSaveLoc, saveQbcSaveLoc, loadQbcAutoSave, saveQbcAutoSave, QBANK_CONV_TAXONOMY_DEFAULT, normalizeQbankQ, normalizeLabel };
+// ── 🐛 ফিক্স (Issue #2): AI মাঝেমধ্যে হার্ডকোড taxonomy-র emoji-decorated নাম
+// ("✍️ বাংলা ব্যাকরণ") হুবহু ফেরত দিয়ে দিতো, যেটা সরাসরি subject কলামে বসে যেত।
+// এই ফাংশন সাবজেক্ট/টপিক নাম থেকে emoji + variation selector + zero-width জাতীয়
+// অদৃশ্য ক্যারেক্টার ছেঁটে বিশুদ্ধ টেক্সট রাখে — Reference টেবিলে সেভ হওয়ার আগে
+// সবসময় এটা দিয়ে পাস করানো হয়, তাই AI যা-ই ফেরত দিক, sheet-এ emoji কখনো যায় না।
+function stripEmoji(s){
+  return (s||"").toString()
+    .replace(/[\u{1F000}-\u{1FFFF}\u{2190}-\u{2BFF}\u{2600}-\u{27BF}\uFE0F\u200D]/gu,"")
+    .replace(/[\u200B\u200C\u200D\uFEFF\u00A0]/g,"")
+    .replace(/\s+/g," ")
+    .trim();
+}
+
+// ── 🐛 ফিক্স (Issue #2): AI-কে দেওয়া "canonical taxonomy" আগে ছিল একটা হাতে-লেখা
+// স্ট্যাটিক লিস্ট (emoji সহ), যেটার সাথে আসল Subjects/Topics reference টেবিলের কোনো
+// সম্পর্কই ছিল না — তাই AI-এর দেওয়া নাম কখনোই refData-র subject_name-এর সাথে হুবহু
+// মিলত না, subject_id/topic_id ফাঁকা থেকে যেত। এই ফাংশন লাইভ refData (Subjects/Topics
+// শিট, Quiz-স্কোপড) থেকেই taxonomy বানায় — তাই AI যা বাছবে সেটা গ্যারান্টিড ভাবে
+// ইতিমধ্যে বিদ্যমান, বিশুদ্ধ (no emoji) subject/topic নাম, এবং matchSubjectTopicId-এ
+// হুবহু মিলে যাবে। refData না থাকলে বা কোনো Quiz subject না থাকলে পুরনো ডিফল্টে fallback করে। ──
+function buildTaxonomyFromRefData(refData){
+  if(!refData||!(refData.subjects||[]).length) return null;
+  const out={};
+  (refData.subjects||[]).filter(s=>s.sheet==="Quiz").forEach(s=>{
+    const topics=(refData.topics||[]).filter(t=>t.subject_id===s.subject_id).map(t=>stripEmoji(t.topic_name)).filter(Boolean);
+    out[stripEmoji(s.subject_name)]=topics.length?topics:["সাধারণ"];
+  });
+  return Object.keys(out).length?out:null;
+}
+
+export { LS_QBC_TAXONOMY, LS_QBC_GAS_SECRET, LS_QBC_RESULTS_DRAFT, LS_QBC_SAVELOC, LS_QBC_AUTOSAVE, loadQbcSaveLoc, saveQbcSaveLoc, loadQbcAutoSave, saveQbcAutoSave, QBANK_CONV_TAXONOMY_DEFAULT, normalizeQbankQ, normalizeLabel, stripEmoji, buildTaxonomyFromRefData };
