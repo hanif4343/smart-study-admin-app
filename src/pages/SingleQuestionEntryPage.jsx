@@ -8,8 +8,10 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
 import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret } from "../core/uploaderUtils.js";
-import { saveRowsToSheet } from "../core/sheetSave.js";
+import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
+import { resolveOrCreateReference } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
+import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 
 /* ── AI দিয়ে MCQ-এর ৩টা ভুল অপশন + ব্যাখ্যা বানানোর প্রম্পট ── */
 function buildMcqGenPrompt(q,correctAns){
@@ -69,9 +71,27 @@ function SingleQuestionEntryPage({push}){
   const setGasSecret=v=>{setGasSecretState(v);saveSharedGasSecret(v);};
 
   // ── এই ফিল্ডগুলো একবার সেট হলে সেশনজুড়ে থাকে ──
-  const[subject,setSubject]=useState("");
-  const[subtopic,setSubtopic]=useState("");
+  // 🐛 ফিক্স: আগে Subject/Sub-topic raw টেক্সট ছিল, Reference টেবিলের সাথে কোনো সংযোগ
+  // ছিল না — subject_id/topic_id সবসময় ফাঁকা যেত। এখন TypeaheadCombo দিয়ে বিদ্যমান
+  // Subject/Topic-এর সাথে মিলিয়ে বা নতুন তৈরি করে subject_id/topic_id বসানো হয়
+  // (BulkUploaderPage/AIImportPage-এর মতোই)।
+  const[subjectSel,setSubjectSel]=useState({id:"",name:""});
+  const[topicSel,setTopicSel]=useState({id:"",name:""});
   const[audienceTags,setAudienceTags]=useState("");
+
+  // ── Subjects/Topics/Posts/Institutions রেফারেন্স টেবিল ──
+  const[refData,setRefData]=useState(null);
+  useEffect(()=>{ fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); },[gasSecret]);
+  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===targetMode).map(s=>({id:s.subject_id,name:s.subject_name})):[];
+  const topicOptions=refData&&subjectSel.id?(refData.topics||[]).filter(t=>t.subject_id===subjectSel.id).map(t=>({id:t.topic_id,name:t.topic_name})):[];
+
+  // ── QBank + পদ/প্রতিষ্ঠান/সাল (Exam Appearance) — সেশনজুড়ে থাকে, প্রতিটা প্রশ্নে
+  // একই appearance যোগ হবে (একই বই/প্রশ্নপত্র থেকে একটার পর একটা টাইপ করার সময়)। ──
+  const[postSel,setPostSel]=useState({id:"",name:""});
+  const[instSel,setInstSel]=useState({id:"",name:""});
+  const[examYear,setExamYear]=useState("");
+  const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
+  const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
 
   // ── এই ফিল্ডগুলো প্রতি সাবমিটের পর খালি হয়ে যায় ──
   const[question,setQuestion]=useState("");
@@ -95,6 +115,8 @@ function SingleQuestionEntryPage({push}){
   const isMCQ=!isStudy&&qtype==="MCQ";
 
   useEffect(()=>{ qRef.current?.focus(); },[]);
+  // subject বদলালে আগের topic নতুন subject-এর আন্ডারে না-ও থাকতে পারে, তাই রিসেট
+  useEffect(()=>{ setTopicSel({id:"",name:""}); },[subjectSel.id]);
 
   /* ── কার্সর যেখানে আছে ঠিক সেখানে টেক্সট ইনসার্ট করার গতিশীল ফাংশন ── */
   const insertAtCursor=useCallback((text)=>{
@@ -181,21 +203,55 @@ function SingleQuestionEntryPage({push}){
     if(saving||generating)return;
     if(!question.trim()){ push("warn","প্রশ্ন লিখো","");qRef.current?.focus();return; }
     if(!correct.trim()){ push("warn","উত্তর লিখো",""); return; }
-    if(!subject.trim()||!subtopic.trim()){ push("warn","⚠️ Subject/Sub-topic ফাঁকা","আগে পূরণ করো — ফাঁকা থাকলে সাবমিট হবে না"); return; }
+    if(!subjectSel.name.trim()){ push("warn","⚠️ Subject ফাঁকা","আগে পূরণ করো — ফাঁকা থাকলে সাবমিট হবে না"); return; }
     if(isMCQ&&(!opt1.trim()||!opt2.trim()||!opt3.trim()||!opt4.trim())){ push("warn","৪টা অপশনই পূরণ করো","✨ Generate চাপো অথবা নিজে লিখো"); return; }
+    if(!refData){ push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো",""); return; }
 
     setSaving(true);
+
+    // ── Subject/Topic টেক্সট থেকে subject_id/topic_id resolve-or-create ──
+    const subjRes=await resolveOrCreateReference({sel:subjectSel,refType:"subjects",options:subjectOptions,gasSecret,sheet:targetMode,push});
+    if(!subjRes.ok){ setSaving(false); push("error","❌ Subject যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+    const topicName=topicSel.name.trim()||subjectSel.name.trim();
+    const topicRes=await resolveOrCreateReference({sel:topicSel.name.trim()?topicSel:{id:"",name:topicName},refType:"topics",options:topicOptions,gasSecret,parentId:subjRes.id,push});
+    if(!topicRes.ok){ setSaving(false); push("error","❌ Topic যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+    if(subjRes.created||topicRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+
+    // ── QBank + পদ/প্রতিষ্ঠান/সালের অন্তত ১টা দেওয়া থাকলে → resolve/create করে examAppearance ──
+    let examAppearance=null;
+    if(targetMode==="QBank" && (postSel.name.trim()||instSel.name.trim()||examYear.trim())){
+      if(!postSel.name.trim()||!instSel.name.trim()||!examYear.trim()){
+        setSaving(false);
+        push("warn","⚠️ পদ, প্রতিষ্ঠান ও সাল — একটা দিলে তিনটাই দিতে হবে (অথবা তিনটাই খালি রাখো)","");
+        return;
+      }
+      const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
+      if(!postRes.ok){ setSaving(false); push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
+      if(!instRes.ok){ setSaving(false); push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
+      if(postRes.created||instRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+    }
+
     const item={q:question.trim(),correct:correct.trim(),opt1,opt2,opt3,opt4,explanation};
     const tagsArr=audienceTags.split(",").map(s=>s.trim()).filter(Boolean);
     const effQtype=isStudy?"Study":(isMCQ?"MCQ":"Written");
     try{
-      const row=buildSheetRow({item,subject:subject.trim(),subtopic:subtopic.trim(),qtype:effQtype,audienceTags:tagsArr,mainQpaper:""});
-      const res=await saveRowsToSheet({rows:[row],targetTab:targetMode,gasSecret,push});
-      if(res.added>0){ push("success","✅ যোগ হয়েছে!",`এই সেশনে মোট ${sessionCount+1}টি`); resetForNext(); }
-      else push("error","সেভ ব্যর্থ","Sheet-এ যোগ হয়নি — duplicate বা নেটওয়ার্ক সমস্যা হতে পারে");
+      const row=buildSheetRow({
+        item, subject:subjectSel.name.trim(), subtopic:topicName, qtype:effQtype,
+        audienceTags:tagsArr, mainQpaper:"", subjectId:subjRes.id, topicId:topicRes.id,
+      });
+      const res=await saveRowsToSheet({rows:[row],targetTab:targetMode,gasSecret,push,examAppearance});
+      if(res.added>0){
+        push("success","✅ যোগ হয়েছে!",`এই সেশনে মোট ${sessionCount+1}টি`);
+        if(res.examAppearancesLinkedToExisting>0) push("success","🔗 প্রশ্নটা আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
+        resetForNext();
+      }
+      else if(res.skipped>0) push("warn","⚠️ ইতিমধ্যে Sheet-এ আছে (duplicate)","একই প্রশ্ন আগে থেকেই আছে বলে যোগ হয়নি");
+      else push("error","সেভ ব্যর্থ","Sheet-এ যোগ হয়নি — নেটওয়ার্ক সমস্যা হতে পারে, একটু পর আবার চেষ্টা করো");
     }catch(e){ push("error","সেভ ব্যর্থ",e.message); }
     setSaving(false);
-  },[saving,generating,question,correct,subject,subtopic,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,sessionCount,push]);
+  },[saving,generating,question,correct,subjectSel,topicSel,subjectOptions,topicOptions,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,refData,postSel,instSel,examYear,postOptions,instOptions,sessionCount,push]);
 
   /* ── গ্লোবাল Ctrl+S ক্যাচার ── */
   useEffect(()=>{
@@ -238,17 +294,63 @@ function SingleQuestionEntryPage({push}){
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
         <div className="fld" style={{marginBottom:0}}>
           <label>📚 Subject</label>
-          <input className="inp" value={subject} onChange={e=>setSubject(e.target.value)} placeholder="Subject লিখুন..." tabIndex={10}/>
+          <TypeaheadCombo
+            options={subjectOptions}
+            value={subjectSel}
+            onChange={setSubjectSel}
+            placeholder="Subject লিখুন..."
+            newLabel={`🆕 "${subjectSel.name.trim()}" নতুন Subject হিসেবে যোগ হবে`}
+          />
         </div>
         <div className="fld" style={{marginBottom:0}}>
-          <label>📌 Sub-topic</label>
-          <input className="inp" value={subtopic} onChange={e=>setSubtopic(e.target.value)} placeholder="Sub-topic লিখুন..." tabIndex={11}/>
+          <label>📌 Topic</label>
+          <TypeaheadCombo
+            options={topicOptions}
+            value={topicSel}
+            onChange={setTopicSel}
+            placeholder={subjectSel.name.trim()?"খালি রাখলে Subject-ই বসবে":"আগে Subject লিখো"}
+            newLabel={`🆕 "${topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}
+          />
         </div>
       </div>
       <div className="fld">
         <label>🏷️ Audience Tags (কমা দিয়ে একাধিক)</label>
         <input className="inp" value={audienceTags} onChange={e=>setAudienceTags(e.target.value)} placeholder="Job, Class 7..." tabIndex={12}/>
       </div>
+
+      {/* পদ/প্রতিষ্ঠান/সাল — শুধু QBank target-এ, ঐচ্ছিক, সেশনজুড়ে থাকে */}
+      {targetMode==="QBank"&&(
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 10px",marginBottom:10}}>
+          <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? (ঐচ্ছিক)</div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:8}}>দিলে এই সেশনের প্রতিটা প্রশ্নই এই Exam Appearance পাবে।</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div className="fld" style={{marginBottom:0}}>
+              <label>পদ (Post)</label>
+              <TypeaheadCombo
+                options={postOptions}
+                value={postSel}
+                onChange={setPostSel}
+                placeholder="যেমন: সহকারী শিক্ষক"
+                newLabel={`🆕 "${postSel.name.trim()}" নতুন পদ হিসেবে যোগ হবে`}
+              />
+            </div>
+            <div className="fld" style={{marginBottom:0}}>
+              <label>প্রতিষ্ঠান (Institution)</label>
+              <TypeaheadCombo
+                options={instOptions}
+                value={instSel}
+                onChange={setInstSel}
+                placeholder="যেমন: প্রাথমিক বিদ্যালয়"
+                newLabel={`🆕 "${instSel.name.trim()}" নতুন প্রতিষ্ঠান হিসেবে যোগ হবে`}
+              />
+            </div>
+          </div>
+          <div className="fld" style={{marginBottom:0}}>
+            <label>সাল</label>
+            <input className="inp" placeholder="যেমন: 2025" value={examYear} onChange={e=>setExamYear(e.target.value)}/>
+          </div>
+        </div>
+      )}
 
       <div style={{height:1,background:C.border,margin:"12px 0"}}/>
 
