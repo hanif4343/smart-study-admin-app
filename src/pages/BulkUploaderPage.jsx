@@ -272,8 +272,13 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার","sheet",mode,result.failedRows);
     const subjLabel=isInline?[...new Set(perEntry.map(p=>p.subjectName))].join(", "):subjectName;
     if(result.added>0)push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${mode} — ${subjLabel}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:"")+(batchGroupId?` · group: ${batchGroupId}`:""));
-    if(examAppearance && !result.examAppearancesAdded) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
-    if(result.examAppearancesAdded)push("success",`🧾 ${result.examAppearancesAdded}টা Exam Appearance-ও যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
+    // 🐛 ফিক্স: আগে duplicate পেলে appearance হারিয়ে যেত (স্রেফ skip)। এখন
+    // examAppearancesLinkedToExisting দিয়ে বোঝা যায় কতগুলো প্রশ্ন "আগে থেকেই ছিল,
+    // নতুন appearance জুড়ে দেওয়া হয়েছে" — এটা duplicate-skip আর নতুন-প্রশ্নের
+    // appearance থেকে আলাদা করে দেখানো হয়, যাতে অ্যাডমিন বুঝতে পারে কোনটা কী হলো।
+    if(result.examAppearancesLinkedToExisting>0) push("success",`🔗 ${result.examAppearancesLinkedToExisting}টা প্রশ্ন আগে থেকেই QBank-এ ছিল`,"নতুন করে যোগ হয়নি (duplicate হয়নি) — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
+    if(examAppearance && !result.examAppearancesAdded && !result.examAppearancesLinkedToExisting) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
+    if(result.examAppearancesAdded>result.examAppearancesLinkedToExisting)push("success",`🧾 ${result.examAppearancesAdded-result.examAppearancesLinkedToExisting}টা নতুন প্রশ্নে Exam Appearance যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
     if(result.failedRows.length)push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if((result.added>0||result.skipped>0)&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
   };
@@ -371,6 +376,9 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12}}>
           <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? (ঐচ্ছিক)</div>
           <div style={{fontSize:10,color:C.muted,marginBottom:8}}>দিলে এই পুরো ব্যাচ একটা Exam Appearance পাবে — খালি রাখলে শুধু প্রশ্নগুলো QBank-এ যোগ হবে, appearance ছাড়া।</div>
+          <div style={{fontSize:10,color:"#22c55e",marginBottom:8,lineHeight:1.5,background:"#22c55e11",border:"1px solid #22c55e33",borderRadius:8,padding:"6px 8px"}}>
+            🔗 <b>চিন্তা করো না ডুপ্লিকেট নিয়ে</b> — যদি এখানের কোনো প্রশ্ন আগে থেকেই QBank-এ থাকে, নতুন করে যোগ হবে না; এমনিতেই বুঝে ফেলবে এবং শুধু এই পদ/প্রতিষ্ঠান/সালটা সেই পুরনো প্রশ্নের সাথে জুড়ে দেবে।
+          </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
             <div className="fld" style={{marginBottom:0}}>
               <label>পদ (Post)</label>
