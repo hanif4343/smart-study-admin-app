@@ -5,7 +5,7 @@
    পদ/প্রতিষ্ঠান টাইপ-করে-মেলানো-বা-নতুন-তৈরি (resolveOrCreateReference) সহ। */
 import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../../core/config.js";
-import { getExamAppearances, addExamAppearance } from "../../core/sheetSave.js";
+import { getExamAppearances, addExamAppearance, deleteExamAppearance } from "../../core/sheetSave.js";
 import { resolveOrCreateReference } from "../../core/referenceHelpers.js";
 import { TypeaheadCombo } from "../../components/shared/TypeaheadCombo.jsx";
 import { useModalBack } from "../../hooks/useModalBack.js";
@@ -51,6 +51,14 @@ function AppearanceQuickModal({question,questionText,refData,gasSecret,onRefresh
     setAdding(false);
   };
 
+  const[deletingId,setDeletingId]=useState(null);
+  const doDelete=async(appearanceId)=>{
+    setDeletingId(appearanceId);
+    const res=await deleteExamAppearance({appearanceId,gasSecret,push});
+    if(res.ok){ push("success","🗑️ Appearance মুছে ফেলা হয়েছে",""); load(); }
+    setDeletingId(null);
+  };
+
   return(
     <div className="ovl">
       <div className="modal">
@@ -73,6 +81,10 @@ function AppearanceQuickModal({question,questionText,refData,gasSecret,onRefresh
                     {postMap[a.post_id]||a.post_id} → {instMap[a.institution_id]||a.institution_id}
                     <div style={{fontSize:9,color:C.muted}}>{a.year}</div>
                   </div>
+                  <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`}}
+                    onClick={()=>doDelete(a.appearance_id)} disabled={deletingId===a.appearance_id}>
+                    {deletingId===a.appearance_id?"⏳":"🗑️"}
+                  </button>
                 </div>
               ))
             }
