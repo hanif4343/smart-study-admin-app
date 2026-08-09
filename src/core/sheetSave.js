@@ -9,7 +9,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও"); return{added:0,skipped:0,failedRows:rows}; }
   const CHUNK=Math.max(1,chunkSize||100); // চাইলে ছোট চাংক (৫-১০, এমনকি ১) দিয়ে বেশি live প্রোগ্রেস আপডেট পাওয়া যায় — trade-off: ছোট চাংক = বেশি রিকোয়েস্ট = মোট সময় একটু বেশি
   const totalChunks=Math.ceil(rows.length/CHUNK);
-  let added=0,skipped=0,firebaseSyncFailed=false,examAppearancesAdded=0; const failedRows=[];
+  let added=0,skipped=0,firebaseSyncFailed=false,examAppearancesAdded=0,examAppearancesLinkedToExisting=0; const failedRows=[];
   for(let i=0;i<rows.length;i+=CHUNK){
     const chunk=rows.slice(i,i+CHUNK);
     const isLast=(i+CHUNK>=rows.length);
@@ -18,6 +18,10 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
       // GAS bulk_save_rows-কে জানায় যাতে এই চাংকে যে নতুন question_id-গুলো তৈরি হচ্ছে,
       // প্রতিটার জন্য একই ব্যাচে Exam_Appearances-এ একটা করে appearance-রো যোগ হয়ে যায়
       // (আলাদা করে প্রতিটা প্রশ্নের id জেনে পরে addExamAppearance কল করার দরকার পড়ে না)।
+      // 🐛 ফিক্স: এখন এটা duplicate-detection-এর সাথেও যুক্ত — যদি পেস্ট করা কোনো প্রশ্ন
+      // ইতিমধ্যে QBank-এ থাকে (স্রেফ duplicate হিসেবে বাদ যেত আগে), GAS সেটাকে নতুন রো
+      // না বানিয়ে বিদ্যমান প্রশ্নের সাথে এই appearance জুড়ে দেয় — অ্যাডমিনকে মনে রাখতে হয়
+      // না প্রশ্নটা আগে কোথাও যোগ করা ছিল কিনা।
       const body={secret:gasSecret,type:"bulk_save_rows",targetTab,rows:chunk,sync:isLast};
       if(examAppearance) body.examAppearance=examAppearance;
       const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)});
@@ -25,6 +29,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
       if(data.result==="error"){ failedRows.push(...chunk); continue; }
       added+=(data.added||0); skipped+=(data.skipped||0);
       examAppearancesAdded+=(data.examAppearancesAdded||0);
+      examAppearancesLinkedToExisting+=(data.examAppearancesLinkedToExisting||0);
       if(isLast && data.firebaseSynced===false) firebaseSyncFailed=true;
     }catch(e){ failedRows.push(...chunk); }
     onProgress?.({done:Math.min(i+CHUNK,rows.length),total:rows.length,chunkIndex:Math.floor(i/CHUNK)+1,totalChunks});
@@ -32,7 +37,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   // ⚡ Sheet-এ সেভ ঠিকই হয়ে গেছে, কিন্তু GAS-এর Firebase mirror-sync ব্যর্থ হলে dedupe-এর
   // "Quiz-এ আছে" কাউন্ট আর existingQuizKeys পুরনো থেকে যাবে — সেটা এখন চুপচাপ না থেকে জানানো হয়।
   if(firebaseSyncFailed) push?.("error","⚠️ Sheet-এ সেভ হয়েছে কিন্তু Firebase sync ব্যর্থ","'Quiz-এ আছে' কাউন্ট পুরনো থাকতে পারে — একটু পরে আবার চেষ্টা করো, বা GAS Executions log চেক করো");
-  return{added,skipped,failedRows,examAppearancesAdded};
+  return{added,skipped,failedRows,examAppearancesAdded,examAppearancesLinkedToExisting};
 }
 
 /* ── Firebase-এ bulk rows সেভ — প্রতিটা row আলাদা push, ব্যর্থগুলো ফেরত দেয় (retry-এর জন্য) ──
