@@ -187,7 +187,15 @@ function BrowseTab({push,tick}){
     return new Set(scoped.map(a=>String(a.question_id)));
   },[allAppearances,filterPostId,filterInstId,filterYear]);
 
-  // ── sheet বদলালে বা parent filter বদলালে dependent filter রিসেট ──
+  // ── প্রতিটা QBank প্রশ্নের কতগুলো appearance আছে, সেই count map — Browse কার্ডে
+  // ব্যাজ হিসেবে দেখানোর জন্য (মোডাল না খুলেই বোঝা যাবে) ──
+  const appearanceCountOf=useMemo(()=>{
+    const m={};
+    allAppearances.forEach(a=>{const k=String(a.question_id);m[k]=(m[k]||0)+1;});
+    return m;
+  },[allAppearances]);
+
+
   useEffect(()=>{ setFilterSubjectId("all");setFilterTopicId("all");setFilterPostId("all");setFilterInstId("all");setFilterYear("all"); },[sheet]);
   useEffect(()=>{ setFilterTopicId("all"); },[filterSubjectId]);
   useEffect(()=>{ setFilterInstId("all");setFilterYear("all"); },[filterPostId]);
@@ -679,7 +687,9 @@ function BrowseTab({push,tick}){
               )}
               <div style={{flex:1}}/>
               {sheet==="QBank"&&(
-                <button className="btn" style={{padding:"3px 9px",fontSize:10,background:"#818cf822",color:"#818cf8",border:"1px solid #818cf844"}} onClick={()=>setAppearanceTarget(q)} title="Exam Appearance দেখো/যোগ করো">🧾</button>
+                <button className="btn" style={{padding:"3px 9px",fontSize:10,background:"#818cf822",color:"#818cf8",border:"1px solid #818cf844",position:"relative"}} onClick={()=>setAppearanceTarget(q)} title="Exam Appearance দেখো/যোগ করো">
+                  🧾{appearanceCountOf[String(q.id||q.ID||"")]>0&&<span style={{marginLeft:3,fontWeight:700}}>{appearanceCountOf[String(q.id||q.ID||"")]}</span>}
+                </button>
               )}
               <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}33`}} onClick={()=>setEditing(q)}>✏️</button>
               <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`}} onClick={()=>onDeleteClick(q)}>🗑️</button>
