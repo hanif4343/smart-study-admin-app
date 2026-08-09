@@ -10,11 +10,12 @@ import {
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
-import { resolveSubjectTopicForEntries } from "../core/referenceHelpers.js";
+import { resolveSubjectTopicForEntries, resolveOrCreateReference } from "../core/referenceHelpers.js";
 import { getOcrCacheEntry, setOcrCacheEntry, clearOcrCache } from "../core/ocrCache.js";
 import { archiveAdd, archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
+import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 import { ApiSettingsPage } from "./ApiSettingsPage.jsx";
 
 function AIImportPage({push,onSendToBulk}){
@@ -66,6 +67,16 @@ function AIImportPage({push,onSendToBulk}){
   useEffect(()=>{ fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); },[gasSecret]);
   const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===effMode):[];
 
+  // ── QBank + Post/Institution/Year (Exam Appearance) — এই পুরো ব্যাচের প্রশ্ন যে পরীক্ষা
+  // থেকে, সেটা এখানে দেওয়া থাকলে সাবমিটের সময় Exam_Appearances-এ একটা এন্ট্রি যোগ হয়ে
+  // যায় (BulkUploaderPage-এর মতোই)। এটা ছাড়া QBank প্রশ্ন যোগ হবে ঠিকই, কিন্তু
+  // appearance-browse-এ (পদ/প্রতিষ্ঠান/সাল দিয়ে) কখনো দেখা যাবে না। ──
+  const[postSel,setPostSel]=useState({id:"",name:""});
+  const[instSel,setInstSel]=useState({id:"",name:""});
+  const[examYear,setExamYear]=useState("");
+  const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
+  const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
+
   const addTag=()=>{
     const t=tagInput.trim();
     if(t&&!audienceTags.includes(t)){setAudienceTags(p=>[...p,t]);}
@@ -84,6 +95,24 @@ function AIImportPage({push,onSendToBulk}){
       push("warn","⚠️ Subject লিখুন (অথবা প্রতিটা লাইনে Subject;Topic টাইপ করো)","");return;
     }
     if(!refData){push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো","");return;}
+
+    // ── QBank + পদ/প্রতিষ্ঠান/সালের অন্তত ১টা দেওয়া থাকলে → resolve/create করে
+    // {postId,institutionId,year} বানানো হয়, এই পুরো ব্যাচের জন্য একবারই (BulkUploaderPage-এর
+    // মতোই) — এটা ছাড়া QBank প্রশ্ন appearance দিয়ে ব্রাউজে দেখা যাবে না। ──
+    let examAppearance=null;
+    if(effMode==="QBank" && (postSel.name.trim()||instSel.name.trim()||examYear.trim())){
+      if(!postSel.name.trim()||!instSel.name.trim()||!examYear.trim()){
+        push("warn","⚠️ পদ, প্রতিষ্ঠান ও সাল — একটা দিলে তিনটাই দিতে হবে (অথবা তিনটাই খালি রাখো)","");
+        return;
+      }
+      const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
+      if(!postRes.ok){ push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
+      if(!instRes.ok){ push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
+      if(postRes.created||instRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+    }
+
     const entries=getBulkEntries(toParse).map(l=>parseBulkEntry(l,effQtype)).filter(r=>r.ok);
     if(!entries.length){
       push("warn","⚠️ কোনো valid প্রশ্ন পাওয়া যায়নি","Prompt Copy দিয়ে Gemini-তে format করে আবার আনুন");
@@ -106,12 +135,17 @@ function AIImportPage({push,onSendToBulk}){
       item, subject:subjectName, subtopic:topicName,
       qtype:effQtype, audienceTags, subjectId, topicId,
     }));
-    const result=await saveRowsToSheet({rows,targetTab:effMode,gasSecret,push});
+    const result=await saveRowsToSheet({rows,targetTab:effMode,gasSecret,push,examAppearance});
     setDirectProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setDirectRunning(false);
     if(result.failedRows.length) pushFailedItems("AI Import (OCR)","sheet",effMode,result.failedRows);
     const subjLabel=[...new Set(r.resolved.map(x=>x.subjectName))].join(", ");
     if(result.added>0) push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${effMode} — ${subjLabel}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
+    // 🐛 ফিক্স: duplicate QBank প্রশ্ন পেলেও এখন appearance হারায় না — বিদ্যমান প্রশ্নের
+    // সাথেই জুড়ে যায় (BulkUploaderPage-এর মতোই, GAS-এর bulk_save_rows-এর একই ফিক্স)।
+    if(result.examAppearancesLinkedToExisting>0) push("success",`🔗 ${result.examAppearancesLinkedToExisting}টা প্রশ্ন আগে থেকেই QBank-এ ছিল`,"নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
+    if(examAppearance && !result.examAppearancesAdded && !result.examAppearancesLinkedToExisting) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
+    if(result.examAppearancesAdded>result.examAppearancesLinkedToExisting)push("success",`🧾 ${result.examAppearancesAdded-result.examAppearancesLinkedToExisting}টা নতুন প্রশ্নে Exam Appearance যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
     if(result.failedRows.length) push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if((result.added>0||result.skipped>0)&&archivedEntryId){ archiveDelete(archivedEntryId); setArchivedEntryId(null); }
   };
@@ -585,6 +619,42 @@ function AIImportPage({push,onSendToBulk}){
             {(effQtype==="MCQ"||effQtype==="Written")&&(
               <div style={{fontSize:10,color:C.muted,marginTop:-4,marginBottom:8}}>
                 📝 MCQ/Written — দুটোতেই এখন প্রতিটা লাইনের শেষে Subject;Topic টাইপ করবে — এই বক্স দুটো শুধু fallback।
+              </div>
+            )}
+
+            {/* পদ/প্রতিষ্ঠান/সাল — শুধু QBank target-এ, ঐচ্ছিক। QBank প্রশ্ন user app-এ
+                exam-appearance (পদ+প্রতিষ্ঠান+সাল) দিয়ে ব্রাউজ হয় — এটা না দিলে প্রশ্ন
+                QBank-এ যোগ হবে ঠিকই, কিন্তু appearance-browse-এ কখনো দেখা যাবে না। */}
+            {effMode==="QBank"&&(
+              <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 10px",marginBottom:10}}>
+                <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? (ঐচ্ছিক)</div>
+                <div style={{fontSize:10,color:C.muted,marginBottom:8}}>দিলে এই পুরো ব্যাচ একটা Exam Appearance পাবে।</div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                  <div className="fld" style={{marginBottom:0}}>
+                    <label>পদ (Post)</label>
+                    <TypeaheadCombo
+                      options={postOptions}
+                      value={postSel}
+                      onChange={setPostSel}
+                      placeholder="যেমন: সহকারী শিক্ষক"
+                      newLabel={`🆕 "${postSel.name.trim()}" নতুন পদ হিসেবে যোগ হবে`}
+                    />
+                  </div>
+                  <div className="fld" style={{marginBottom:0}}>
+                    <label>প্রতিষ্ঠান (Institution)</label>
+                    <TypeaheadCombo
+                      options={instOptions}
+                      value={instSel}
+                      onChange={setInstSel}
+                      placeholder="যেমন: প্রাথমিক বিদ্যালয়"
+                      newLabel={`🆕 "${instSel.name.trim()}" নতুন প্রতিষ্ঠান হিসেবে যোগ হবে`}
+                    />
+                  </div>
+                </div>
+                <div className="fld" style={{marginBottom:0}}>
+                  <label>সাল</label>
+                  <input className="inp" placeholder="যেমন: 2025" value={examYear} onChange={e=>setExamYear(e.target.value)}/>
+                </div>
               </div>
             )}
 
