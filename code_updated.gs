@@ -997,6 +997,25 @@ function doGet(e) {
     return json({status:"success",result:"success",appearanceId:aeaNewId});
   }
 
+  // ── deleteExamAppearance — একটা নির্দিষ্ট appearance-এন্ট্রি মুছে দেয় (appearance_id
+  // দিয়ে), মূল প্রশ্ন বা বাকি appearance-গুলো touch হয় না। ভুল করে যোগ হওয়া
+  // পদ/প্রতিষ্ঠান/সাল সরানোর জন্য (Browse-এর 🧾 কুইক-মডাল থেকে ব্যবহার হয়)। ──
+  if (action==="deleteExamAppearance") {
+    var deaId=(e.parameter.appearanceId||"").toString().trim();
+    if (!deaId) return json({status:"error",result:"error",message:"appearanceId প্রয়োজন"});
+    var deaSs=SpreadsheetApp.getActiveSpreadsheet(), deaSh=deaSs.getSheetByName("Exam_Appearances");
+    if (!deaSh || deaSh.getLastRow()<2) return json({status:"error",result:"error",message:"Exam_Appearances sheet খালি"});
+    var deaData=deaSh.getDataRange().getValues(), deaHdr=deaData[0];
+    var deaIdCol=deaHdr.indexOf("appearance_id");
+    for (var de=deaData.length-1; de>=1; de--){
+      if ((deaData[de][deaIdCol]||"").toString().trim()===deaId){
+        deaSh.deleteRow(de+1);
+        return json({status:"success",result:"success",deleted:1});
+      }
+    }
+    return json({status:"error",result:"error",message:"এই appearance_id পাওয়া যায়নি"});
+  }
+
   // ── getAllExamAppearances — পুরো Exam_Appearances ট্যাব একবারে বাল্ক-ফেচ (Android
   // User App-এর "পদ অনুযায়ী ব্রাউজ" ফ্লো-র জন্য — getExamAppearances-এর মতো একটা
   // questionId দিয়ে scope করা না, পুরো টেবিল)। getReferenceData-এর মতোই ছোট টেবিল
@@ -1413,20 +1432,12 @@ function doGet(e) {
     var gqiData=gqiSh.getDataRange().getValues();
     var gqiHdr=gqiData[0];
     var gqiIdCol=gqiHdr.indexOf("id");
-    // ── FIX ("পদবী/প্রতিষ্ঠান-মোডে প্রশ্ন ০/০" বাগ, আসল কারণ): Exam_Appearances শীটের
-    // question_id আসলে "new_id" ফরম্যাট (QB-00002) — plain "id" (2) না। আগে শুধু "id"
-    // কলাম ধরে ম্যাচ করা হতো, তাই Exam_Appearances থেকে আসা কোনো id-ই কখনো মেলেনি।
-    // এখন "id" আর "new_id" — দুটো কলামের সাথেই ম্যাচ করা হচ্ছে, যেই ফরম্যাটেই id
-    // আসুক (plain "id" বা "new_id") ঠিক কাজ করবে। ──
-    var gqiNewIdCol=gqiHdr.indexOf("new_id");
-    if (gqiIdCol<0 && gqiNewIdCol<0) return json({status:"error",result:"error",message:"'id'/'new_id' কলাম নেই sheet: "+gqiSheet});
+    if (gqiIdCol<0) return json({status:"error",result:"error",message:"'id' কলাম নেই sheet: "+gqiSheet});
 
     var gqiRows=[];
     for (var gqi=1; gqi<gqiData.length; gqi++){
-      var gqiRowId=gqiIdCol>=0?(gqiData[gqi][gqiIdCol]||"").toString().trim():"";
-      var gqiRowNewId=gqiNewIdCol>=0?(gqiData[gqi][gqiNewIdCol]||"").toString().trim():"";
-      var gqiMatched=(gqiRowId && gqiIdSet[gqiRowId]) || (gqiRowNewId && gqiIdSet[gqiRowNewId]);
-      if (!gqiMatched) continue;
+      var gqiRowId=(gqiData[gqi][gqiIdCol]||"").toString().trim();
+      if (!gqiRowId || !gqiIdSet[gqiRowId]) continue;
       var gqiRec={};
       for (var gqj=0; gqj<gqiHdr.length; gqj++){
         var gqiKey=gqiHdr[gqj].toString().trim();
