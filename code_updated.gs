@@ -197,7 +197,16 @@ function isDuplicate(sheet, subject, questionText, sub_topic) {
 }
 
 /* ══ FIREBASE SYNC ══ */
+// ⛔ HARD NO-FIREBASE LIST — Quiz/QBank/Study এখন সম্পূর্ণভাবে Google Sheet-only।
+// User App (student-facing app)-ও এখন Sheet থেকেই ডেটা পড়ে, তাই এই ৩ ট্যাবের জন্য
+// আর কোনো Firebase mirror-sync দরকার নেই। syncToFirebase/forceFullRekeySync/syncNFRows
+// — এই তিনটা ফাংশনই এই লিস্টের sheet পেলে সাথে সাথে no-op হয়ে {ok:true} রিটার্ন করে,
+// কোনো UrlFetchApp কল হয় না। Users/Reports/Notice/Typing-এর মতো ছোট ডেটার জন্য
+// Firebase sync আগের মতোই চলবে (এই লিস্টে নেই)।
+var NO_FIREBASE_SHEETS = ["Quiz", "QBank", "Study"];
+
 function syncToFirebase(sheetName, folderName) {
+  if (NO_FIREBASE_SHEETS.indexOf(sheetName) > -1) return true; // ⛔ Sheet-only, mirror-sync বন্ধ
   try {
     var cfg=getProps(), ss=SpreadsheetApp.getActiveSpreadsheet(), fbSh=ss.getSheetByName(sheetName);
     if(!fbSh)return true;
@@ -287,6 +296,7 @@ function syncToFirebase(sheetName, folderName) {
    User App সরাসরি REST দিয়ে পড়ে (live listener না), তাই এই এক-বারের write কোনো
    ডিভাইসেই বাড়তি download ট্রিগার করে না। ── */
 function forceFullRekeySync(sheetName, folderName){
+  if (NO_FIREBASE_SHEETS.indexOf(sheetName) > -1) return {ok:true, msg:"⛔ "+sheetName+" এখন Sheet-only — Firebase rekey স্কিপ করা হলো"};
   try{
     var cfg=getProps(), ss=SpreadsheetApp.getActiveSpreadsheet(), fbSh=ss.getSheetByName(sheetName);
     if(!fbSh) return {ok:false,msg:"Sheet not found: "+sheetName};
@@ -321,6 +331,7 @@ function forceFullRekeySync(sheetName, folderName){
    এটা force_full_rekey_sync-এর ছোট, নিরাপদ, targeted বিকল্প — যখন শুধু নির্দিষ্ট
    কিছু row-ই নতুন (পুরো sheet না), তখন এটাই ব্যবহার করা ভালো। ── */
 function syncNFRows(sheetName, folderName){
+  if (NO_FIREBASE_SHEETS.indexOf(sheetName) > -1) return {ok:true, msg:"⛔ "+sheetName+" এখন Sheet-only — Firebase NF-sync স্কিপ করা হলো", count:0};
   try{
     var cfg=getProps(), ss=SpreadsheetApp.getActiveSpreadsheet(), sh=ss.getSheetByName(sheetName);
     if(!sh) return {ok:false,msg:"Sheet not found: "+sheetName,count:0};
@@ -1432,12 +1443,20 @@ function doGet(e) {
     var gqiData=gqiSh.getDataRange().getValues();
     var gqiHdr=gqiData[0];
     var gqiIdCol=gqiHdr.indexOf("id");
-    if (gqiIdCol<0) return json({status:"error",result:"error",message:"'id' কলাম নেই sheet: "+gqiSheet});
+    // ── FIX ("পদবী/প্রতিষ্ঠান-মোডে প্রশ্ন ০/০" বাগ, আসল কারণ): Exam_Appearances শীটের
+    // question_id আসলে "new_id" ফরম্যাট (QB-00002) — plain "id" (2) না। আগে শুধু "id"
+    // কলাম ধরে ম্যাচ করা হতো, তাই Exam_Appearances থেকে আসা কোনো id-ই কখনো মেলেনি।
+    // এখন "id" আর "new_id" — দুটো কলামের সাথেই ম্যাচ করা হচ্ছে, যেই ফরম্যাটেই id
+    // আসুক (plain "id" বা "new_id") ঠিক কাজ করবে। ──
+    var gqiNewIdCol=gqiHdr.indexOf("new_id");
+    if (gqiIdCol<0 && gqiNewIdCol<0) return json({status:"error",result:"error",message:"'id'/'new_id' কলাম নেই sheet: "+gqiSheet});
 
     var gqiRows=[];
     for (var gqi=1; gqi<gqiData.length; gqi++){
-      var gqiRowId=(gqiData[gqi][gqiIdCol]||"").toString().trim();
-      if (!gqiRowId || !gqiIdSet[gqiRowId]) continue;
+      var gqiRowId=gqiIdCol>=0?(gqiData[gqi][gqiIdCol]||"").toString().trim():"";
+      var gqiRowNewId=gqiNewIdCol>=0?(gqiData[gqi][gqiNewIdCol]||"").toString().trim():"";
+      var gqiMatched=(gqiRowId && gqiIdSet[gqiRowId]) || (gqiRowNewId && gqiIdSet[gqiRowNewId]);
+      if (!gqiMatched) continue;
       var gqiRec={};
       for (var gqj=0; gqj<gqiHdr.length; gqj++){
         var gqiKey=gqiHdr[gqj].toString().trim();
@@ -1628,12 +1647,16 @@ function doPost(e) {
       var bHdr=bRawHdr.map(function(h){return h.toString().toLowerCase().trim();});
       var bQIdx=bHdr.indexOf("question"), bSubIdx=bHdr.indexOf("subject"), bStIdx=bHdr.indexOf("sub_topic");
       if(bStIdx===-1)bStIdx=bHdr.indexOf("subtopic");
+      var bIdIdx=bHdr.indexOf("id");
       var bNorm=function(s){return (s||'').toString().toLowerCase().replace(/\s+/g,' ').trim().substring(0,100);};
+      // ── FIX (ডুপ্লিকেট প্রশ্নে Appearance যোগ): bExisting আগে শুধু true রাখতো (key
+      // মিললেই স্কিপ) — এখন সাথে বিদ্যমান রো-র "id"-ও রাখা হয়, যাতে duplicate ধরা
+      // পড়লে (নিচে দেখো) সেই id-তে নতুন Exam_Appearance জোড়া যায়, স্রেফ স্কিপ না করে। ──
       var bExisting={};
       if(bQIdx!==-1){
         for(var ber=1;ber<bData.length;ber++){
           var bek=bNorm(bData[ber][bQIdx])+"|"+(bStIdx!==-1?bNorm(bData[ber][bStIdx]):"")+"|"+(bSubIdx!==-1?bNorm(bData[ber][bSubIdx]):"");
-          bExisting[bek]=true;
+          bExisting[bek]=(bIdIdx!==-1?(bData[ber][bIdIdx]||"").toString():true);
         }
       }
 
@@ -1663,6 +1686,7 @@ function doPost(e) {
       // ব্যাচ-write (bNewRows-এর মতোই একই lock-এর ভেতরে, race condition এড়াতে)। ──
       var bAppearanceRows=[];
       var bAppearanceProp, bAppearanceCurId=0;
+      var bLinkedExistingCount=0; // ডুপ্লিকেট প্রশ্ন হলেও নতুন appearance যোগ হলে এখানে গোনা হয়
       if(params.examAppearance && bTab==="QBank"){
         bAppearanceProp=PropertiesService.getScriptProperties();
         bAppearanceCurId=parseInt(bAppearanceProp.getProperty("MAX_ID_EXAM_APPEARANCES")||"0");
@@ -1702,7 +1726,31 @@ function doPost(e) {
           var row=bRows[bi]||{};
           try{
             var bKey=bNorm(row.question)+"|"+bNorm(row.sub_topic)+"|"+bNorm(row.subject);
-            if(row.question && bExisting[bKey]){ bSkipped++; continue; }
+            // ── FIX (আসল সমস্যা): আগে ডুপ্লিকেট পেলে সাথে সাথে skip করে continue হতো —
+            // examAppearance দেওয়া থাকলেও সেটা হারিয়ে যেত, কারণ appearance-attach লজিক
+            // নিচে (নতুন রো তৈরির পরে) ছিল, যেটা duplicate-এর জন্য কখনো চলতোই না। এখন
+            // duplicate পেলে, যদি examAppearance দেওয়া থাকে (QBank-এই শুধু), তাহলে নতুন রো
+            // না বানিয়ে সেই বিদ্যমান প্রশ্নের id-তেই একটা নতুন Exam_Appearance জোড়া হয় —
+            // এটাই Admin App-এর "একই প্রশ্ন আবার এলে duplicate না বানিয়ে appearance যোগ
+            // করো" ফিচারের মূল সার্ভার-সাইড অংশ। ──
+            if(row.question && bExisting[bKey]){
+              bSkipped++;
+              if(params.examAppearance && bTab==="QBank"){
+                var bExistingId=bExisting[bKey];
+                if(bExistingId && bExistingId!==true){
+                  bAppearanceCurId++;
+                  bAppearanceRows.push([
+                    "EA"+bAppearanceCurId,
+                    bExistingId.toString(),
+                    params.examAppearance.postId||"",
+                    params.examAppearance.institutionId||"",
+                    params.examAppearance.year||""
+                  ]);
+                  bLinkedExistingCount++;
+                }
+              }
+              continue;
+            }
 
             var bId;
             if(row.editId){ bId=row.editId; }
@@ -1731,7 +1779,7 @@ function doPost(e) {
 
             if(!row.editId){ /* id বসানো হয়ে গেছে উপরেই */ }
             bNewRows.push(bLine);
-            bExisting[bKey]=true; // একই ব্যাচে দুইবার একই প্রশ্ন থাকলে দ্বিতীয়টাও বাদ পড়বে
+            bExisting[bKey]=bId; // একই ব্যাচে দুইবার একই প্রশ্ন থাকলে দ্বিতীয়টাও এখন bId পাবে (আগে শুধু true থাকতো, appearance জোড়া যেত না)
             bAdded++;
             if(params.examAppearance && bTab==="QBank"){
               bAppearanceCurId++;
@@ -1761,7 +1809,7 @@ function doPost(e) {
       var bShouldSync = (params.sync!==undefined) ? !!params.sync : true; // পুরনো কলার (sync ফ্ল্যাগ ছাড়া) থাকলে আগের মতোই প্রতিবার সিঙ্ক হবে, নতুন ফ্রন্টএন্ড শুধু শেষ চাংকেই sync:true পাঠায়
       var bSyncOk = true;
       if(bShouldSync) bSyncOk = syncToFirebase(bTab,bTab);
-      return json({result:"success",added:bAdded,skipped:bSkipped,firebaseSynced:bSyncOk,examAppearancesAdded:bAppearanceRows.length});
+      return json({result:"success",added:bAdded,skipped:bSkipped,firebaseSynced:bSyncOk,examAppearancesAdded:bAppearanceRows.length,examAppearancesLinkedToExisting:bLinkedExistingCount});
     }
 
     // ── নতুন User signup ──
@@ -1984,14 +2032,17 @@ function json(o){return ContentService.createTextOutput(JSON.stringify(o)).setMi
    কোনো automatic trigger নেই — Apps Script এডিটরে ফাংশন বেছে ▶ Run চেপে
    ম্যানুয়ালি চালাতে হবে।
 ══════════════════════════════════════════════════════════ */
-function backupFirebaseToSheet_Quiz()  { pullFirebaseToSheet_("Quiz"); }
-function backupFirebaseToSheet_QBank() { pullFirebaseToSheet_("QBank"); }
-function backupFirebaseToSheet_Study() { pullFirebaseToSheet_("Study"); }
+// ⛔ Quiz/QBank/Study এখন Sheet-only (source of truth = Sheet, Firebase-এ এই ডেটা
+// আর মিরর হয় না) — তাই Firebase → Sheet pull করাটা এখন উল্টো ক্ষতিকর (পুরনো/খালি
+// Firebase ডেটা দিয়ে Sheet ওভাররাইট করে দিতে পারে)। তাই এই ৪টা ফাংশন এখন সচেতনভাবে
+// no-op, শুধু Logger-এ কারণ জানায়। দরকার হলে (নতুন ফিচার হিসেবে) সরাসরি pullFirebaseToSheet_()
+// ম্যানুয়ালি কল করা যাবে, কিন্তু এখন থেকে এটা কখনো Quiz/QBank/Study-এর জন্য অটো-চলবে না।
+function backupFirebaseToSheet_Quiz()  { Logger.log("⛔ স্কিপড: Quiz এখন Sheet-only, Firebase-এ ডেটা নেই।"); }
+function backupFirebaseToSheet_QBank() { Logger.log("⛔ স্কিপড: QBank এখন Sheet-only, Firebase-এ ডেটা নেই।"); }
+function backupFirebaseToSheet_Study() { Logger.log("⛔ স্কিপড: Study এখন Sheet-only, Firebase-এ ডেটা নেই।"); }
 
 function backupFirebaseToSheet_All() {
-  pullFirebaseToSheet_("Quiz");
-  pullFirebaseToSheet_("QBank");
-  pullFirebaseToSheet_("Study");
+  Logger.log("⛔ স্কিপড: Quiz/QBank/Study এখন Sheet-only, Firebase-এ ডেটা নেই। pullFirebaseToSheet_() এখন কোনো auto/named ফাংশন থেকে কল হয় না।");
 }
 
 function pullFirebaseToSheet_(sheetName) {
