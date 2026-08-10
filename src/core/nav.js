@@ -9,6 +9,7 @@ const NAV=[
     children:[
       {id:"reports",    icon:"🚨", label:"Reports"},
       {id:"techniques", icon:"🧠", label:"Techniques"},
+      {id:"review",     icon:"🔎", label:"Review"},
     ]
   },
   {id:"uploader",   icon:"📤", label:"Uploader", landingId:"uploaderhub",
