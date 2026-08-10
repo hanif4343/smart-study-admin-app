@@ -31,6 +31,7 @@ import { ContentManagerPage } from "./pages/ContentManagerPage.jsx";
 import { NotifyPage } from "./pages/NotifyPage.jsx";
 import { ReportsPage } from "./pages/ReportsPage.jsx";
 import { TechniquesPage } from "./pages/TechniquesPage.jsx";
+import { ReviewTab } from "./pages/content/ReviewTab.jsx";
 import { BulkUploaderPage } from "./pages/BulkUploaderPage.jsx";
 import { JobLauncherTab } from "./pages/content/JobLauncherTab.jsx";
 import { QBankConverterTab } from "./pages/content/QBankConverterTab.jsx";
@@ -401,19 +402,24 @@ export default function App(){
       <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick} pushLayer={pushLayer}/></div>
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push} tick={tick}/></div>
 
-      {/* Approval hub — Reports / Techniques, একটার আন্ডারে, ট্যাব দিয়ে সুইচ (structure অপরিবর্তিত,
-          এখানে মাত্র ২টা ট্যাব থাকায় launcher-grid দরকার নেই, শুধু টোকেন/স্পেসিং পলিশ হলো —
-          ReportsPage/TechniquesPage নিজেরাই নিজেদের ".page" wrapper রাখে (Uploader-এর মতোই),
-          তাই বাইরে থেকে আর দ্বিতীয়বার ".page"-এ মোড়ানো হচ্ছে না — Phase ৪-এর একই ফিক্স এখানেও) */}
-      <div style={{display:(page==="reports"||page==="techniques")?"block":"none"}}>
+      {/* Approval hub — Reports / Techniques / Review, একটার আন্ডারে, ট্যাব দিয়ে সুইচ (structure
+          অপরিবর্তিত, এখানে ৩টা ট্যাব থাকায় launcher-grid দরকার নেই, শুধু টোকেন/স্পেসিং পলিশ হলো —
+          ReportsPage/TechniquesPage/ReviewTab নিজেরাই নিজেদের ".page" wrapper রাখে (Uploader-এর
+          মতোই), তাই বাইরে থেকে আর দ্বিতীয়বার ".page"-এ মোড়ানো হচ্ছে না — Phase ৪-এর একই ফিক্স এখানেও।
+          Review ট্যাব — QBank-এর Subject/Topic/Exam-Appearance ফাঁকা প্রশ্নগুলো এখানেই স্ক্যান করে
+          দেখায়, নিজস্ব কোনো badge count নেই (QBank+reference বাড়তি ফেচ এড়াতে top-level এ যোগ করা
+          হয়নি) — ট্যাবের ভিতরের কাউন্টার-চিপেই সংখ্যা দেখা যাবে। */}
+      <div style={{display:(page==="reports"||page==="techniques"||page==="review")?"block":"none"}}>
         <div style={{position:"sticky",top:0,zIndex:40,background:C.bg,padding:"16px 16px 12px"}}>
           <div className="atabs">
             <button className={`atab${page==="reports"?" on":""}`} onClick={()=>goPage("reports")}>🚨 Reports{reportBadge>0?` (${reportBadge})`:""}</button>
             <button className={`atab${page==="techniques"?" on":""}`} onClick={()=>goPage("techniques")}>🧠 Techniques{techBadge>0?` (${techBadge})`:""}</button>
+            <button className={`atab${page==="review"?" on":""}`} onClick={()=>goPage("review")}>🔎 Review</button>
           </div>
         </div>
         <div style={{display:page==="reports"   ?"block":"none"}}><ReportsPage   push={push} tick={tick} deepLinkKey={reportDeepLinkKey} onDeepLinkHandled={()=>setReportDeepLinkKey(null)}/></div>
         <div style={{display:page==="techniques"?"block":"none"}}><TechniquesPage push={push} tick={tick}/></div>
+        <div style={{display:page==="review"    ?"block":"none"}}><ReviewTab     push={push} tick={tick}/></div>
       </div>
 
       {/* Uploader hub — লঞ্চার গ্রিড (Phase ৪): ৪টা কালার-কোডেড সেকশন, প্রতিটা টুল একটা টাইল।
