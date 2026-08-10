@@ -569,12 +569,16 @@ function MultiSubjectImportPage({push}){
     const included=draftGroups.filter(g=>g.included&&g.rows.length>0);
     if(!included.length){push("warn","⚠️ অন্তত একটা group রাখো","সব group বাদ দিলে সাবমিট করার কিছু নেই");return;}
 
-    // ── Subject ফাঁকা থাকলে (QBank হলে Post/Institution/Year-ও) সেই group কখনোই সাবমিট
-    //    হবে না — চুপচাপ "(অজানা বিষয়)" বসিয়ে সাবমিট হয়ে যাওয়া বন্ধ। ফাঁকা group-গুলো
-    //    Confirm লিস্টেই থেকে যাবে (কমলা হাইলাইট-সহ) যাতে পূরণ করে পরে আবার Submit চাপা যায়। ──
+    // ── 🐛 ফিক্স: আগে group.subject (fallback বক্স) ফাঁকা থাকলেই সেই group আটকে যেত —
+    // even যদি প্রতিটা প্রশ্নেরই নিজস্ব AI-detected subject থাকতো (fallback তখন লাগেই না)।
+    // এখন group তখনই আটকাবে যখন অন্তত একটা row-এর নিজস্ব subject নেই এবং fallback-ও ফাঁকা।
+    // subjectCovered() — একই শর্ত UI (নিচে) আর submit-validation দুই জায়গাতেই ব্যবহার হয়,
+    // যাতে দুটো জায়গায় ভিন্ন ফলাফল না দেখায়। ──
+    const subjectCovered=g=>g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim());
     const needsAppearance=targetMode==="QBank";
-    const readyGroups=included.filter(g=>g.subject.trim() && (!needsAppearance || (g.post.trim()&&g.institution.trim()&&g.year.trim())));
-    const blockedGroups=included.filter(g=>!(g.subject.trim() && (!needsAppearance || (g.post.trim()&&g.institution.trim()&&g.year.trim()))));
+    const isGroupReady=g=>subjectCovered(g) && (!needsAppearance || (g.post.trim()&&g.institution.trim()&&g.year.trim()));
+    const readyGroups=included.filter(isGroupReady);
+    const blockedGroups=included.filter(g=>!isGroupReady(g));
 
     if(readyGroups.length===0){
       push("warn","⚠️ কোনো group-ই Submit হয়নি",needsAppearance?"সবগুলোতে Subject/পদ/প্রতিষ্ঠান/সাল-এর কোনো একটা ফাঁকা — আগে পূরণ করো":"সবগুলোতে Subject ফাঁকা — আগে পূরণ করো");
@@ -624,18 +628,24 @@ function MultiSubjectImportPage({push}){
       }
 
       const subject=g.subject.trim();
-      const subtopicFallback=g.subtopic.trim()||subject;
+      const topicOverride=g.subtopic.trim(); // "Topic (ঐচ্ছিক)" বক্স — শুধু explicit override
       const mainQpaper=groupQpaper[g.id]||"";
-      // ── প্রতিটা প্রশ্নের নিজস্ব AI-detected subject থাকলে সেটাই ব্যবহার হয় (topic
-      // per-entry কখনো detect হয় না, তাই সবসময় group-এর fallback Topic ব্যবহার হয়,
-      // resolveSubjectTopicForEntries-এর fallbackTopic প্যারামিটার দিয়ে) ──
-      const entries=g.rows.map(r=>({q:r.q,correct:r.correct,subject:r.subject||"",topic:"",mainQpaper}));
+      // ── 🐛 ফিক্স: আগে topic সবসময় group-fallback-এর ওপর নির্ভরশীল ছিল — group.subject
+      // ফাঁকা থাকলে (row-গুলোর নিজস্ব subject থাকা সত্ত্বেও) topic-ও ফাঁকা থেকে যেত, পুরো
+      // group বাতিল হয়ে যেত। এখন প্রতিটা row-এর subject (নিজের অথবা group fallback থেকে)
+      // আগে ঠিক হয়, তারপর topic = explicit override, নাহলে সেই row-এর subject-ই (একই নিয়ম
+      // যা placeholder-এ লেখা: "খালি রাখলে Subject-ই বসবে") — group.subject খালি থাকলেও কাজ করে। ──
+      const entries=g.rows.map(r=>{
+        const rowSubject=((r.subject&&r.subject.trim())||subject).trim();
+        const rowTopic=topicOverride||rowSubject;
+        return{q:r.q,correct:r.correct,subject:rowSubject,topic:rowTopic,mainQpaper};
+      });
 
       const resolveResult=await resolveSubjectTopicForEntries({
         entries, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:targetMode, push,
-        fallbackSubject:subject, fallbackTopic:subtopicFallback,
+        fallbackSubject:subject, fallbackTopic:topicOverride||subject,
       });
-      if(!resolveResult.ok){ push("error",`❌ "${subject}" গ্রুপে সমস্যা: `+resolveResult.reason,""); continue; }
+      if(!resolveResult.ok){ push("error",`❌ "${subject||"(subject-less group)"}" গ্রুপে সমস্যা: `+resolveResult.reason,""); continue; }
       if(resolveResult.anyCreated) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
 
       // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
@@ -749,7 +759,9 @@ function MultiSubjectImportPage({push}){
           <div className="ss-scroll" style={{maxHeight:"58vh",overflowY:"auto",paddingRight:6,marginBottom:4}}>
           {draftGroups.map(g=>{
             const needsAppearance=targetMode==="QBank";
-            const isEmpty=!g.subject.trim() || (needsAppearance&&(!g.post.trim()||!g.institution.trim()||!g.year.trim()));
+            // 🐛 ফিক্স: group.subject খালি হলেও, সব row-এর নিজস্ব subject থাকলে এটা "সমস্যা" না
+            const subjectOk=g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim());
+            const isEmpty=!subjectOk || (needsAppearance&&(!g.post.trim()||!g.institution.trim()||!g.year.trim()));
             const imgsOpen=expandedGroupId===g.id;
             return(
               <div key={g.id} style={{background:g.included?C.panel:"#1a1a1a",opacity:g.included?1:.5,
@@ -857,7 +869,7 @@ function MultiSubjectImportPage({push}){
                 <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:4}}>📚 বিষয় (এই গ্রুপের প্রশ্নগুলো কোন বিষয়ের — AI যেটা ধরতে পারেনি সেখানে এটাই বসবে)</div>
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                   <div className="fld" style={{marginBottom:0}}>
-                    <label>📚 Subject{!g.subject.trim()&&<span style={{color:"#f59e0b"}}> ⚠️ খালি</span>}</label>
+                    <label>📚 Subject{(!g.subject.trim()&&!g.rows.every(r=>r.subject&&r.subject.trim()))&&<span style={{color:"#f59e0b"}}> ⚠️ খালি</span>}</label>
                     <input className="inp" value={g.subject} onChange={e=>updateGroupField(g.id,"subject",e.target.value)} placeholder="Subject লিখুন..."/>
                   </div>
                   <div className="fld" style={{marginBottom:0}}>
@@ -866,7 +878,9 @@ function MultiSubjectImportPage({push}){
                   </div>
                 </div>
                 {g.rows.some(r=>r.subject)&&(
-                  <div style={{fontSize:9,color:"#22c55e",marginTop:6}}>✨ {g.rows.filter(r=>r.subject).length}/{g.rows.length}টা প্রশ্নে AI সেকশন-হেডিং ("বাংলা-২৫", "গণিত-১৫" ইত্যাদি) দেখে বিষয় ধরে ফেলেছে — বাকিগুলোর জন্য উপরের Subject fallback হিসেবে বসবে</div>
+                  g.rows.every(r=>r.subject&&r.subject.trim())
+                    ?<div style={{fontSize:9,color:"#22c55e",marginTop:6}}>✨ {g.rows.length}/{g.rows.length}টা প্রশ্নেই AI সেকশন-হেডিং ("বাংলা-২৫", "গণিত-১৫" ইত্যাদি) দেখে বিষয় ধরে ফেলেছে — উপরের Subject বক্স ফাঁকা রাখলেও চলবে, ব্যবহারই হবে না</div>
+                    :<div style={{fontSize:9,color:"#22c55e",marginTop:6}}>✨ {g.rows.filter(r=>r.subject).length}/{g.rows.length}টা প্রশ্নে AI সেকশন-হেডিং দেখে বিষয় ধরে ফেলেছে — বাকি {g.rows.length-g.rows.filter(r=>r.subject).length}টার জন্য উপরের Subject fallback হিসেবে বসবে</div>
                 )}
               </div>
             );
@@ -875,7 +889,7 @@ function MultiSubjectImportPage({push}){
           {(()=>{
             const incGroups=draftGroups.filter(g=>g.included);
             const needsAppearance2=targetMode==="QBank";
-            const isReady=g=>g.subject.trim() && (!needsAppearance2 || (g.post.trim()&&g.institution.trim()&&g.year.trim()));
+            const isReady=g=>(g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim())) && (!needsAppearance2 || (g.post.trim()&&g.institution.trim()&&g.year.trim()));
             const readyG=incGroups.filter(isReady);
             const blockedG=incGroups.filter(g=>!isReady(g));
             const readyQ=readyG.reduce((s,g)=>s+g.rows.length,0);
