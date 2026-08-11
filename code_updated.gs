@@ -435,29 +435,38 @@ function doGet(e) {
     if(!uSheet)return json({result:"error",error:"Sheet not found: "+shName});
     var uRows=uSheet.getDataRange().getValues();
     var uHdr=uRows[0].map(function(h){return h.toString().toLowerCase().trim();});
+    // ── normalize: শুধু a-z0-9 রেখে বাকি সব ফেলে দেওয়া — bulk_save_rows-এর
+    // buildRowArray ঠিক এই normalize দিয়েই কলাম বসায়, তাই actual header
+    // "Sub Topic" (স্পেস) হোক বা "sub_topic" (আন্ডারস্কোর) হোক বা "SubTopic"
+    // — সব normalize করলে "subtopic" হয়ে যায় এবং মিলে যায়। আগে শুধু
+    // lowercase+trim দিয়ে exact/substring চেক হতো, যেটা স্পেস/আন্ডারস্কোর
+    // ভিন্নতায় miss করত — Review Tab-এ "সেভ ব্যর্থ, ফিল্ড: sub_topic" বাগের
+    // মূল কারণ এটাই ছিল। ──
+    var ufNorm=function(s){return (s||"").toString().toLowerCase().replace(/[^a-z0-9]/g,"");};
+    var uHdrNorm=uRows[0].map(function(h){return ufNorm(h);});
     var idC=uHdr.indexOf("id"); if(idC===-1)idC=uHdr.indexOf("phone");
     var fld=(e.parameter.field||"").toLowerCase().trim();
-    // opt1→Opt1, opt2→Opt2 etc. mapping
-    var fldAlias={opt1:"opt1",opt2:"opt2",opt3:"opt3",opt4:"opt4"};
-    var fldC=uHdr.indexOf(fld);
+    var fldNorm=ufNorm(fld);
+    // opt1→Opt1, opt2→Opt2 etc. মিল normalized indexOf দিয়েই প্রথমে ট্রাই
+    var fldC=uHdrNorm.indexOf(fldNorm);
     if(fldC===-1){
       // try "opt1" → look for "opt1" OR "option1" columns
       var altMap={"opt1":["opt1","option1"],"opt2":["opt2","option2"],"opt3":["opt3","option3"],"opt4":["opt4","option4"]};
       if(altMap[fld]){
-        for(var ai=0;ai<altMap[fld].length;ai++){fldC=uHdr.indexOf(altMap[fld][ai]);if(fldC!==-1)break;}
+        for(var ai=0;ai<altMap[fld].length;ai++){fldC=uHdrNorm.indexOf(ufNorm(altMap[fld][ai]));if(fldC!==-1)break;}
       }
     }
-    if(fldC===-1){for(var fc=0;fc<uHdr.length;fc++){if(uHdr[fc].includes(fld)){fldC=fc;break;}}}
-    // ⚠️ Study ট্যাবের আসল হেডার "sub_topic"/"subtopic" না, "topic" — ওপরের এক্সাক্ট/
-    // সাবস্ট্রিং ম্যাচ কোনোটাই সেটা ধরতে পারে না (কারণ "topic".includes("sub_topic")
-    // false)। fld যদি sub_topic/subtopic-জাতীয় কিছু হয় আর কলাম না পাওয়া যায়, "topic"
+    if(fldC===-1){for(var fc=0;fc<uHdrNorm.length;fc++){if(uHdrNorm[fc].indexOf(fldNorm)!==-1){fldC=fc;break;}}}
+    // ⚠️ Study ট্যাবের আসল হেডার "sub_topic"/"subtopic" না, "topic" — normalized
+    // ম্যাচেও সেটা ধরা যায় না (কারণ "topic" আর "subtopic" সম্পূর্ণ আলাদা শব্দ)।
+    // fld যদি sub_topic/subtopic-জাতীয় কিছু হয় আর কলাম না পাওয়া যায়, "topic"
     // কলাম ট্রাই করা হচ্ছে — নইলে Admin App থেকে Study-র sub-topic এডিট করলে
     // "Column not found" এরর দিত।
-    if(fldC===-1 && (fld==="sub_topic"||fld==="subtopic")) fldC=uHdr.indexOf("topic");
+    if(fldC===-1 && (fld==="sub_topic"||fld==="subtopic")) fldC=uHdrNorm.indexOf("topic");
     if(idC===-1||fldC===-1)return json({result:"error",error:"Column not found: "+fld});
     var targetId=(e.parameter.id||"").toString().trim();
     var content=(e.parameter.content||"");
-    var ufAtC=uHdr.indexOf("updatedat");
+    var ufAtC=uHdrNorm.indexOf("updatedat");
     for(var ur=1;ur<uRows.length;ur++){
       if(uRows[ur][idC].toString().trim()===targetId){
         uSheet.getRange(ur+1,fldC+1).setValue(content);
