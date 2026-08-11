@@ -155,50 +155,98 @@ function ReviewTab({push,tick}){
 
   // ── Subject/Topic ইনলাইন ফিক্স ফর্ম — কার্ডের ভিতরেই খোলে, আলাদা মোডাল না
   // (একটার পর একটা দ্রুত ঠিক করার জন্য, MultiSubjectImportPage-এর গ্রুপ-এডিট
-  // ফর্মের ধাঁচেই) ──
+  // ফর্মের ধাঁচেই)। "সেভ করো" চাপলে সাথে সাথে Sheet-এ যায় না — শুধু লোকাল
+  // "pending" queue-তে জমা হয়, একটার পর একটা টাইপ করে যাওয়া যায় নেটওয়ার্ক
+  // ওয়েট না করেই। উপরের "💾 সব সেভ করো" চাপলে তখন একসাথে batch-এ Sheet-এ
+  // যায় — যেগুলো সফল হবে সেগুলোই queue থেকে সরে যাবে ও রিফ্রেশের পর missing
+  // লিস্ট থেকেও বাদ পড়বে, বাকিগুলো (যদি কোনোটা ভরাই না হয়) queue-তে/লিস্টে
+  // থেকে যাবে — ঠিক যেভাবে চাওয়া হয়েছিল। ──
   const[editingQid,setEditingQid]=useState(null);
   const[subjSel,setSubjSel]=useState({id:"",name:""});
   const[topicSel,setTopicSel]=useState({id:"",name:""});
-  const[saving,setSaving]=useState(false);
+  const[pending,setPending]=useState({}); // qid -> {subj,topic}
+  const[batchSaving,setBatchSaving]=useState(false);
+  const[batchProgress,setBatchProgress]=useState({done:0,total:0});
   const[appearanceTarget,setAppearanceTarget]=useState(null);
   const[paperTarget,setPaperTarget]=useState(null); // যেই রো-এর প্রশ্নপত্র ফুল-স্ক্রিনে দেখা হচ্ছে
 
   const openFix=r=>{
     setEditingQid(r.qid);
-    setSubjSel({id:"",name:r.subj||""});
-    setTopicSel({id:"",name:r.topic||""});
+    const pv=pending[r.qid];
+    setSubjSel({id:"",name:pv?pv.subj:(r.subj||"")});
+    setTopicSel({id:"",name:pv?pv.topic:(r.topic||"")});
   };
 
-  const saveSubjTopic=async r=>{
+  // ── শুধু queue-তে জমা করে, নেটওয়ার্ক কল করে না — তাই ইনস্ট্যান্ট, একটার
+  // পর একটা কার্ড খুলে টাইপ করে যাওয়া যায় ──
+  const queueFix=r=>{
     if(!subjSel.name.trim()||!topicSel.name.trim()){push("warn","Subject ও Topic দুটোই দাও","");return;}
+    setPending(p=>({...p,[r.qid]:{subj:subjSel.name.trim(),topic:topicSel.name.trim()}}));
+    setEditingQid(null);
+  };
+  const removeFromQueue=qid=>setPending(p=>{const np={...p};delete np[qid];return np;});
+
+  // ── "💾 সব সেভ করো" — queue-এর সবগুলো একে একে (sequential, যাতে একই নতুন
+  // Subject/Topic দুইবার তৈরি না হয়ে যায়) Sheet-এ পাঠায়। সফল হলেই queue থেকে
+  // বাদ যায়; ব্যর্থ হলে queue-তে থেকে যায় যাতে আবার চেষ্টা করা যায়। ──
+  const saveAllPending=async()=>{
+    const entries=Object.entries(pending);
+    if(entries.length===0)return;
     if(!gasSecret){push("error","❌ GAS Secret Key দাও","উপরে বসাও");return;}
-    setSaving(true);
-    const subjOpts=subjectOptions.map(s=>({id:s.subject_id,name:s.subject_name}));
-    const subjRes=await resolveOrCreateReference({sel:subjSel,refType:"subjects",options:subjOpts,gasSecret,sheet:"QBank",push});
-    if(!subjRes.ok){push("error","❌ Subject যোগ/খুঁজে পাওয়া যায়নি","");setSaving(false);return;}
-    const topicOpts=topicOptionsFor(subjRes.id);
-    const topicRes=await resolveOrCreateReference({sel:topicSel,refType:"topics",options:topicOpts,gasSecret,parentId:subjRes.id,push});
-    if(!topicRes.ok){push("error","❌ Topic যোগ/খুঁজে পাওয়া যায়নি","");setSaving(false);return;}
-    const res=await syncFieldsToSheet({sheet:"QBank",id:r.qid,fields:{
-      subject:subjSel.name.trim(), sub_topic:topicSel.name.trim(),
-      subject_id:subjRes.id, topic_id:topicRes.id,
-    },gasSecret});
-    if(res.ok){
-      push("success","✅ Subject/Topic ঠিক হয়েছে!",`#${r.qid}`);
-      setEditingQid(null);
-      invalidate("QBank");
-      refresh();
-    }else{
-      push("error","❌ সেভ ব্যর্থ",`ফিল্ড: ${res.failed.join(", ")||"সব"}`);
+    setBatchSaving(true);
+    setBatchProgress({done:0,total:entries.length});
+    let subjOptsLocal=subjectOptions.map(s=>({id:s.subject_id,name:s.subject_name}));
+    let topicsLocal=allTopics.slice();
+    const succeeded=[];
+    const failed=[];
+    for(let i=0;i<entries.length;i++){
+      const[qid,fix]=entries[i];
+      try{
+        const subjRes=await resolveOrCreateReference({sel:{id:"",name:fix.subj},refType:"subjects",options:subjOptsLocal,gasSecret,sheet:"QBank",push});
+        if(!subjRes.ok)throw new Error("subject resolve failed");
+        if(!subjOptsLocal.some(s=>String(s.id)===String(subjRes.id))) subjOptsLocal=[...subjOptsLocal,{id:subjRes.id,name:fix.subj}];
+        const topicOptsLocal=topicsLocal.filter(t=>String(t.subject_id)===String(subjRes.id)).map(t=>({id:t.topic_id,name:t.topic_name}));
+        const topicRes=await resolveOrCreateReference({sel:{id:"",name:fix.topic},refType:"topics",options:topicOptsLocal,gasSecret,parentId:subjRes.id,push});
+        if(!topicRes.ok)throw new Error("topic resolve failed");
+        if(!topicsLocal.some(t=>String(t.topic_id)===String(topicRes.id))) topicsLocal=[...topicsLocal,{topic_id:topicRes.id,topic_name:fix.topic,subject_id:subjRes.id}];
+        const res=await syncFieldsToSheet({sheet:"QBank",id:qid,fields:{
+          subject:fix.subj, sub_topic:fix.topic, subject_id:subjRes.id, topic_id:topicRes.id,
+        },gasSecret});
+        if(res.ok)succeeded.push(qid); else failed.push(qid);
+      }catch(err){
+        failed.push(qid);
+      }
+      setBatchProgress({done:i+1,total:entries.length});
     }
-    setSaving(false);
+    setPending(p=>{
+      const np={...p};
+      succeeded.forEach(qid=>delete np[qid]);
+      return np;
+    });
+    setBatchSaving(false);
+    if(succeeded.length&&!failed.length) push("success",`✅ ${succeeded.length}টা সেভ হয়েছে!`,"লিস্ট থেকে বাদ পড়ে যাবে");
+    else if(succeeded.length&&failed.length) push("warn",`✅ ${succeeded.length}টা সেভ হয়েছে`,`❌ ${failed.length}টা ব্যর্থ, queue-তে থেকে গেলো — আবার চেষ্টা করো`);
+    else push("error","❌ কোনোটাই সেভ হয়নি","queue-তে থেকে গেলো, আবার চেষ্টা করো");
+    if(succeeded.length){ invalidate("QBank"); refresh(); }
   };
 
   return(
     <div className="page">
       <div style={{fontSize:11,color:C.muted,marginBottom:10,lineHeight:1.5}}>
-        QBank-এর যেসব প্রশ্নে Subject/Topic খালি অথবা কোনো Exam Appearance (পদ/প্রতিষ্ঠান/সাল) যোগ করা হয়নি — সেগুলো এখানে দেখাবে। ঠিক করলে সরাসরি Sheet-এ আপডেট হয়ে যায়, আলাদা কিছু সাবমিট করতে হয় না।
+        QBank-এর যেসব প্রশ্নে Subject/Topic খালি অথবা কোনো Exam Appearance (পদ/প্রতিষ্ঠান/সাল) যোগ করা হয়নি — সেগুলো এখানে দেখাবে। Subject/Topic একটার পর একটা ভরে queue-তে জমা করো, তারপর "সব সেভ করো" চাপলে একসাথে Sheet-এ যাবে।
       </div>
+
+      {Object.keys(pending).length>0&&(
+        <div style={{position:"sticky",top:0,zIndex:30,display:"flex",gap:8,alignItems:"center",padding:"9px 11px",marginBottom:12,background:C.green+"18",border:`1.5px solid ${C.green}55`,borderRadius:10}}>
+          <span style={{fontSize:12,fontWeight:700,color:C.green,flex:1}}>
+            {batchSaving?`⏳ সেভ হচ্ছে... ${batchProgress.done}/${batchProgress.total}`:`✅ ${Object.keys(pending).length}টা ভরা আছে, সেভের অপেক্ষায়`}
+          </span>
+          <button className="btn bg" disabled={batchSaving} onClick={()=>setPending({})} style={{fontSize:11,padding:"6px 10px"}}>🗑️ খালি করো</button>
+          <button className="btn bp" disabled={batchSaving} onClick={saveAllPending} style={{fontSize:11,padding:"6px 12px",fontWeight:700}}>
+            {batchSaving?"⏳":`💾 সব সেভ করো (${Object.keys(pending).length})`}
+          </button>
+        </div>
+      )}
 
       {!gasSecret&&(
         <div className="fld" style={{marginBottom:10}}>
@@ -293,11 +341,19 @@ function ReviewTab({push,tick}){
                       newLabel={`🆕 "${topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}/>
                   </div>
                   <div style={{display:"flex",gap:7}}>
-                    <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={()=>setEditingQid(null)} disabled={saving}>বাতিল</button>
-                    <button className="btn bp" style={{flex:2,justifyContent:"center"}} onClick={()=>saveSubjTopic(r)} disabled={saving}>
-                      {saving?"⏳ সেভ হচ্ছে...":"💾 সেভ করো"}
+                    <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={()=>setEditingQid(null)}>বাতিল</button>
+                    <button className="btn bp" style={{flex:2,justifyContent:"center"}} onClick={()=>queueFix(r)}>
+                      ✅ Queue-তে যোগ করো
                     </button>
                   </div>
+                </div>
+              ):pending[r.qid]?(
+                <div style={{marginTop:7,padding:"7px 10px",background:C.green+"14",border:`1px solid ${C.green}44`,borderRadius:8,display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:10,color:C.green,fontWeight:700,flex:1}}>
+                    ✅ queue-তে: 📚 {pending[r.qid].subj} · 📌 {pending[r.qid].topic}
+                  </span>
+                  <button onClick={()=>openFix(r)} disabled={batchSaving} style={{fontSize:10,padding:"3px 7px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,cursor:"pointer"}}>✏️</button>
+                  <button onClick={()=>removeFromQueue(r.qid)} disabled={batchSaving} style={{fontSize:10,padding:"3px 7px",background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,cursor:"pointer"}}>❌</button>
                 </div>
               ):(
                 <button onClick={()=>openFix(r)}
