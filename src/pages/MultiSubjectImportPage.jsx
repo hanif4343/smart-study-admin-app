@@ -143,6 +143,13 @@ function sanitizeEntries(rawEntries){
   return out;
 }
 
+/* ── MCQ ভার্সন — splitBundledAnswer এখানে ব্যবহার হয় না, কারণ সেটা ক/খ/গ/ঘ দেখে
+   sub-question split করে — MCQ-তে ক/খ/গ/ঘ আসলে option-লেবেল, sub-question না, split
+   করলে option-গুলোই ভেঙে যাবে। শুধু watermark-noise ফিল্টার হয়, বাকি entry অপরিবর্তিত। ── */
+function sanitizeEntriesMCQ(rawEntries){
+  return (rawEntries||[]).filter(e=>e&&e.q&&e.opt1&&e.opt2&&!isNoiseWatermark(e.q));
+}
+
 
 
 /* ── AI prompt: header থেকে Designation/Institution + Written প্রশ্ন-উত্তর একসাথে বের করে JSON দেয় ── */
@@ -209,6 +216,62 @@ function parseDetectResponse(text){
   return{designation,institution,year,sectionSubject,entries};
 }
 
+/* ── AI prompt: header থেকে Designation/Institution + MCQ প্রশ্ন-option-answer একসাথে বের করে JSON দেয় ──
+   Written প্রম্পট থেকে মূল পার্থক্য শুধু ধাপ ২-এ — এখানে option বাদ দেওয়া হয় না, বরং ৪টা
+   option-ই আলাদা করে বের করা হয়, আর possible হলে সঠিক উত্তর মেলানো হয়। ── */
+function buildDetectPromptMCQ(ocrText){
+  return `তুমি একজন বাংলা সরকারি নিয়োগ পরীক্ষার প্রশ্নব্যাংক বিশ্লেষক (শুধু MCQ টাইপ)।
+
+নিচের OCR text একটি বইয়ের একটি পাতা থেকে নেওয়া। প্রায় প্রতিটা পাতার একদম উপরে (সাধারণত প্রথম ১-৩ লাইনে) একটা হেডার/টাইটেল লাইন থাকে যেখানে চাকরির পদবী (Designation) ও প্রতিষ্ঠান/দপ্তরের নাম (Institution) লেখা থাকে — প্রায়ই তার ঠিক পরেই "তারিখ:", "সময়:", "পূর্ণমান:" জাতীয় মেটা-তথ্য থাকে (থাকলে সেটাই হেডার শেষ হওয়ার সংকেত হিসেবে ধরে নাও)।
+
+কাজ:
+১. হেডার থেকে designation, institution ও year (সাল, ৪-ডিজিট, বাংলা/ইংরেজি সংখ্যায় যা-ই থাকুক ইংরেজি সংখ্যায় দাও) আলাদা করে বের করো। "MCQ" শব্দ, পাতা নম্বর, "তারিখ/সময়/পূর্ণমান" — এসব বাদ দাও। হেডারের বানান/OCR কিছুটা garbled হলেও best-effort extract করো। কোনো heading-ই না থাকলে "" খালি দাও।
+২. এই পাতায় থাকা প্রতিটা MCQ প্রশ্নের জন্য — প্রশ্নের টেক্সট এবং তার ৪টা option (ক/খ/গ/ঘ বা A/B/C/D বা ১/২/৩/৪ — পাতায় যেভাবেই লেখা থাকুক, ঠিক সেই ক্রমেই, প্রতিটা option-এর টেক্সট আলাদা করে) বের করো। প্রশ্ন-নম্বর বাদ দাও, option-লেবেল (ক./A./১.) বাদ দাও — শুধু আসল টেক্সট রাখো।
+৩. সঠিক উত্তর বের করার চেষ্টা করো (best-effort, না পেলে জোর করে অনুমান কোরো না):
+   — কোনো option-এর পাশে টিক (✓), গোল দাগ, বোল্ড/আন্ডারলাইন, বা "Ans:"/"উত্তর:" জাতীয় ইনলাইন চিহ্ন থাকলে সেটাই সঠিক উত্তর।
+   — অথবা এই একই পাতায় নিচের দিকে/আলাদা একটা "উত্তরমালা" বা "Answer Key" সেকশন/টেবিল থাকতে পারে (যেমন "১.ক ২.গ ৩.খ ৪.ঘ..." বা টেবিল ফরম্যাটে) — থাকলে প্রশ্ন-নম্বর মিলিয়ে সেই অনুযায়ী কোন option (ক/খ/গ/ঘ) সঠিক সেটা বের করে সেই option-এর পুরো টেক্সটটাই "correct"-এ বসাও (letter না, পুরো option-টেক্সট)।
+   — এই পাতায় উত্তরের কোনো ইঙ্গিতই না থাকলে (উত্তরমালা অন্য কোনো পাতায় থাকতে পারে, এই পাতায় নেই) "correct":"" খালি রাখো — অনুমান করে ভুল উত্তর বসিও না, এটা পরে অ্যাডমিন ম্যানুয়ালি ঠিক করবে।
+৪. ছবির কোণায় ফোন/ক্যামেরা অ্যাপ নিজে থেকে যা বসিয়ে দেয় (মডেল নাম, মালিকের নাম, তারিখ/সময় স্ট্যাম্প) — এগুলো সম্পূর্ণ উপেক্ষা করো।
+৫. (গুরুত্বপূর্ণ, best-effort) — সেকশন-হেডিং (যেমন "গণিত-১৫", "সাধারণ জ্ঞান-১৫", "বাংলা-২৫", "ইংরেজি-২৫", "বিজ্ঞান-১০") থাকলে top-level "sectionSubject"-এ দাও, সবসময় এই ৫টার একটাতে normalize করে: "বাংলা", "ইংরেজি", "গণিত", "বিজ্ঞান", "সাধারণ জ্ঞান" (কম্পিউটার/আইসিটি সহ)। নতুন heading না থাকলে "sectionSubject":"" রাখো — আগের পাতারটাই চলতে থাকবে।
+৬. (ঐচ্ছিক) — কোনো নির্দিষ্ট প্রশ্নের ঠিক আগে আলাদা sub-heading থাকলে সেটা সেই entry-র "subject" ফিল্ডে দাও (sectionSubject override করবে), নাহলে "subject":"" রাখো।
+${OCR_CORRECTION_RULES}
+
+শুধু নিচের বিশুদ্ধ JSON ফরম্যাটে উত্তর দাও — কোনো markdown code fence (\`\`\`), কোনো ব্যাখ্যা, কোনো অতিরিক্ত টেক্সট ছাড়া:
+{"designation":"...","institution":"...","year":"...","sectionSubject":"...","entries":[{"q":"...","opt1":"...","opt2":"...","opt3":"...","opt4":"...","correct":"...","subject":"..."}]}
+
+RULES:
+- Serial number বাদ দাও
+- প্রতিটা string-এর ভেতরে দরকার হলে সঠিকভাবে escape (\\") করো, যাতে JSON valid থাকে
+- পাতা নম্বর, বিজ্ঞাপন, প্রমোশনাল টেক্সট বাদ দাও
+- কোনো প্রশ্ন বাদ দিও না, ৪টা option-ের যেকোনো একটা না পড়া গেলেও যতটুকু পড়া যায় তা দিয়ে entry বানাও (খালি রেখো না বাদ দিয়ো না)
+
+=== OCR TEXT ===
+${ocrText}`;
+}
+
+/* ── AI response (MCQ) → {designation, institution, year, sectionSubject, entries:[{q,opt1-4,correct,subject}]} ── */
+function parseDetectResponseMCQ(text){
+  let t=(text||"").trim();
+  t=t.replace(/^```json/i,"").replace(/^```/,"").replace(/```$/,"").trim();
+  const start=t.indexOf("{"), end=t.lastIndexOf("}");
+  if(start===-1||end===-1) throw new Error("JSON পাওয়া যায়নি — AI response format ঠিক নেই");
+  const obj=JSON.parse(t.slice(start,end+1));
+  const designation=(obj.designation||"").toString().trim();
+  const institution=(obj.institution||"").toString().trim();
+  const year=(obj.year||"").toString().trim().replace(/[^\d]/g,"").slice(0,4);
+  const sectionSubject=(obj.sectionSubject||"").toString().trim();
+  const entries=Array.isArray(obj.entries)
+    ?obj.entries.filter(e=>e&&e.q).map(e=>({
+        q:String(e.q).trim(),
+        opt1:(e.opt1||"").toString().trim(), opt2:(e.opt2||"").toString().trim(),
+        opt3:(e.opt3||"").toString().trim(), opt4:(e.opt4||"").toString().trim(),
+        correct:(e.correct||"").toString().trim(),
+        subject:(e.subject||"").toString().trim(),
+      })).filter(e=>e.q&&e.opt1&&e.opt2) // অন্তত q + ২টা option না থাকলে ভাঙা entry, বাদ
+    :[];
+  return{designation,institution,year,sectionSubject,entries};
+}
+
 function MultiSubjectImportPage({push}){
   // images: [{id,webPath,base64,status,designation,institution,entryCount,error,groupBreak}]
   // (designation/institution এখানে শুধু ছবি-কার্ডে preview দেখানোর জন্য — draftGroups-এ
@@ -219,6 +282,11 @@ function MultiSubjectImportPage({push}){
   const[progress,setProgress]=useState({cur:0,total:0});
   const[showApiSettings,setShowApiSettings]=useState(false);
   const[targetMode,setTargetMode]=useState("Quiz"); // Quiz | QBank
+  // ── প্রশ্নের ধরন — Written নাকি MCQ, এটা Gallery/Camera খোলার *আগেই* বেছে নিতে হয়
+  // (ব্যবহারকারীর explicit চাওয়া অনুযায়ী) — কারণ OCR parsing prompt, sanitize লজিক
+  // (ক/খ/গ/ঘ split — MCQ-তে এগুলোই আসল option, split করলে ভেঙে যাবে), আর সাবমিট schema
+  // তিনটাই ভিন্ন এই দুই মোডে। null মানে এখনো বাছাই হয়নি, তাই ছবি তোলা/নেওয়া বন্ধ থাকবে। ──
+  const[qType,setQType]=useState(null); // null | "Written" | "MCQ"
   const[saveLoc,setSaveLoc]=useState(loadSaveLocPref);
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
@@ -436,15 +504,17 @@ function MultiSubjectImportPage({push}){
   /* ── একটা page-unit (base64) প্রসেস করে {designation,institution,year,entries} রিটার্ন করে, ক্যাশসহ ──
      ক্যাশ base64+CACHE_QTYPE দিয়ে key হয় — grouping বদলালেও (✂️ টগল) একই ছবি আবার AI call করতে হয় না */
   const detectAndParsePage=async(b64)=>{
-    const cached=getOcrCacheEntry(b64,CACHE_QTYPE);
+    const cacheKey=qType==="MCQ"?"MultiSubjectMCQ":CACHE_QTYPE;
+    const cached=getOcrCacheEntry(b64,cacheKey);
     if(cached){
       _LC.log("MultiSubjectImport","📦 ক্যাশ হিট — AI call এড়ানো হলো");
       return{...cached.detected,archiveId:cached.archiveId||null,raw:cached.raw||""};
     }
     const raw=await nativeOcr(b64);
     if(!raw.trim()) return{designation:"",institution:"",year:"",entries:[],archiveId:null,raw:""};
-    const aiText=await callAiProviderRotatingRaw(buildDetectPrompt(raw));
-    const detected=parseDetectResponse(aiText);
+    const isMcq=qType==="MCQ";
+    const aiText=await callAiProviderRotatingRaw(isMcq?buildDetectPromptMCQ(raw):buildDetectPrompt(raw));
+    const detected=isMcq?parseDetectResponseMCQ(aiText):parseDetectResponse(aiText);
     let archiveId=null;
     if(detected.entries.length){
       // 🐛 ফিক্স: আগে এখানে designation/institution-কে ভুল subject/sub_topic হিসেবে ধরে
@@ -452,12 +522,14 @@ function MultiSubjectImportPage({push}){
       // পাঠাতে হয় (আর্কাইভের স্টোরেজ স্কিমা এটাই), কিন্তু আসলে এখানে post/institution বসছে —
       // ArchivePage-এ এই এন্ট্রি রি-সাবমিট করার সময় এটাই দেখাবে "Subject/Sub-topic" হিসেবে।
       const arc=archiveAdd({
-        source:SRC_NAME,subject:detected.designation,subtopic:detected.institution,qtype:"Written",
-        rows:detected.entries.map(e=>({q:e.q,correct:e.a}))
+        source:SRC_NAME,subject:detected.designation,subtopic:detected.institution,qtype:isMcq?"MCQ":"Written",
+        rows:isMcq
+          ?detected.entries.map(e=>({q:e.q,opt1:e.opt1,opt2:e.opt2,opt3:e.opt3,opt4:e.opt4,correct:e.correct}))
+          :detected.entries.map(e=>({q:e.q,correct:e.a}))
       });
       if(arc) archiveId=arc.id;
     }
-    setOcrCacheEntry(b64,CACHE_QTYPE,{raw,detected,archiveId});
+    setOcrCacheEntry(b64,cacheKey,{raw,detected,archiveId});
     return{...detected,archiveId,raw};
   };
 
@@ -469,6 +541,7 @@ function MultiSubjectImportPage({push}){
      এখন আসল একাডেমিক বিষয়/টপিকের জন্য — AI যদি per-entry subject ধরতে পারে সেটা ব্যবহার হয়, নাহলে
      অ্যাডমিন এখানে সহজ একটা "fallback subject" টাইপ করে দেবে (নিচের Confirm UI-তে)। ── */
   const processImages=async()=>{
+    if(!qType){push("warn","আগে Written/MCQ বেছে নাও","");return;}
     if(!images.length){push("warn","ছবি যোগ করুন","");return;}
     if(!buildKeyPool().length){push("warn","⚠️ কোনো AI provider active নেই","⚙️ থেকে অন্তত একটা key active করো");return;}
     setPhase("processing"); stopRef.current=false; setResult(null); setDraftGroups([]);
@@ -522,9 +595,14 @@ function MultiSubjectImportPage({push}){
         if(curPost) grp.post=curPost;
         if(curInstitution) grp.institution=curInstitution;
         if(curYear) grp.year=curYear;
-        // ── AI যতই বলুক, এখানে আবার নিশ্চিত করে নিচ্ছি: বান্ডিল উত্তর split + watermark noise বাদ ──
-        const cleanEntries=sanitizeEntries(detected.entries);
-        cleanEntries.forEach(e=>grp.rows.push({q:e.q,correct:e.a,subject:e.subject||curSectionSubject||""}));
+        // ── AI যতই বলুক, এখানে আবার নিশ্চিত করে নিচ্ছি: Written হলে বান্ডিল উত্তর split +
+        // watermark noise বাদ; MCQ হলে split হয় না (ক/খ/গ/ঘ আসল option, sub-question না) ──
+        const cleanEntries=qType==="MCQ"?sanitizeEntriesMCQ(detected.entries):sanitizeEntries(detected.entries);
+        cleanEntries.forEach(e=>grp.rows.push(
+          qType==="MCQ"
+            ?{q:e.q,opt1:e.opt1,opt2:e.opt2,opt3:e.opt3,opt4:e.opt4,correct:e.correct,subject:e.subject||curSectionSubject||""}
+            :{q:e.q,correct:e.a,subject:e.subject||curSectionSubject||""}
+        ));
         if(detected.archiveId&&!grp.archiveIds.includes(detected.archiveId)) grp.archiveIds.push(detected.archiveId);
         const pageNo=imgIndexOf[unit.imgId];
         if(pageNo&&!grp.pages.includes(pageNo)) grp.pages.push(pageNo);
@@ -559,6 +637,14 @@ function MultiSubjectImportPage({push}){
   /* ── Confirm স্ক্রিনে group edit/exclude ── */
   const updateGroupField=(id,field,val)=>setDraftGroups(p=>p.map(g=>g.id===id?{...g,[field]:val}:g));
   const toggleGroupIncluded=(id)=>setDraftGroups(p=>p.map(g=>g.id===id?{...g,included:!g.included}:g));
+  // ── MCQ-এর প্রতিটা প্রশ্নের option/correct ঠিক করার জন্য (OCR ভুল পড়া/answer-key
+  // না-মেলা কমন, তাই এখানে row-লেভেল এডিট দরকার — Written-এ আগে থেকেই যা আছে তাতেই হয়) ──
+  const updateRowField=(gid,rowIdx,field,val)=>setDraftGroups(p=>p.map(g=>g.id!==gid?g:{
+    ...g,rows:g.rows.map((r,i)=>i===rowIdx?{...r,[field]:val}:r)
+  }));
+  const removeRow=(gid,rowIdx)=>setDraftGroups(p=>p.map(g=>g.id!==gid?g:{
+    ...g,rows:g.rows.filter((_,i)=>i!==rowIdx)
+  }));
 
   /* ── ধাপ ২: Confirm করার পর — সব included group একসাথে Sheet/Firebase-এ Submit ──
      পুরো কাজটা (ছবি আপলোড + সেভ) _BGM.guard দিয়ে মোড়ানো — এতে WakeLock + Android
@@ -575,17 +661,22 @@ function MultiSubjectImportPage({push}){
     // subjectCovered() — একই শর্ত UI (নিচে) আর submit-validation দুই জায়গাতেই ব্যবহার হয়,
     // যাতে দুটো জায়গায় ভিন্ন ফলাফল না দেখায়। ──
     const subjectCovered=g=>g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim());
+    // ── MCQ mode-এ প্রতিটা প্রশ্নের সঠিক উত্তর বসানো না থাকলে সেই group ব্লক থাকবে —
+    // নাহলে ফাঁকা "correct"-সহ প্রশ্ন Sheet-এ চলে যাবে, লাইভ কুইজে ভুল/ফাঁকা উত্তর দেখাবে ──
+    const mcqCorrectCovered=g=>qType!=="MCQ"||g.rows.every(r=>r.correct&&r.correct.trim());
     const needsAppearance=targetMode==="QBank";
-    const isGroupReady=g=>subjectCovered(g) && (!needsAppearance || (g.post.trim()&&g.institution.trim()&&g.year.trim()));
+    const isGroupReady=g=>subjectCovered(g) && mcqCorrectCovered(g) && (!needsAppearance || (g.post.trim()&&g.institution.trim()&&g.year.trim()));
     const readyGroups=included.filter(isGroupReady);
     const blockedGroups=included.filter(g=>!isGroupReady(g));
 
     if(readyGroups.length===0){
-      push("warn","⚠️ কোনো group-ই Submit হয়নি",needsAppearance?"সবগুলোতে Subject/পদ/প্রতিষ্ঠান/সাল-এর কোনো একটা ফাঁকা — আগে পূরণ করো":"সবগুলোতে Subject ফাঁকা — আগে পূরণ করো");
+      push("warn","⚠️ কোনো group-ই Submit হয়নি",
+        (needsAppearance?"Subject/পদ/প্রতিষ্ঠান/সাল":"Subject")+(qType==="MCQ"?"/MCQ-এর সঠিক উত্তর":"")+" কোনো একটা ফাঁকা — আগে পূরণ করো");
       return;
     }
     if(blockedGroups.length>0){
-      push("warn",`⚠️ ${blockedGroups.length}টা group বাদ পড়েছে`,"Subject/পদ/প্রতিষ্ঠান/সাল ফাঁকা — পূরণ করে আবার Submit চাপো, এখন শুধু বাকিগুলো যাচ্ছে");
+      push("warn",`⚠️ ${blockedGroups.length}টা group বাদ পড়েছে`,
+        (needsAppearance?"Subject/পদ/প্রতিষ্ঠান/সাল":"Subject")+(qType==="MCQ"?"/MCQ-এর সঠিক উত্তর":"")+" ফাঁকা — পূরণ করে আবার Submit চাপো, এখন শুধু বাকিগুলো যাচ্ছে");
     }
 
     if(!refData){push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো","");return;}
@@ -638,7 +729,9 @@ function MultiSubjectImportPage({push}){
       const entries=g.rows.map(r=>{
         const rowSubject=((r.subject&&r.subject.trim())||subject).trim();
         const rowTopic=topicOverride||rowSubject;
-        return{q:r.q,correct:r.correct,subject:rowSubject,topic:rowTopic,mainQpaper};
+        return qType==="MCQ"
+          ?{q:r.q,opt1:r.opt1,opt2:r.opt2,opt3:r.opt3,opt4:r.opt4,correct:r.correct,subject:rowSubject,topic:rowTopic,mainQpaper}
+          :{q:r.q,correct:r.correct,subject:rowSubject,topic:rowTopic,mainQpaper};
       });
 
       const resolveResult=await resolveSubjectTopicForEntries({
@@ -651,8 +744,10 @@ function MultiSubjectImportPage({push}){
       // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
       // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে।
       const rows=resolveResult.resolved.map(({item,subjectId,topicId,subjectName,topicName})=>buildSheetRow({
-        item:{q:item.q,correct:item.correct,explanation:""},
-        subject:subjectName,subtopic:topicName,qtype:"Written",audienceTags:[],
+        item:qType==="MCQ"
+          ?{q:item.q,opt1:item.opt1,opt2:item.opt2,opt3:item.opt3,opt4:item.opt4,correct:item.correct,explanation:""}
+          :{q:item.q,correct:item.correct,explanation:""},
+        subject:subjectName,subtopic:topicName,qtype:qType||"Written",audienceTags:[],
         subjectId,topicId,mainQpaper:item.mainQpaper,
       }));
       const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance});
@@ -694,6 +789,11 @@ function MultiSubjectImportPage({push}){
   const toggleGroupImages=(gid)=>setExpandedGroupId(p=>p===gid?null:gid);
   const[rawTextGroupId,setRawTextGroupId]=useState(null); // কোন group-এর raw OCR টেক্সট দেখানো হচ্ছে (ডায়াগনস্টিক)
   const toggleGroupRawText=(gid)=>setRawTextGroupId(p=>p===gid?null:gid);
+  // ── কোন group-এর প্রশ্ন-লিস্ট (option/correct এডিট UI) খোলা আছে — MCQ-তে OCR
+  // ভুল পড়া/answer-key ভুল মেলা কমন বলে এটা দরকার, Written-এও Q/উত্তর টেক্সট
+  // ঠিক করার সুযোগ দেয় ──
+  const[rowsOpenGroupId,setRowsOpenGroupId]=useState(null);
+  const toggleGroupRows=(gid)=>setRowsOpenGroupId(p=>p===gid?null:gid);
   const imgByPageNo=(n)=>images[n-1]; // pages array 1-based (images grid index অনুযায়ী)
 
   const pct=progress.total?Math.round(progress.cur/progress.total*100):0;
@@ -761,7 +861,8 @@ function MultiSubjectImportPage({push}){
             const needsAppearance=targetMode==="QBank";
             // 🐛 ফিক্স: group.subject খালি হলেও, সব row-এর নিজস্ব subject থাকলে এটা "সমস্যা" না
             const subjectOk=g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim());
-            const isEmpty=!subjectOk || (needsAppearance&&(!g.post.trim()||!g.institution.trim()||!g.year.trim()));
+            const mcqOk=qType!=="MCQ"||g.rows.every(r=>r.correct&&r.correct.trim());
+            const isEmpty=!subjectOk || !mcqOk || (needsAppearance&&(!g.post.trim()||!g.institution.trim()||!g.year.trim()));
             const imgsOpen=expandedGroupId===g.id;
             return(
               <div key={g.id} style={{background:g.included?C.panel:"#1a1a1a",opacity:g.included?1:.5,
@@ -817,14 +918,15 @@ function MultiSubjectImportPage({push}){
                       if(!src)return null;
                       return(
                         <div key={pn} style={{position:"relative"}}>
+                          {/* ── এখানে (Confirm স্ক্রিনে) এক-ট্যাপেই সাথে সাথে ফুল-স্ক্রিন জুম খোলে
+                              (openPreviewNow) — long-press-ভিত্তিক ৩ সেকেন্ড অপেক্ষার দরকার নেই,
+                              কারণ এখানকার হিন্ট টেক্সটই "ট্যাপ করো" বলে (idle-phase-এর রি-অর্ডার
+                              লিস্টে drag/long-press দুটোর কনফ্লিক্ট এড়াতে সেখানে long-press রাখা
+                              হয়েছে, কিন্তু Confirm স্ক্রিনে drag নেই — তাই সরাসরি ট্যাপই স্বাভাবিক)।
+                              পদ/প্রতিষ্ঠান/সাল বা Subject ফাঁকা থাকলে এটাই আসল পাতা দেখে ম্যানুয়ালি
+                              যাচাই করার উপায়। ── */}
                           <img src={src} draggable={false} loading="lazy" decoding="async"
-                            onTouchStart={()=>startLongPress(im.id)}
-                            onTouchMove={cancelLongPress}
-                            onTouchEnd={cancelLongPress}
-                            onTouchCancel={cancelLongPress}
-                            onMouseDown={()=>startLongPress(im.id)}
-                            onMouseUp={cancelLongPress}
-                            onMouseLeave={cancelLongPress}
+                            onClick={()=>openPreviewNow(im.id)}
                             style={{width:"100%",maxHeight:280,minHeight:130,objectFit:"contain",background:"#000",
                               borderRadius:8,border:`1px solid ${C.border}`,display:"block",cursor:"pointer",
                               WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none"}}/>
@@ -882,6 +984,76 @@ function MultiSubjectImportPage({push}){
                     ?<div style={{fontSize:9,color:"#22c55e",marginTop:6}}>✨ {g.rows.length}/{g.rows.length}টা প্রশ্নেই AI সেকশন-হেডিং ("বাংলা-২৫", "গণিত-১৫" ইত্যাদি) দেখে বিষয় ধরে ফেলেছে — উপরের Subject বক্স ফাঁকা রাখলেও চলবে, ব্যবহারই হবে না</div>
                     :<div style={{fontSize:9,color:"#22c55e",marginTop:6}}>✨ {g.rows.filter(r=>r.subject).length}/{g.rows.length}টা প্রশ্নে AI সেকশন-হেডিং দেখে বিষয় ধরে ফেলেছে — বাকি {g.rows.length-g.rows.filter(r=>r.subject).length}টার জন্য উপরের Subject fallback হিসেবে বসবে</div>
                 )}
+
+                {/* ── প্রশ্ন-লেভেল রিভিউ/এডিট — MCQ-তে OCR ভুল পড়া বা answer-key ভুল মেলা
+                    কমন, তাই প্রতিটা প্রশ্ন এক্সপ্যান্ড করে option+সঠিক-উত্তর নিজে চেক/ঠিক
+                    করার সুযোগ থাকা জরুরি। Written-এও Q/উত্তরের টেক্সট এখান থেকে ঠিক করা
+                    যায় বা ভুল-করে-ঢুকে-যাওয়া প্রশ্ন বাদ দেওয়া যায়। ── */}
+                {(()=>{
+                  const missingCorrect=qType==="MCQ"?g.rows.filter(r=>!r.correct).length:0;
+                  const rowsOpen=rowsOpenGroupId===g.id;
+                  return(
+                    <>
+                      <button onClick={()=>toggleGroupRows(g.id)}
+                        style={{width:"100%",marginTop:8,padding:"6px 0",fontSize:10,fontWeight:800,cursor:"pointer",borderRadius:8,
+                          color:missingCorrect>0?"#f59e0b":C.accent,
+                          background:(missingCorrect>0?"#f59e0b":C.accent)+"14",
+                          border:`1px solid ${(missingCorrect>0?"#f59e0b":C.accent)}44`}}>
+                        {rowsOpen?"▲ প্রশ্ন লুকাও":`🔎 ${g.rows.length}টা প্রশ্ন দেখো/এডিট করো`}
+                        {missingCorrect>0?` — ⚠️ ${missingCorrect}টায় সঠিক উত্তর নেই`:""}
+                      </button>
+                      {rowsOpen&&(
+                        <div className="ss-scroll" style={{marginTop:8,display:"flex",flexDirection:"column",gap:8,maxHeight:"55vh",overflowY:"auto",paddingRight:2}}>
+                          {g.rows.map((r,ri)=>{
+                            const optLabels=["ক","খ","গ","ঘ"];
+                            const optKeys=["opt1","opt2","opt3","opt4"];
+                            return(
+                              <div key={ri} style={{background:"#0a1628",border:`1px solid ${qType==="MCQ"&&!r.correct?"#f59e0b55":C.border}`,borderRadius:8,padding:"8px 10px"}}>
+                                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                                  <span style={{fontSize:9,color:C.muted,fontWeight:700}}>প্রশ্ন #{ri+1}</span>
+                                  <button onClick={()=>removeRow(g.id,ri)}
+                                    style={{fontSize:9,fontWeight:700,color:"#ef4444",background:"transparent",border:"1px solid #7f1d1d",borderRadius:6,padding:"2px 7px",cursor:"pointer"}}>
+                                    🗑 বাদ দাও
+                                  </button>
+                                </div>
+                                <textarea className="inp" style={{minHeight:44,fontSize:12,marginBottom:7,resize:"vertical"}}
+                                  value={r.q} onChange={e=>updateRowField(g.id,ri,"q",e.target.value)} placeholder="প্রশ্ন"/>
+                                {qType==="MCQ"?(
+                                  <>
+                                    {optKeys.map((ok,oi)=>{
+                                      const val=r[ok]||"";
+                                      const isCorrect=!!val&&r.correct===val;
+                                      return(
+                                        <div key={ok} style={{display:"flex",alignItems:"center",gap:7,marginBottom:5}}>
+                                          <input type="radio" name={`correct-${g.id}-${ri}`} checked={isCorrect} disabled={!val}
+                                            onChange={()=>updateRowField(g.id,ri,"correct",val)}
+                                            style={{flexShrink:0,accentColor:"#22c55e"}}/>
+                                          <input className="inp" style={{flex:1,fontSize:12,padding:"6px 9px",
+                                              borderColor:isCorrect?"#22c55e":C.border,background:isCorrect?"#052e1688":"transparent"}}
+                                            value={val}
+                                            onChange={e=>{
+                                              const wasCorrect=r.correct===val;
+                                              updateRowField(g.id,ri,ok,e.target.value);
+                                              if(wasCorrect) updateRowField(g.id,ri,"correct",e.target.value);
+                                            }}
+                                            placeholder={`${optLabels[oi]}. option`}/>
+                                        </div>
+                                      );
+                                    })}
+                                    {!r.correct&&<div style={{fontSize:9,color:"#f59e0b",marginTop:2}}>⚠️ কোনটা সঠিক, বাম পাশের রেডিও বাটনে ট্যাপ করে বেছে দাও</div>}
+                                  </>
+                                ):(
+                                  <textarea className="inp" style={{minHeight:36,fontSize:12,resize:"vertical"}}
+                                    value={r.correct} onChange={e=>updateRowField(g.id,ri,"correct",e.target.value)} placeholder="উত্তর"/>
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             );
           })}
@@ -889,7 +1061,7 @@ function MultiSubjectImportPage({push}){
           {(()=>{
             const incGroups=draftGroups.filter(g=>g.included);
             const needsAppearance2=targetMode==="QBank";
-            const isReady=g=>(g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim())) && (!needsAppearance2 || (g.post.trim()&&g.institution.trim()&&g.year.trim()));
+            const isReady=g=>(g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim())) && (qType!=="MCQ"||g.rows.every(r=>r.correct&&r.correct.trim())) && (!needsAppearance2 || (g.post.trim()&&g.institution.trim()&&g.year.trim()));
             const readyG=incGroups.filter(isReady);
             const blockedG=incGroups.filter(g=>!isReady(g));
             const readyQ=readyG.reduce((s,g)=>s+g.rows.length,0);
@@ -901,7 +1073,7 @@ function MultiSubjectImportPage({push}){
                 </div>
                 {blockedG.length>0&&(
                   <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginTop:6,paddingTop:6,borderTop:`1px dashed ${C.border}`}}>
-                    <span style={{color:"#f59e0b",fontWeight:700}}>⚠️ {needsAppearance2?"Subject/পদ/প্রতিষ্ঠান/সাল":"Subject"} ফাঁকা — বাদ যাবে</span>
+                    <span style={{color:"#f59e0b",fontWeight:700}}>⚠️ {needsAppearance2?"Subject/পদ/প্রতিষ্ঠান/সাল":"Subject"}{qType==="MCQ"?"/সঠিক উত্তর":""} ফাঁকা — বাদ যাবে</span>
                     <span style={{color:"#f59e0b",fontWeight:900}}>{blockedG.length}টি group</span>
                   </div>
                 )}
@@ -923,6 +1095,26 @@ function MultiSubjectImportPage({push}){
       {/* ══════════ IDLE / PROCESSING PHASE ══════════ */}
       {phase!=="confirm"&&(
         <>
+          {/* ── প্রশ্নের ধরন — সবার আগে, Gallery/Camera খোলারও আগে বাধ্যতামূলক বেছে নিতে হয় ──
+              (parsing prompt, sanitize-লজিক, submit-schema — তিনটাই এই সিলেকশনের ওপর নির্ভর করে,
+              তাই ছবি তোলার পরে বদলানো নিরাপদ না — নতুন ব্যাচ শুরু করলে আবার বেছে নিতে হবে) */}
+          <div style={{background:C.panel,border:`1.5px solid ${qType?C.border:"#f59e0b"}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+            <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:8}}>
+              ❓ প্রশ্নের ধরন {!qType&&<span style={{color:"#f59e0b"}}>— আগে এটা বেছে নাও</span>}
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              {[["Written","✍️ Written"],["MCQ","🔘 MCQ"]].map(([m,label])=>(
+                <button key={m} type="button" disabled={phase==="processing"||images.length>0}
+                  onClick={()=>setQType(m)}
+                  style={{flex:1,fontSize:13,fontWeight:700,padding:"10px 0",borderRadius:8,cursor:(images.length>0)?"not-allowed":"pointer",
+                    border:`1.5px solid ${qType===m?C.accent:C.border}`,
+                    background:qType===m?C.accent+"22":"transparent",
+                    color:qType===m?C.accent:C.muted}}>{label}</button>
+              ))}
+            </div>
+            {images.length>0&&<div style={{fontSize:9,color:C.muted,marginTop:6}}>ছবি যোগ হয়ে গেছে বলে টাইপ এখন লক — বদলাতে হলে 🗑️ দিয়ে সব মুছে নতুন করে শুরু করো</div>}
+          </div>
+
           {/* Info box */}
           <div style={{background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 12px",fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.7}}>
             <div style={{color:C.text,fontWeight:700,marginBottom:3}}>📋 ব্যবহার পদ্ধতি:</div>
@@ -930,7 +1122,11 @@ function MultiSubjectImportPage({push}){
             <div>② যেখানে যেখানে পেপার পাল্টাচ্ছে, সেই ছবিতে <b style={{color:"#f59e0b"}}>✂️ নতুন Group</b> ট্যাপ করে মার্ক করো</div>
             <div>③ <b style={{color:"#22d3ee"}}>Target Sheet</b> ও <b style={{color:"#22d3ee"}}>Save Location</b> বেছে <b style={{color:"#6366f1"}}>Process</b> করো</div>
             <div>④ শেষে ছোট একটা <b style={{color:"#10b981"}}>Group Confirm</b> লিস্ট দেখাবে — চেক করে এক-ট্যাপে Submit করো</div>
-            <div style={{color:"#f59e0b"}}>⚠️ শুধু Written টাইপের জন্য — MCQ/Study এখানে সাপোর্টেড না</div>
+            {qType==="MCQ"?(
+              <div style={{color:"#f59e0b"}}>⚠️ MCQ মোড: উত্তরমালা একই পাতায় থাকলে সঠিক উত্তর অটো বসবে, নাহলে "correct" ফাঁকা থাকবে — Confirm স্ক্রিনে প্রতিটা প্রশ্ন এক্সপ্যান্ড করে ম্যানুয়ালি বেছে দিতে হবে</div>
+            ):(
+              <div style={{color:"#f59e0b"}}>⚠️ Written মোড — Study এখানে সাপোর্টেড না</div>
+            )}
           </div>
 
           {/* Target Sheet + Save Location */}
@@ -988,8 +1184,8 @@ function MultiSubjectImportPage({push}){
 
           {/* Image Picker Buttons */}
           <div style={{display:"flex",gap:8,marginBottom:12}}>
-            <button className="btn bp bb" style={{flex:1}} disabled={phase==="processing"} onClick={pickGallery}>🖼 Gallery (একাধিক)</button>
-            <button className="btn" style={{flex:1,background:"#1e293b",color:C.text,borderColor:C.border}} disabled={phase==="processing"} onClick={openCamera}>📷 Camera</button>
+            <button className="btn bp bb" style={{flex:1}} disabled={phase==="processing"||!qType} onClick={pickGallery}>🖼 Gallery (একাধিক)</button>
+            <button className="btn" style={{flex:1,background:"#1e293b",color:C.text,borderColor:C.border}} disabled={phase==="processing"||!qType} onClick={openCamera}>📷 Camera</button>
             {images.length>0&&phase!=="processing"&&<button className="btn" style={{background:"#7f1d1d",color:"#fca5a5",borderColor:"#991b1b",padding:"0 12px"}} onClick={clearAll}>🗑</button>}
           </div>
 
