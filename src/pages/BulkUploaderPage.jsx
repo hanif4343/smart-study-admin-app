@@ -6,7 +6,8 @@ import { nowTs } from "../core/utils.js";
 import { Bar } from "../components/shared/MiniComponents.jsx";
 import {
   getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow,
-  loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
+  loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems,
+  LS_DRAFT_BULK, loadDraft, saveDraft, clearDraft
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
 import { resolveOrCreateReference, resolveSubjectTopicForEntries } from "../core/referenceHelpers.js";
@@ -33,6 +34,13 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const[postSel,setPostSel]=useState({id:"",name:""});
   const[instSel,setInstSel]=useState({id:"",name:""});
   const[examYear,setExamYear]=useState("");
+  // ── MCQ/Written (inline) মোডে প্রতিটা লাইনে ;Subject;Topic দিতে হয় — কিন্তু
+  // বেশিরভাগ লাইনই একই বিষয়ের হলে বারবার টাইপ না করে এই fallback দুটো ভরে
+  // রাখলেই চলে; কোনো লাইনে নিজস্ব Subject;Topic থাকলে সেটাই priority পায়,
+  // না থাকলে (আগে এখানে কিছু ছিল না বলেই "Subject/Topic নেই" এরর আসতো —
+  // এখন AIImportPage-এর মতোই fallback সাপোর্ট করে) এই fallback ব্যবহার হয়। ──
+  const[fallbackSubject,setFallbackSubject]=useState("");
+  const[fallbackTopic,setFallbackTopic]=useState("");
   const[refData,setRefData]=useState(null);
   const[refLoading,setRefLoading]=useState(false);
   const[bulkText,setBulkText]=useState("");
@@ -47,6 +55,12 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const[log,setLog]=useState([]);
   const[done,setDone]=useState(false);
   const stopRef=useRef(false);
+  const bulkTextRef=useRef(null); // ⚠️ error হওয়া লাইনে জাম্প করার জন্য — নিচে jumpToEntry() দেখো
+  // ── ড্রাফট অটোসেভ — ১.৫ ঘণ্টা টাইপ করে হঠাৎ এরর/ভুলে ব্যাক/রিলোডে সব হারিয়ে
+  // যাওয়া ঠেকাতে। প্রতিটা টাইপে debounce করে localStorage-এ জমা হয়, সফল Submit
+  // হলেই মুছে যায়। পেজ খোলার সময় আগের অসম্পূর্ণ ড্রাফট থাকলে restore-banner দেখায়। ──
+  const[draftBanner,setDraftBanner]=useState(null); // {bulkText,...} — পাওয়া গেলে দেখাবে
+  const draftCheckedRef=useRef(false);
   const[saveLoc,setSaveLoc]=useState(loadSaveLocPref); // "sheet" | "firebase"
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
@@ -60,6 +74,49 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     fetchReferenceData({gasSecret}).then(d=>{ setRefData(d); setRefLoading(false); });
   },[gasSecret]);
   useEffect(()=>{ loadRefData(); },[loadRefData]);
+
+  // ── ড্রাফট রিস্টোর — পেজ প্রথম খোলার সময় একবার চেক করে, আগের অসম্পূর্ণ কাজ
+  // থাকলে (আর কমপক্ষে কিছু টেক্সট থাকলে) banner দেখায়, নিজে থেকে বসিয়ে দেয় না
+  // (যদি ইচ্ছাকৃতভাবেই খালি পেজ থেকে নতুন শুরু করতে চায়) ──
+  useEffect(()=>{
+    if(draftCheckedRef.current)return;
+    draftCheckedRef.current=true;
+    const d=loadDraft(LS_DRAFT_BULK);
+    if(d&&d.bulkText&&d.bulkText.trim()) setDraftBanner(d);
+  },[]);
+  const restoreDraft=()=>{
+    if(!draftBanner)return;
+    const d=draftBanner;
+    if(d.mode)setMode(d.mode);
+    if(d.qtype)setQtype(d.qtype);
+    if(d.fallbackSubject!==undefined)setFallbackSubject(d.fallbackSubject);
+    if(d.fallbackTopic!==undefined)setFallbackTopic(d.fallbackTopic);
+    if(d.postSel)setPostSel(d.postSel);
+    if(d.instSel)setInstSel(d.instSel);
+    if(d.examYear!==undefined)setExamYear(d.examYear);
+    if(d.groupMode!==undefined)setGroupMode(d.groupMode);
+    setBulkText(d.bulkText||"");
+    runValidate(d.bulkText||"",d.mode||mode,d.qtype||qtype);
+    setDraftBanner(null);
+    push("success","♻️ আগের ড্রাফট ফিরিয়ে আনা হলো","টাইপ করা প্রশ্নগুলো আবার দেখা যাচ্ছে");
+  };
+  const discardDraft=()=>{ clearDraft(LS_DRAFT_BULK); setDraftBanner(null); };
+
+  // ── ড্রাফট অটোসেভ — bulkText বা সংশ্লিষ্ট ফিল্ড বদলালে ৮০০ms পর localStorage-এ
+  // জমা হয় (debounced, যাতে প্রতি key-প্রেসে লেখা না হয়)। running অবস্থায় সেভ করা
+  // হয় না (submit চলাকালীন অপ্রয়োজনীয়)। খালি টেক্সট হলে ড্রাফট মুছে ফেলা হয়। ──
+  useEffect(()=>{
+    if(!draftCheckedRef.current || draftBanner) return; // রিস্টোর ব্যানার দেখানো অবস্থায় ওভাররাইট করবে না
+    if(running) return;
+    const t=setTimeout(()=>{
+      if(bulkText.trim()){
+        saveDraft(LS_DRAFT_BULK,{bulkText,mode,qtype,fallbackSubject,fallbackTopic,postSel,instSel,examYear,groupMode});
+      }else{
+        clearDraft(LS_DRAFT_BULK);
+      }
+    },800);
+    return ()=>clearTimeout(t);
+  },[bulkText,mode,qtype,fallbackSubject,fallbackTopic,postSel,instSel,examYear,groupMode,running,draftBanner]);
 
   // mode বদলালে subject/topic সিলেকশন রিসেট (আগের mode-এর id নতুন mode-এ ভুল হতে পারে)
   useEffect(()=>{ setSubjectId(""); setTopicId(""); if(mode!=="QBank"){ setPostSel({id:"",name:""}); setInstSel({id:"",name:""}); setExamYear(""); } },[mode]);
@@ -111,12 +168,25 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const parseLine=(entry)=>parseEntry(entry, getEffectiveType(mode,qtype));
 
   /* Validate — detail list সহ */
-  const runValidate=(text,m,qt)=>{
+  const runValidate=(text,m,qt,fbSubject,fbTopic)=>{
     if(!text.trim()){setValidStats(null);setValidDetail(null);return;}
     const eff=getEffectiveType(m,qt);
+    const isInlineEff=(eff==="MCQ"||eff==="Written");
+    const fs=fbSubject!==undefined?fbSubject:fallbackSubject;
+    const ft=fbTopic!==undefined?fbTopic:fallbackTopic;
     const entries=getEntries(text);
     const rows=entries.map((e,i)=>{
       const r=parseEntry(e,eff);
+      // ── এখানেই সেই আসল সমস্যাটা ধরা হচ্ছে যেটা আগে submit-এর মুহূর্তে গিয়ে ধরা
+      // পড়তো: ৩-কলামের Written লাইন (subject/topic ছাড়া পুরনো ফরম্যাট) parse-লেভেলে
+      // "ok" হলেও fallback ছাড়া আসলে সাবমিট হবে না — তাই fallback মিলিয়ে আগেই "err"
+      // দেখানো হচ্ছে, যাতে Valid কাউন্ট মিথ্যা আশ্বাস না দেয়। ──
+      if(r.ok && isInlineEff){
+        const sName=((r.subject&&r.subject.trim())||fs||"").trim();
+        const tName=((r.topic&&r.topic.trim())||ft||"").trim();
+        if(!sName||!tName) return{idx:i+1, entry:e, ok:false, err:true, skip:false,
+          reason:"Subject/Topic নেই — লাইনে ;Subject;Topic যোগ করো, অথবা উপরে Fallback ফিল্ড ভরো"};
+      }
       return{idx:i+1, entry:e, ...r};
     });
     const ok=rows.filter(r=>r.ok).length;
@@ -129,6 +199,27 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const handleText=(v)=>{setBulkText(v);runValidate(v,mode,qtype);};
   const handleQtype=(v)=>{setQtype(v);runValidate(bulkText,mode,v);};
   const handleMode=(v)=>{setMode(v);runValidate(bulkText,v,qtype);};
+  const handleFallbackSubject=(v)=>{setFallbackSubject(v);runValidate(bulkText,mode,qtype,v,undefined);};
+  const handleFallbackTopic=(v)=>{setFallbackTopic(v);runValidate(bulkText,mode,qtype,undefined,v);};
+
+  // ── ⚠️ error/skip হওয়া লাইনে এক-ট্যাপে জাম্প — টেক্সটএরিয়ায় ওই লাইনটা
+  // সিলেক্ট করে স্ক্রল করে দেয়, মডাল বন্ধ হয়ে যায়, admin সরাসরি ঠিক করতে পারে।
+  // ৫০+ লাইনের মধ্যে চোখে খুঁজে বের করার ঝামেলা এড়াতে এটাই মূল ফিক্স। ──
+  const jumpToEntry=(entry)=>{
+    setShowDetail(false);
+    const idx=bulkText.indexOf(entry);
+    const el=bulkTextRef.current;
+    if(idx===-1||!el){ el?.focus(); return; }
+    requestAnimationFrame(()=>{
+      el.focus();
+      el.setSelectionRange(idx,idx+entry.length);
+      // ── মোবাইল ব্রাউজারে selectionRange সেট করলে সাধারণত অটো-স্ক্রল হয় না,
+      // তাই লাইন-সংখ্যা হিসেব করে scrollTop ম্যানুয়ালি বসানো হচ্ছে ──
+      const linesBefore=bulkText.substring(0,idx).split("\n").length-1;
+      const lineHeight=parseFloat(getComputedStyle(el).lineHeight)||20;
+      el.scrollTop=Math.max(0,(linesBefore*lineHeight)-lineHeight*2);
+    });
+  };
 
   /* ── Shuffle MCQ Options ──
      প্রতিটি MCQ লাইনে অপশনগুলো (col 1-4) random করে সাজায়,
@@ -198,35 +289,50 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
      (raw text কখনো sheet-এ যায় না — QBank-এ তো plain subject কলামই নেই)। ── */
   const resolveSubjectTopicPerEntry=(entries)=>resolveSubjectTopicForEntries({
     entries, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:mode, push,
+    fallbackSubject, fallbackTopic,
   });
 
   /* Main upload */
   const startUpload=async()=>{
+    // ── 🐛 ফিক্স: আগে setRunning(true) নিচে (async পদ/প্রতিষ্ঠান resolve-এর পরে)
+    // বসতো, তাই সেই নেটওয়ার্ক-কল চলাকালীন বাটন ক্লিকযোগ্যই থেকে যেত আর "সাবমিট
+    // হয়নি" ভেবে দ্বিতীয়বার চাপলে ডাবল-সাবমিট হয়ে যেত। এখন সবার আগে (কোনো await-এর
+    // আগেই) sync guard + setRunning(true) — বাটন সাথে সাথে ডিসেবল/লোডিং দেখাবে। ──
+    if(running)return;
     const eff=getEffectiveType(mode,qtype);
     if(eff==="Study" && !subjectId){push("warn","⚠️ Subject বাছাই করুন","");return;}
     if(!bulkText.trim()){push("warn","⚠️ প্রশ্ন লিখুন","");return;}
-    const entries=getEntries(bulkText).map(l=>parseEntry(l,eff)).filter(r=>r.ok);
+    // ── আগে এখানে raw parseEntry দিয়ে আলাদা করে ফিল্টার হতো, যেটা fallback
+    // Subject/Topic-এর হিসেব ধরতো না — ফলে উপরে "Valid" দেখানো একটা লাইন
+    // আসলে এখানে এসে subject/topic-শূন্য অবস্থায় আটকে যেত, আর সেই এররটা
+    // toast আকারে একবার দেখিয়েই মিলিয়ে যেত। এখন validDetail (যেটা fallback
+    // মিলিয়েই হিসেব করে) থেকেই entries নেওয়া হচ্ছে, তাই যা "Valid" দেখাচ্ছে
+    // ঠিক সেটাই সাবমিট হবে — কোনো surprise থাকবে না। ──
+    if(!validDetail){ push("warn","⚠️ কোনো valid প্রশ্ন নেই","আগে টাইপ/পেস্ট করো"); return; }
+    const entries=validDetail.filter(r=>r.ok);
     if(!entries.length){push("warn","⚠️ কোনো valid প্রশ্ন নেই — Validation chips-এ ক্লিক করে দেখুন","");return;}
 
-    // ── QBank + পদ/প্রতিষ্ঠান/সালের অন্তত ১টা দেওয়া থাকলে → resolve/create করে
-    // {postId,institutionId,year} বানানো হয়, পুরো ব্যাচের জন্য একবারই ──
     let examAppearance=null;
     if(mode==="QBank" && (postSel.name.trim()||instSel.name.trim()||examYear.trim())){
       if(!postSel.name.trim()||!instSel.name.trim()||!examYear.trim()){
         push("warn","⚠️ পদ, প্রতিষ্ঠান ও সাল — একটা দিলে তিনটাই দিতে হবে (অথবা তিনটাই খালি রাখো)","");
         return;
       }
-      const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
-      if(!postRes.ok){ push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
-      const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
-      if(!instRes.ok){ push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
-      examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
-      if(postRes.created||instRes.created) loadRefData(); // নতুন পদ/প্রতিষ্ঠান তৈরি হলে তালিকা রিফ্রেশ
     }
 
     setRunning(true);setDone(false);setStopped(false);
     stopRef.current=false;
     setLog([]);
+
+    if(mode==="QBank" && postSel.name.trim()&&instSel.name.trim()&&examYear.trim()){
+      const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
+      if(!postRes.ok){ setRunning(false); push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
+      if(!instRes.ok){ setRunning(false); push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
+      if(postRes.created||instRes.created) loadRefData(); // নতুন পদ/প্রতিষ্ঠান তৈরি হলে তালিকা রিফ্রেশ
+    }
+
     setProgress({done:0,total:entries.length,sent:0,failed:0});
     const addLog=(msg,type)=>setLog(p=>[...p.slice(-99),{msg,type,id:Date.now()+Math.random()}]);
 
@@ -281,9 +387,10 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     if(result.examAppearancesAdded>result.examAppearancesLinkedToExisting)push("success",`🧾 ${result.examAppearancesAdded-result.examAppearancesLinkedToExisting}টা নতুন প্রশ্নে Exam Appearance যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
     if(result.failedRows.length)push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if((result.added>0||result.skipped>0)&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
+    if(result.added>0) clearDraft(LS_DRAFT_BULK); // ✅ সফল সেভ হয়ে গেছে, আর ড্রাফট রাখার দরকার নেই
   };
 
-  const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setTopicId("");setPostSel({id:"",name:""});setInstSel({id:"",name:""});setExamYear("");archiveIdRef.current=null;};
+  const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setTopicId("");setPostSel({id:"",name:""});setInstSel({id:"",name:""});setExamYear("");archiveIdRef.current=null;clearDraft(LS_DRAFT_BULK);};
 
   const pct=progress.total?Math.round(progress.done/progress.total*100):0;
 
@@ -297,6 +404,21 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
 
       <SaveLocationPicker value={saveLoc} onChange={setSaveLocP} gasSecret={gasSecret} onGasSecretChange={setGasSecretP}/>
       <FailedQueuePanel push={push} sourceFilter="বাল্ক আপলোডার"/>
+
+      {/* ── ড্রাফট রিস্টোর ব্যানার — আগের সেশনে টাইপ করা কাজ থাকলে (submit হয়নি) এখানে
+          দেখাবে, হারিয়ে যাওয়া ঠেকাতে ── */}
+      {draftBanner&&(
+        <div style={{background:"#052e16",border:"1px solid #16a34a55",borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+          <div style={{fontSize:12,fontWeight:800,color:"#4ade80",marginBottom:4}}>♻️ আগের অসম্পূর্ণ কাজ পাওয়া গেছে</div>
+          <div style={{fontSize:11,color:"#86efac",marginBottom:10,lineHeight:1.5}}>
+            {getEntries(draftBanner.bulkText||"").length}টা প্রশ্নের মতো টাইপ করা ছিল কিন্তু Submit করা হয়নি। ফিরিয়ে আনবো?
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={discardDraft}>🗑 বাদ দাও</button>
+            <button className="btn bp" style={{flex:2,justifyContent:"center"}} onClick={restoreDraft}>♻️ ফিরিয়ে আনো</button>
+          </div>
+        </div>
+      )}
 
       {/* Target Sheet + Question Type — একটাই গোছানো প্যানেলে (Save Location/Audience Tags প্যানেলের সাথে একই লুক) */}
       <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
@@ -428,6 +550,20 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         <div><span style={{color:"#818cf8",fontWeight:700}}>Study →</span> {"{"} প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২... {"}"}</div>
       </div>
 
+      {/* ── Fallback Subject/Topic — MCQ/Written-এ লাইনে Subject;Topic না দিলে এটা
+          ব্যবহার হয়। বেশিরভাগ প্রশ্নই একই বিষয়ের হলে বারবার প্রতি লাইনে না লিখে
+          এখানে একবার ভরে রাখলেই চলে (ঐচ্ছিক — লাইনে থাকলে সেটাই প্রায়োরিটি পায়)। ── */}
+      {(getEffectiveType(mode,qtype)==="MCQ"||getEffectiveType(mode,qtype)==="Written")&&(
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
+          <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:6}}>📚 Fallback Subject/Topic (ঐচ্ছিক)</div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>যেসব লাইনে ;Subject;Topic দেওয়া নেই, সেগুলোর জন্য এটা ব্যবহার হবে — সব লাইনে বারবার লিখতে হবে না।</div>
+          <div style={{display:"flex",gap:8}}>
+            <input className="inp" style={{flex:1}} placeholder="Fallback Subject" value={fallbackSubject} onChange={e=>handleFallbackSubject(e.target.value)}/>
+            <input className="inp" style={{flex:1}} placeholder="Fallback Topic" value={fallbackTopic} onChange={e=>handleFallbackTopic(e.target.value)}/>
+          </div>
+        </div>
+      )}
+
       {/* Validation Stats — clickable */}
       {validStats&&(
         <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
@@ -458,10 +594,11 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
               {validDetail
                 .filter(r=>showDetail==="all"||r[showDetail])
                 .map((r,i)=>(
-                  <div key={i} style={{
+                  <div key={i} onClick={()=>{ if(!r.ok&&r.entry) jumpToEntry(r.entry); }} style={{
                     background:r.ok?"#052e16":r.err?"#1f0a0a":r.skip?"#1c1004":C.panel,
                     border:`1px solid ${r.ok?"#10b98133":r.err?"#ef444433":"#d9770633"}`,
-                    borderRadius:10,padding:"8px 12px",marginBottom:8
+                    borderRadius:10,padding:"8px 12px",marginBottom:8,
+                    cursor:(!r.ok&&r.entry)?"pointer":"default"
                   }}>
                     <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                       <span style={{fontSize:10,fontWeight:800,color:C.muted}}>#{r.idx}</span>
@@ -480,6 +617,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
                     }}>
                       {r.entry?r.entry.substring(0,200)+(r.entry.length>200?"...":""):"(খালি)"}
                     </div>
+                    {!r.ok&&r.entry&&<div style={{fontSize:10,color:"#60a5fa",marginTop:5,fontWeight:700}}>👆 ট্যাপ করো — নিচের টেক্সটবক্সে এই লাইনটা সিলেক্ট হয়ে যাবে, সরাসরি ঠিক করতে পারবে</div>}
                     {r.ok&&<div style={{fontSize:10,color:"#10b981",marginTop:4}}>
                       ❓ {(r.q||"").substring(0,60)}{r.q?.length>60?"...":""}
                       {(r.subject||r.topic)&&<span style={{color:"#818cf8"}}> · 📚 {r.subject}{r.topic?` / ${r.topic}`:""}</span>}
@@ -518,7 +656,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
             ✅ {shuffleInfo.count}টি প্রশ্নের অপশন shuffle হয়েছে!
           </div>
         )}
-        <textarea className="ta" style={{minHeight:160,fontFamily:"monospace",fontSize:12}} value={bulkText}
+        <textarea ref={bulkTextRef} className="ta" style={{minHeight:160,fontFamily:"monospace",fontSize:12}} value={bulkText}
           onChange={e=>handleText(e.target.value)}
           placeholder={mode==="Study"
             ?"{ প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২ }\n{ পরের প্রশ্ন ; উত্তর }"
