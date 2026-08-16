@@ -42,74 +42,6 @@ function normalizeFieldValue_(s){
     .trim();
 }
 
-/* ══════════════════════════════════════════════════════════════════════════
-   markTopicDirty(topicId) — GitHub CDN Plan (Delta-Publish)-এর ভিত্তি।
-   কোনো Topic-এর প্রশ্ন এডিট/ডিলিট/মুভ/রিনেম হলে এখানে কল করে জানিয়ে দেওয়া হয় —
-   একটা ছোট "_DirtyTopics" শিটে (নেই থাকলে নিজে থেকে তৈরি হয়) topic_id + সময়
-   জমা থাকে। GAS Publish স্ক্রিপ্ট (পরে বানানো হবে) এই লিস্ট পড়ে **শুধু** dirty
-   topic-গুলোর JSON রিজেনারেট করবে — হাজার হাজার প্রশ্ন bulk-move করলেও পুরো
-   ডেটাসেট re-publish করা লাগবে না, শুধু যা বদলেছে তাই।
-   ⚠️ এই ফাংশনটা ছোট, দ্রুত (কোনো নেটওয়ার্ক কল নেই) — তাই লক-করা action-গুলোর
-   ভিতরেই নিরাপদে কল করা যায়, বাড়তি সময় লাগে না বললেই চলে।
-   ══════════════════════════════════════════════════════════════════════════ */
-function markTopicDirty(topicId) {
-  if (!topicId) return;
-  try {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var sh = ss.getSheetByName("_DirtyTopics");
-    if (!sh) {
-      sh = ss.insertSheet("_DirtyTopics");
-      sh.getRange(1,1,1,2).setValues([["topic_id","markedAt"]]);
-    }
-    var lastRow = sh.getLastRow();
-    if (lastRow >= 2) {
-      var ids = sh.getRange(2,1,lastRow-1,1).getValues();
-      for (var i=0;i<ids.length;i++){
-        if ((ids[i][0]||"").toString() === topicId) {
-          sh.getRange(i+2,2).setValue(Date.now());  // আগে থেকেই আছে — শুধু টাইমস্ট্যাম্প রিফ্রেশ
-          return;
-        }
-      }
-    }
-    sh.appendRow([topicId, Date.now()]);
-  } catch (mtdErr) {
-    // dirty-tracking ব্যর্থ হলেও আসল mutation (edit/delete/move) যেন কখনো ব্যর্থ না
-    // হয় — এটা শুধু পরে publish-এর জন্য "সহায়ক তথ্য", ক্রিটিক্যাল পাথ না
-    Logger.log("markTopicDirty error (non-fatal): " + mtdErr);
-  }
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
-   একাধিক Topic একসাথে dirty মার্ক করতে — renameField/deleteByIds-এর মতো
-   action-গুলোতে একসাথে অনেক distinct topicId touched হতে পারে, সেগুলো Set
-   বানিয়ে একবারে পাস করার জন্য (loop এর ভিতরে বারবার markTopicDirty() কল করলে
-   প্রতিবারই পুরো "_DirtyTopics" শিট আবার পড়তে হতো — অপ্রয়োজনীয়)
-   ══════════════════════════════════════════════════════════════════════════ */
-function markTopicsDirty(topicIdSet) {
-  for (var tid in topicIdSet) { if (topicIdSet.hasOwnProperty(tid) && tid) markTopicDirty(tid); }
-}
-
-/* ══════════════════════════════════════════════════════════════════════════
-   withWriteLock(fn) — কোনো Sheet-write action (updateField/deleteByIds/
-   moveQuestions/moveTopic/renameField ইত্যাদি)-কে script-lock দিয়ে wrap করার
-   জন্য common helper (getNextId()-এর প্যাটার্নই, শুধু reusable করা হলো)।
-   Smart Study App (instant-local + background sync) আর Admin App (OCR
-   bulk-add) — দুটোই একই Sheet-এ লেখে, প্রায়ই কাছাকাছি সময়ে। লক ছাড়া থাকলে:
-   একটা action রো-ইনডেক্স হিসাব করে রাখার পরই আরেকটা action যদি রো শিফট করে
-   ফেলে (ডিলিট/ইনসার্ট), প্রথমটা ভুল রো-তে গিয়ে লিখতে পারে। ৩০ সেকেন্ড টাইমআউট
-   (getNextId()-এর ১৫ সেকেন্ডের চেয়ে একটু বেশি, কারণ moveQuestions/deleteByIds
-   বড় sheet-এ কিছুটা সময় নিতে পারে)।
-   ══════════════════════════════════════════════════════════════════════════ */
-function withWriteLock(fn) {
-  var lock = LockService.getScriptLock();
-  lock.waitLock(30000);
-  try {
-    return fn();
-  } finally {
-    lock.releaseLock();
-  }
-}
-
 /* ══ FCM V1 ══ */
 function getFCMAccessToken() {
   var cfg = getProps();
@@ -495,7 +427,6 @@ function doGet(e) {
 
   // ── updateField ──
   if (action==="updateField") {
-    return withWriteLock(function(){
     var ss=SpreadsheetApp.getActiveSpreadsheet();
     var shName=e.parameter.sheet||"";
     var shMap={quiz:"Quiz",qbank:"QBank",study:"Study",users:"Users",typing:"Typing"};
@@ -514,7 +445,6 @@ function doGet(e) {
     var ufNorm=function(s){return (s||"").toString().toLowerCase().replace(/[^a-z0-9]/g,"");};
     var uHdrNorm=uRows[0].map(function(h){return ufNorm(h);});
     var idC=uHdr.indexOf("id"); if(idC===-1)idC=uHdr.indexOf("phone");
-    var uTopicIdC=uHdr.indexOf("topic_id");  // ── dirty-tracking-এর জন্য ──
     var fld=(e.parameter.field||"").toLowerCase().trim();
     var fldNorm=ufNorm(fld);
     // opt1→Opt1, opt2→Opt2 etc. মিল normalized indexOf দিয়েই প্রথমে ট্রাই
@@ -542,12 +472,10 @@ function doGet(e) {
         uSheet.getRange(ur+1,fldC+1).setValue(content);
         if(ufAtC!==-1) uSheet.getRange(ur+1,ufAtC+1).setValue(Date.now());
         syncToFirebase(shName,shName);
-        if(uTopicIdC>=0) markTopicDirty((uRows[ur][uTopicIdC]||"").toString());
         return json({result:"success"});
       }
     }
     return json({result:"error",error:"ID not found: "+targetId});
-    });
   }
 
   // ── changePassword ──
@@ -618,7 +546,6 @@ function doGet(e) {
 
   // ── renameField ── ★ subject/topic/sub_topic cascade rename across entire sheet
   if (action==="renameField") {
-    return withWriteLock(function(){
     var shName=e.parameter.sheet||"QBank";
     var shMap2={quiz:"Quiz",qbank:"QBank",study:"Study"};
     shName=shMap2[shName.toLowerCase()]||shName;
@@ -649,21 +576,18 @@ function doGet(e) {
     if(fIdx<0)return json({result:"error",error:"field not found: "+field});
 
     // Firebase mirror sync-এর জন্য দরকার — updateField-এর মতোই id/updatedAt কলাম বের করা হচ্ছে
-    var updColIdx2=-1, idColIdx2=-1, rfTopicIdC=-1;
+    var updColIdx2=-1, idColIdx2=-1;
     for(var uc=0;uc<h3.length;uc++){
       var un=h3[uc].toString().toLowerCase().replace(/\s+/g,"");
       if(un==="updatedat")updColIdx2=uc;
       if(un==="id")idColIdx2=uc;
-      if(un==="topicid")rfTopicIdC=uc;   // ── dirty-tracking-এর জন্য ──
     }
-    var rfDirty={};   // ── touched হওয়া সব distinct topic_id (dirty-tracking) ──
 
     var count=0, nowMs=Date.now(), touchedRows=[];
     for(var i3=1;i3<d3.length;i3++){
       if(normalizeFieldValue_(d3[i3][fIdx])===oldV){
         sh3.getRange(i3+1,fIdx+1).setValue(newV);
         if(updColIdx2!==-1) sh3.getRange(i3+1,updColIdx2+1).setValue(nowMs);
-        if(rfTopicIdC>=0) rfDirty[(d3[i3][rfTopicIdC]||"").toString()]=1;
         touchedRows.push(i3+1);
         count++;
       }
@@ -678,7 +602,6 @@ function doGet(e) {
           if(stVal.indexOf(oldV+" > ")===0){
             sh3.getRange(i4+1,stIdx+1).setValue(newV+" > "+stVal.substring(oldV.length+3));
             if(updColIdx2!==-1) sh3.getRange(i4+1,updColIdx2+1).setValue(nowMs);
-            if(rfTopicIdC>=0) rfDirty[(d3[i4][rfTopicIdC]||"").toString()]=1;
             if(touchedRows.indexOf(i4+1)===-1) touchedRows.push(i4+1);
             count++;
           }
@@ -695,10 +618,8 @@ function doGet(e) {
     if(idColIdx2!==-1 && updColIdx2!==-1 && touchedRows.length){
       fbSynced=syncToFirebase(shName, shName);
     }
-    markTopicsDirty(rfDirty);
 
     return json({result:"success",count:count,field:field,old:oldV,new:newV,firebaseSynced:fbSynced});
-    });
   }
 
   /* ══════════════════════════════════════════════════════════
@@ -791,7 +712,6 @@ function doGet(e) {
   // নতুন এন্ট্রি যোগ করে, id নিজে থেকে জেনারেট করে (parent-scoped prefix সহ)।
   // Manager UI থেকে "নতুন যোগ করো" বাটনে ব্যবহার হয়। ──
   if (action==="addReferenceItem") {
-    return withWriteLock(function(){
     var ariType=(e.parameter.refType||"").toLowerCase();
     var ariName=(e.parameter.name||"").toString().trim();
     var ariParentId=(e.parameter.parentId||"").toString().trim(); // topics→subject_id
@@ -807,10 +727,7 @@ function doGet(e) {
     var ariData=ariSh.getDataRange().getValues(), ariHdr=ariData[0];
     var ariIdCol=ariHdr.indexOf(ariCfg.idCol);
 
-    // ── নতুন id জেনারেট (parent-scoped prefix + পরের সিরিয়াল নাম্বার) —
-    // ⚠️ getNextId()-এর মতোই এখানেও max-scan করে পরের সিরিয়াল বের করা হয়, তাই
-    // withWriteLock ছাড়া দুইটা concurrent addReferenceItem কল একই id জেনারেট
-    // করে ফেলতে পারত (duplicate topic_id) — এখন lock-এর ভিতরে বলে নিরাপদ। ──
+    // ── নতুন id জেনারেট (parent-scoped prefix + পরের সিরিয়াল নাম্বার) ──
     var ariNewId="";
     if (ariType==="subjects") {
       var ariPrefix=(ariSheet==="Quiz"?"QZ_S":ariSheet==="QBank"?"QB_S":"ST_S");
@@ -848,7 +765,6 @@ function doGet(e) {
     ariSh.appendRow(ariNewRow);
 
     return json({status:"success",result:"success",refType:ariType,id:ariNewId,name:ariName});
-    });
   }
 
   // ── deleteReferenceItem — একটা রেফারেন্স-এন্ট্রি ডিলিট করে (id দিয়ে)।
@@ -856,7 +772,6 @@ function doGet(e) {
   // তাদের subject_id/topic_id ফাঁকা/orphan হয়ে যাবে (প্রশ্ন মোছে না)। Admin
   // UI-তে ডিলিটের আগে ব্যবহার-সংখ্যা দেখিয়ে সতর্ক করা উচিত। ──
   if (action==="deleteReferenceItem") {
-    return withWriteLock(function(){
     var driType=(e.parameter.refType||"").toLowerCase();
     var driId=(e.parameter.id||"").toString().trim();
     var driCfg=REF_TABS[driType];
@@ -872,7 +787,6 @@ function doGet(e) {
     }
     if (!driFound) return json({status:"error",result:"error",message:"id পাওয়া যায়নি: "+driId});
     return json({status:"success",result:"success",refType:driType,id:driId,deleted:1});
-    });
   }
 
   // ── rebuildIndex — Quiz/QBank/Study প্রতিটাকে subject_id (তারপর topic_id)
@@ -1202,7 +1116,6 @@ function doGet(e) {
 
   // ── deleteByIds ── ★ delete questions by comma-separated IDs
   if (action==="deleteByIds") {
-    return withWriteLock(function(){
     var shName2=e.parameter.sheet||"QBank";
     var shMap3={quiz:"Quiz",qbank:"QBank",study:"Study"};
     shName2=shMap3[shName2.toLowerCase()]||shName2;
@@ -1213,16 +1126,11 @@ function doGet(e) {
     var d4=sh4.getDataRange().getValues(), h4=d4[0];
     var idIdx=-1;
     for(var ii=0;ii<h4.length;ii++){var hh=h4[ii].toString().toLowerCase().trim();if(hh==="id"||hh==="sl"){idIdx=ii;break;}}
-    var dbiTopicIdC=h4.indexOf("topic_id");   // ── dirty-tracking-এর জন্য ──
-    var dbiDirty={};
     var deleted=0;
     // Delete from bottom to top to preserve row indices
     for(var i4=d4.length-1;i4>=1;i4--){
       var rowId=idIdx>=0?d4[i4][idIdx].toString():"";
-      if(ids.indexOf(rowId)>=0){
-        if(dbiTopicIdC>=0) dbiDirty[(d4[i4][dbiTopicIdC]||"").toString()]=1;
-        sh4.deleteRow(i4+1);deleted++;
-      }
+      if(ids.indexOf(rowId)>=0){sh4.deleteRow(i4+1);deleted++;}
     }
     // ── প্রশ্ন ডিলিট হলে সংশ্লিষ্ট Exam_Appearances রো-ও ক্লিন-আপ করা হয়,
     // নাহলে orphan appearance রো থেকে যেত (এমন question_id-কে পয়েন্ট করে
@@ -1239,10 +1147,8 @@ function doGet(e) {
         }
       }
     }
-    markTopicsDirty(dbiDirty);
     // Firebase already updated directly from app - DO NOT sync (would overwrite with array)
     return json({result:"success",deleted:deleted,sheet:shName2,examAppearancesDeleted:eaDeleted});
-    });
   }
 
   // ── deleteByReferenceId — একটা পুরো subject_id/topic_id-এর সব প্রশ্ন
@@ -1330,141 +1236,6 @@ function doGet(e) {
 
     return json({status:"success",result:"success",deleted:driiRangeCount,examAppearancesDeleted:driiEaDeleted,sheet:driiSheetName});
   }
-
-  // ── moveQuestions — এক বা একাধিক প্রশ্ন (id দিয়ে, comma-separated) অন্য
-  // Subject/Topic-এ move করে। শুধু subject/sub_topic/subject_id/topic_id ফিল্ড বদলায়,
-  // প্রশ্নের নিজের id অপরিবর্তিত থাকে (তাই Exam_Appearances/bookmark/quiz-history —
-  // কিছুই ভাঙে না, ঠিক যেভাবে renameField-ও id ছোঁয় না)। ──
-  if (action==="moveQuestions") {
-    return withWriteLock(function(){
-    var mqShName=e.parameter.sheet||"";
-    var mqShMap={quiz:"Quiz",qbank:"QBank",study:"Study"};
-    mqShName=mqShMap[mqShName.toLowerCase()]||mqShName;
-    var mqIds=(e.parameter.ids||"").split(",").map(function(x){return x.trim();}).filter(Boolean);
-    var mqNewSubject=(e.parameter.newSubject||"").toString().trim();
-    var mqNewSubjectId=(e.parameter.newSubjectId||"").toString().trim();
-    var mqNewSubTopic=(e.parameter.newSubTopic||"").toString().trim();
-    var mqNewTopicId=(e.parameter.newTopicId||"").toString().trim();
-    if (!mqIds.length) return json({status:"error",result:"error",message:"ids প্রয়োজন"});
-    if (!mqNewSubject||!mqNewSubjectId||!mqNewSubTopic||!mqNewTopicId)
-      return json({status:"error",result:"error",message:"newSubject/newSubjectId/newSubTopic/newTopicId প্রয়োজন"});
-
-    var mqSs=SpreadsheetApp.getActiveSpreadsheet(), mqSh=mqSs.getSheetByName(mqShName);
-    if (!mqSh) return json({status:"error",result:"error",message:"sheet not found: "+mqShName});
-    var mqData=mqSh.getDataRange().getValues(), mqHdr=mqData[0];
-    var mqIdCol=mqHdr.indexOf("id");
-    var mqSubCol=mqHdr.indexOf("subject");
-    var mqSubIdCol=mqHdr.indexOf("subject_id");
-    var mqSTCol=mqHdr.indexOf("sub_topic");
-    // ⚠️ Study ট্যাবের আসল হেডার "sub_topic" না, "topic" — renameField/updateField-এর
-    // মতোই fallback, নাহলে Study-তে move সবসময় "column not found" দিত।
-    if (mqSTCol<0) mqSTCol=mqHdr.indexOf("topic");
-    var mqTopicIdCol=mqHdr.indexOf("topic_id");
-    var mqUpdAtCol=mqHdr.indexOf("updatedAt"); if (mqUpdAtCol<0) mqUpdAtCol=mqHdr.indexOf("updatedat");
-    if (mqIdCol<0||mqSubCol<0||mqSTCol<0) return json({status:"error",result:"error",message:"id/subject/sub_topic কলাম পাওয়া যায়নি"});
-
-    var mqDirty={};   // ── dirty-tracking: পুরনো + নতুন টপিক দুটোই (কাউন্ট বদলাবে) ──
-    var mqNow=Date.now(), mqMoved=0, mqTouchedRows=[];
-    for (var mi=1;mi<mqData.length;mi++){
-      var mqRowId=(mqData[mi][mqIdCol]||"").toString().trim();
-      if (mqIds.indexOf(mqRowId)<0) continue;
-      if (mqTopicIdCol>=0) mqDirty[(mqData[mi][mqTopicIdCol]||"").toString()]=1;   // পুরনো টপিক
-      mqSh.getRange(mi+1,mqSubCol+1).setValue(mqNewSubject);
-      mqSh.getRange(mi+1,mqSTCol+1).setValue(mqNewSubTopic);
-      if (mqSubIdCol>=0) mqSh.getRange(mi+1,mqSubIdCol+1).setValue(mqNewSubjectId);
-      if (mqTopicIdCol>=0) mqSh.getRange(mi+1,mqTopicIdCol+1).setValue(mqNewTopicId);
-      if (mqUpdAtCol>=0) mqSh.getRange(mi+1,mqUpdAtCol+1).setValue(mqNow);
-      mqTouchedRows.push(mi+1);
-      mqMoved++;
-    }
-    if (!mqMoved) return json({status:"error",result:"error",message:"কোনো matching প্রশ্ন পাওয়া যায়নি"});
-    mqDirty[mqNewTopicId]=1;   // নতুন টপিক
-
-    // updateField/renameField-এর প্যাটার্ন অনুসরণ — শুধু touched row-গুলোর updatedAt
-    // বসিয়ে syncToFirebase-কে incremental patch করতে দেওয়া হয়, পুরো sheet re-upload হয় না
-    var mqFbSynced=true;
-    if (mqUpdAtCol>=0 && mqTouchedRows.length) mqFbSynced=syncToFirebase(mqShName,mqShName);
-    markTopicsDirty(mqDirty);
-
-    return json({status:"success",result:"success",moved:mqMoved,sheet:mqShName,firebaseSynced:mqFbSynced});
-    });
-  }
-
-  // ── moveTopic — একটা গোটা Topic (তার আন্ডারের সব প্রশ্নসহ) অন্য Subject-এ move
-  // করে। mergeTopicId দেওয়া থাকলে destination-এ same নামের existing Topic-এর সাথে
-  // merge হয় (সব প্রশ্নের topic_id সেই existing topic_id-তে বসে, আর সোর্স Topic-এর
-  // reference-রো ডিলিট হয়ে যায়) — নাহলে topic_id অপরিবর্তিত রেখে শুধু Topics
-  // ট্যাবে তার subject_id reparent হয়। প্রশ্নের id/topic_id (merge না হলে) কোনোটাই
-  // ভাঙে না — Exam_Appearances/bookmark সব ঠিক থাকে। ──
-  if (action==="moveTopic") {
-    return withWriteLock(function(){
-    var mtTopicId=(e.parameter.topicId||"").toString().trim();
-    var mtNewSubjectId=(e.parameter.newSubjectId||"").toString().trim();
-    var mtNewSubjectName=(e.parameter.newSubjectName||"").toString().trim();
-    var mtNewSubTopicName=(e.parameter.newSubTopicName||"").toString().trim();
-    var mtMergeTopicId=(e.parameter.mergeTopicId||"").toString().trim();
-    if (!mtTopicId||!mtNewSubjectId||!mtNewSubjectName||!mtNewSubTopicName)
-      return json({status:"error",result:"error",message:"topicId/newSubjectId/newSubjectName/newSubTopicName প্রয়োজন"});
-
-    var mtSs=SpreadsheetApp.getActiveSpreadsheet();
-    var mtTopicsSh=mtSs.getSheetByName("Topics");
-    if (!mtTopicsSh) return json({status:"error",result:"error",message:"Topics sheet নেই"});
-    var mtTData=mtTopicsSh.getDataRange().getValues(), mtTHdr=mtTData[0];
-    var mtTIdCol=mtTHdr.indexOf("topic_id"), mtTSubCol=mtTHdr.indexOf("subject_id");
-    if (mtTIdCol<0||mtTSubCol<0) return json({status:"error",result:"error",message:"Topics ট্যাবে topic_id/subject_id কলাম নেই"});
-
-    var mtFoundRow=-1;
-    for (var tr=1;tr<mtTData.length;tr++){ if((mtTData[tr][mtTIdCol]||"").toString().trim()===mtTopicId){ mtFoundRow=tr; break; } }
-    if (mtFoundRow<0) return json({status:"error",result:"error",message:"topicId পাওয়া যায়নি: "+mtTopicId});
-
-    // sheet নাম বের করা (topic_id-এর প্রিফিক্স থেকে, deleteByReferenceId-এর মতোই)
-    var mtSheetName=mtTopicId.indexOf("QZ")===0?"Quiz":mtTopicId.indexOf("QB")===0?"QBank":mtTopicId.indexOf("ST")===0?"Study":"";
-    var mtSh=mtSs.getSheetByName(mtSheetName);
-    if (!mtSh) return json({status:"error",result:"error",message:"Sheet not found for topicId: "+mtTopicId});
-
-    var mtEffectiveTopicId=mtMergeTopicId?mtMergeTopicId:mtTopicId;
-
-    if (mtMergeTopicId) {
-      // merge — সোর্স Topic-এর reference-রো বাদ (destination-এর existing topic_id-ই থাকবে)
-      mtTopicsSh.deleteRow(mtFoundRow+1);
-    } else {
-      // শুধু reparent — topic_id অপরিবর্তিত, শুধু subject_id বদলায়
-      mtTopicsSh.getRange(mtFoundRow+1,mtTSubCol+1).setValue(mtNewSubjectId);
-    }
-
-    // ── ডেটা-শিটে (Quiz/QBank/Study) এই টপিকের সব প্রশ্নের subject/sub_topic/
-    // subject_id/topic_id বাল্ক-আপডেট ──
-    var mtData=mtSh.getDataRange().getValues(), mtHdr=mtData[0];
-    var mtSubCol=mtHdr.indexOf("subject");
-    var mtSubIdCol=mtHdr.indexOf("subject_id");
-    var mtSTCol=mtHdr.indexOf("sub_topic"); if (mtSTCol<0) mtSTCol=mtHdr.indexOf("topic");
-    var mtTopicIdCol=mtHdr.indexOf("topic_id");
-    var mtUpdAtCol=mtHdr.indexOf("updatedAt"); if (mtUpdAtCol<0) mtUpdAtCol=mtHdr.indexOf("updatedat");
-    if (mtSubCol<0||mtSTCol<0||mtTopicIdCol<0) return json({status:"error",result:"error",message:"Data sheet-এ subject/sub_topic/topic_id কলাম নেই"});
-
-    var mtNow=Date.now(), mtMoved=0, mtTouchedRows=[];
-    for (var mr=1;mr<mtData.length;mr++){
-      if ((mtData[mr][mtTopicIdCol]||"").toString().trim()!==mtTopicId) continue;
-      mtSh.getRange(mr+1,mtSubCol+1).setValue(mtNewSubjectName);
-      mtSh.getRange(mr+1,mtSTCol+1).setValue(mtNewSubTopicName);
-      if (mtSubIdCol>=0) mtSh.getRange(mr+1,mtSubIdCol+1).setValue(mtNewSubjectId);
-      mtSh.getRange(mr+1,mtTopicIdCol+1).setValue(mtEffectiveTopicId);
-      if (mtUpdAtCol>=0) mtSh.getRange(mr+1,mtUpdAtCol+1).setValue(mtNow);
-      mtTouchedRows.push(mr+1);
-      mtMoved++;
-    }
-
-    var mtFbSynced=true;
-    if (mtUpdAtCol>=0 && mtTouchedRows.length) mtFbSynced=syncToFirebase(mtSheetName,mtSheetName);
-    // ── dirty-tracking: সোর্স টপিক (এখন হয় খালি, নয়তো merge হয়ে বিলুপ্ত) আর
-    // destination টপিক (effectiveTopicId) — দুটোই publish-এ প্রতিফলিত হতে হবে ──
-    markTopicDirty(mtTopicId);
-    markTopicDirty(mtEffectiveTopicId);
-
-    return json({status:"success",result:"success",moved:mtMoved,sheet:mtSheetName,mergedInto:mtMergeTopicId||null,firebaseSynced:mtFbSynced});
-    });
-  }
-
 
   // ── adminNotify ──
   if (action==="adminNotify") {
