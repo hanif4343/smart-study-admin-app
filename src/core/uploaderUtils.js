@@ -177,5 +177,17 @@ function removeFailedItems(keys){
   saveFailedQueueList(loadFailedQueue().filter(f=>!keys.includes(f._key)));
 }
 
+/* ══════════ DRAFT AUTOSAVE — টাইপ করা কাজ হারিয়ে যাওয়া ঠেকাতে ══════════
+   BulkUploaderPage আর SingleQuestionEntryPage দুটোতেই ব্যবহার হয়। কোনো এরর,
+   ভুল করে ব্যাক চাপা, ট্যাব বন্ধ হওয়া, বা নেটওয়ার্ক ড্রপ হলেও — যতক্ষণ না
+   সফল Submit হচ্ছে, ততক্ষণ localStorage-এ ড্রাফট থেকে যায়। সফল Submit হলেই
+   clearDraft() কল হয়ে মুছে যায় (পুরনো ড্রাফট যেন পরে ভুল করে আবার না দেখায়)।
+   প্রতিটা পেজের নিজস্ব key (Bulk vs Single আলাদা), তাই একে অন্যেরটা ওভাররাইট
+   করে না। ── */
+const LS_DRAFT_BULK   = "ss_draft_bulk_v1";
+const LS_DRAFT_SINGLE = "ss_draft_single_v1";
+function loadDraft(key){ try{ const raw=localStorage.getItem(key); return raw?JSON.parse(raw):null; }catch{ return null; } }
+function saveDraft(key,data){ try{ localStorage.setItem(key,JSON.stringify({...data,_savedAt:Date.now()})); }catch{} }
+function clearDraft(key){ try{ localStorage.removeItem(key); }catch{} }
 
-export { getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow, LS_SAVE_LOCATION, LS_FAILED_QUEUE, LS_OCR_CACHE, OCR_CACHE_MAX, loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, loadFailedQueue, saveFailedQueueList, pushFailedItems, removeFailedItems };
+export { getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow, LS_SAVE_LOCATION, LS_FAILED_QUEUE, LS_OCR_CACHE, OCR_CACHE_MAX, loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, loadFailedQueue, saveFailedQueueList, pushFailedItems, removeFailedItems, LS_DRAFT_BULK, LS_DRAFT_SINGLE, loadDraft, saveDraft, clearDraft };
