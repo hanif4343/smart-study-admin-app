@@ -7,7 +7,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
-import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret } from "../core/uploaderUtils.js";
+import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, loadDraft, saveDraft, clearDraft } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
 import { resolveOrCreateReference } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
@@ -117,6 +117,48 @@ function SingleQuestionEntryPage({push}){
   useEffect(()=>{ qRef.current?.focus(); },[]);
   // subject বদলালে আগের topic নতুন subject-এর আন্ডারে না-ও থাকতে পারে, তাই রিসেট
   useEffect(()=>{ setTopicSel({id:"",name:""}); },[subjectSel.id]);
+
+  // ── ড্রাফট অটোসেভ — টাইপ করে যাওয়া প্রশ্ন/Subject/পদ-প্রতিষ্ঠান-সাল ভুলে ব্যাক
+  // চাপা বা রিলোডে হারিয়ে যাওয়া ঠেকাতে। প্রতিটা প্রশ্ন Submit হলে per-question
+  // ফিল্ড এমনিই খালি হয়ে যায় (resetForNext), কিন্তু session-level ফিল্ড (Subject/
+  // Post/Institution/সাল) ইচ্ছাকৃতভাবে থেকে যায় — পরের বার পেজ খুললেও এগুলো মনে
+  // রাখলে বারবার বাছাই করতে হবে না। ──
+  const draftCheckedRef=useRef(false);
+  const[draftBanner,setDraftBanner]=useState(null);
+  useEffect(()=>{
+    if(draftCheckedRef.current)return;
+    draftCheckedRef.current=true;
+    const d=loadDraft(LS_DRAFT_SINGLE);
+    if(d&&((d.question&&d.question.trim())||(d.subjectSel&&d.subjectSel.name))) setDraftBanner(d);
+  },[]);
+  const restoreDraft=()=>{
+    const d=draftBanner; if(!d)return;
+    if(d.targetMode)setTargetMode(d.targetMode);
+    if(d.qtype)setQtype(d.qtype);
+    if(d.subjectSel)setSubjectSel(d.subjectSel);
+    if(d.topicSel)setTopicSel(d.topicSel);
+    if(d.postSel)setPostSel(d.postSel);
+    if(d.instSel)setInstSel(d.instSel);
+    if(d.examYear!==undefined)setExamYear(d.examYear);
+    if(d.question!==undefined)setQuestion(d.question);
+    if(d.correct!==undefined)setCorrect(d.correct);
+    if(d.opt1!==undefined)setOpt1(d.opt1); if(d.opt2!==undefined)setOpt2(d.opt2);
+    if(d.opt3!==undefined)setOpt3(d.opt3); if(d.opt4!==undefined)setOpt4(d.opt4);
+    if(d.explanation!==undefined)setExplanation(d.explanation);
+    setDraftBanner(null);
+    push("success","♻️ আগের ড্রাফট ফিরিয়ে আনা হলো","");
+  };
+  const discardDraft=()=>{ clearDraft(LS_DRAFT_SINGLE); setDraftBanner(null); };
+  useEffect(()=>{
+    if(!draftCheckedRef.current || draftBanner) return;
+    if(saving) return;
+    const t=setTimeout(()=>{
+      const hasContent=question.trim()||subjectSel.name.trim();
+      if(hasContent) saveDraft(LS_DRAFT_SINGLE,{targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,question,correct,opt1,opt2,opt3,opt4,explanation});
+      else clearDraft(LS_DRAFT_SINGLE);
+    },800);
+    return ()=>clearTimeout(t);
+  },[targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,question,correct,opt1,opt2,opt3,opt4,explanation,saving,draftBanner]);
 
   /* ── কার্সর যেখানে আছে ঠিক সেখানে টেক্সট ইনসার্ট করার গতিশীল ফাংশন ── */
   const insertAtCursor=useCallback((text)=>{
@@ -268,6 +310,19 @@ function SingleQuestionEntryPage({push}){
         <div style={{fontSize:13,fontWeight:800,color:C.text}}>✍️ Single প্রশ্ন এন্ট্রি</div>
         <div style={{fontSize:11,color:C.green,fontWeight:700}}>এই সেশনে যোগ হয়েছে: {sessionCount}টি</div>
       </div>
+
+      {draftBanner&&(
+        <div style={{background:"#052e16",border:"1px solid #16a34a55",borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+          <div style={{fontSize:12,fontWeight:800,color:"#4ade80",marginBottom:4}}>♻️ আগের অসম্পূর্ণ কাজ পাওয়া গেছে</div>
+          <div style={{fontSize:11,color:"#86efac",marginBottom:10,lineHeight:1.5}}>
+            {draftBanner.question?`একটা প্রশ্ন টাইপ করে Submit করা হয়নি — "${draftBanner.question.substring(0,50)}${draftBanner.question.length>50?"...":""}"`:"আগের Subject/পদ/প্রতিষ্ঠান সেটিংস পাওয়া গেছে।"}
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={discardDraft}>🗑 বাদ দাও</button>
+            <button className="btn bp" style={{flex:2,justifyContent:"center"}} onClick={restoreDraft}>♻️ ফিরিয়ে আনো</button>
+          </div>
+        </div>
+      )}
 
       {/* Target Sheet + Question Type */}
       <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:10}}>
