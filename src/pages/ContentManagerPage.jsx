@@ -17,6 +17,7 @@ import { ExamAppearancesTab } from "./content/ExamAppearancesTab.jsx";
 import { BulkQTypeTab } from "./BulkQTypeTab.jsx";
 import { ModelTestTab } from "./content/ModelTestTab.jsx";
 import { DeleteTab } from "./content/DeleteTab.jsx";
+import { PublishTab } from "./content/PublishTab.jsx";
 
 const CONTENT_TOOL_SECTIONS=[
   {key:"edit",title:"✏️ কন্টেন্ট এডিট",color:C.info,items:[
@@ -26,6 +27,9 @@ const CONTENT_TOOL_SECTIONS=[
     {page:"audience",    icon:"🎯",label:"Audience",     desc:"Audience ট্যাগ রিনেম"},
     {page:"qtype",       icon:"🏷️",label:"QType",       desc:"বাল্ক প্রশ্নের ধরন বদলান"},
     {page:"modeltest",   icon:"🧪",label:"Model Test",   desc:"মডেল টেস্ট জেনারেট করুন"},
+  ]},
+  {key:"cdn",title:"🚀 CDN Publish",color:C.ai,items:[
+    {page:"publish", icon:"🚀",label:"Publish Now", desc:"পরিবর্তিত Topic-গুলো CDN-এ প্রকাশ করুন"},
   ]},
   {key:"danger",title:"⚠️ বিপজ্জনক",color:C.danger,items:[
     {page:"delete", icon:"🗑️",label:"Delete", desc:"বাল্ক কনটেন্ট ডিলিট — সতর্কভাবে ব্যবহার করুন"},
@@ -38,6 +42,7 @@ const TOOL_LABELS={
   audience:{icon:"🎯",label:"Audience"},
   qtype:{icon:"🏷️",label:"QType"},
   modeltest:{icon:"🧪",label:"Model Test"},
+  publish:{icon:"🚀",label:"Publish Now"},
   delete:{icon:"🗑️",label:"Delete"},
 };
 
@@ -91,6 +96,7 @@ function ContentManagerPage({push,tick,pushLayer}){
           {tab==="audience"    && <AudienceTagRenameTab push={push} tick={tick}/>}
           {tab==="qtype"       && <BulkQTypeTab push={push} tick={tick}/>}
           {tab==="modeltest"   && <ModelTestTab push={push} tick={tick}/>}
+          {tab==="publish"     && <PublishTab push={push}/>}
           {tab==="delete"      && <DeleteTab push={push} tick={tick}/>}
         </>
       )}
