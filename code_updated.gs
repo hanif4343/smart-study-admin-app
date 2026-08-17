@@ -1279,7 +1279,13 @@ function doGet(e) {
     // করে ফেলতে পারত (duplicate topic_id) — এখন lock-এর ভিতরে বলে নিরাপদ। ──
     var ariNewId="";
     if (ariType==="subjects") {
-      var ariPrefix=(ariSheet==="Quiz"?"QZ_S":ariSheet==="QBank"?"QB_S":"ST_S");
+      // ⚠️ QBank-এর subject id কনভেনশন অন্য দুটোর (Quiz→QZ_S, Study→ST_S) থেকে আলাদা —
+      // QBank-এ আগে থেকেই বিদ্যমান subject-গুলো "QB01".."QB09" ফরম্যাটে (আন্ডারস্কোর/S
+      // ছাড়া) তৈরি হয়ে আছে। আগে এখানে ভুলবশত সব সিটেই "_S" প্যাটার্ন ব্যবহার হতো
+      // (QBank-এও "QB_S01" জেনারেট হতো), যেটা বিদ্যমান কনভেনশনের সাথে না মেলায় প্রতিটা
+      // নতুন Subject আলাদা/ভিন্ন id-তে চলে যেত, বিদ্যমান এন্ট্রির সাথে মিলতো না। এখন
+      // QBank-এর জন্য বিদ্যমান কনভেনশন অনুসরণ করা হচ্ছে (Quiz/Study অপরিবর্তিত)। ──
+      var ariPrefix=(ariSheet==="Quiz"?"QZ_S":ariSheet==="QBank"?"QB":"ST_S");
       var ariMax=0;
       for (var a1=1;a1<ariData.length;a1++){
         var aId1=(ariData[a1][ariIdCol]||"").toString();
@@ -1962,6 +1968,28 @@ function doGet(e) {
       gdcCount = Object.keys(gdcUniq).length;
     }
     return json({status:"success",result:"success",dirtyCount:gdcCount});
+  }
+
+  // ── markAllTopicsDirty — "ধাপ ৮: পুরোটা স্কেল করা"-এর জন্য। Phase ১ deploy
+  // হওয়ার আগে থেকে থাকা পুরনো সব প্রশ্ন কখনো dirty মার্ক হয়নি (dirty-tracking
+  // শুধু নতুন write-এই কাজ করে), তাই সেগুলো এখনো GitHub-এ যায়নি। এই action
+  // Topics reference-শিটের সব topic_id একসাথে dirty মার্ক করে দেয় — এরপর
+  // একাধিকবার publishNow কল করলে (৪০০-এর cap-এর কারণে) ধীরে ধীরে পুরো
+  // প্রশ্নব্যাংক CDN-এ প্রথমবার সম্পূর্ণভাবে publish হয়ে যাবে। এক-কালীন কাজ —
+  // এরপর থেকে normal write-action-গুলোই dirty-tracking সামলাবে। ──
+  if (action==="markAllTopicsDirty") {
+    var matTopicsSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Topics");
+    if (!matTopicsSh) return json({status:"error",result:"error",message:"Topics sheet নেই"});
+    var matData = matTopicsSh.getDataRange().getValues(), matHdr = matData[0];
+    var matIdCol = matHdr.indexOf("topic_id");
+    if (matIdCol < 0) return json({status:"error",result:"error",message:"Topics ট্যাবে topic_id কলাম নেই"});
+    var matDirty = {};
+    for (var mt=1; mt<matData.length; mt++) {
+      var mtId = (matData[mt][matIdCol]||"").toString();
+      if (mtId) matDirty[mtId] = 1;
+    }
+    markTopicsDirty(matDirty);
+    return json({status:"success",result:"success",markedCount:Object.keys(matDirty).length});
   }
 
   // ── adminNotify ──
