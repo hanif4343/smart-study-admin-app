@@ -371,7 +371,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           subjectId, topicId, tagIds,
           groupId:batchGroupId, subIndex:batchGroupId?(idx+1):null,
         }));
-    const result=await saveRowsToSheet({rows,targetTab:mode,gasSecret,push,examAppearance});
+    const result=await saveRowsToSheet({rows,targetTab:mode,gasSecret,push,examAppearance,source:"Bulk_Text"});
     entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
     setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setRunning(false);setDone(true);
