@@ -17,6 +17,32 @@ function parseBulkEntry(entry, effectiveType){
   const tr=entry.trim();
   if(!tr||tr.startsWith("#"))return{skip:true};
 
+  // ── 🛡️ Subject/Topic sanity check — এই দুটো সবসময় ছোট, একলাইনের ক্যাটাগরি-লেবেল
+  // হওয়ার কথা (যেমন "বাংলা ব্যাকরণ", "কারক"), কখনো লম্বা বাক্য/অনুচ্ছেদ না। যদি প্রশ্ন
+  // বা উত্তরের ভিতরে ঠিক ১টা মাত্র বাড়তি সেমিকোলন থাকে (idioms/translation-এ প্রায়ই
+  // হয়), তাহলে মোট অংশের সংখ্যা কাকতালীয়ভাবে "স্বাভাবিক" ফরম্যাটের সাথে মিলে যেতে
+  // পারে (৫টা Written-এ, ৯টা MCQ-তে) — তখন উপরের overflow-ডিটেকশন ট্রিগারই হয় না,
+  // আর উত্তরের একটা অংশ চুপচাপ ভুল করে Subject/Topic হিসেবে বসে যায় (ঠিক আগের
+  // "He really dropped the ball..." বাগের মতোই, শুধু কম সেমিকোলনে ঘটে)। তাই শেষ
+  // সুরক্ষা হিসেবে — Subject/Topic অস্বাভাবিক লম্বা (৬০ ক্যারেক্টারের বেশি) বা তার
+  // ভিতরে নিজেই একাধিক বাক্য/লাইন-ব্রেকের ছাপ থাকলে (যেটা কোনো real subject/topic
+  // নামে হওয়ার কথা না), সেটা চুপচাপ accept না করে সরাসরি error দেখানো হচ্ছে —
+  // ভুল ডেটা Sheet-এ ঢোকার চেয়ে admin-কে একবার review করতে বলা ভালো। ──
+  const looksLikeProse=s=>{
+    if(!s)return false;
+    if(s.length>60)return true;
+    if(/\n/.test(s))return true;
+    // একটা real subject/topic লেবেলে বাক্য-শেষের চিহ্ন (. । ! ?) সাধারণত থাকেই না,
+    // একাধিকবার থাকলে এটা নিশ্চিতভাবেই কোনো বাক্য/অনুচ্ছেদ, লেবেল না
+    const sentenceEnders=(s.match(/[.।!?]/g)||[]).length;
+    return sentenceEnders>=2;
+  };
+  const sanityCheck=(subject,topic,labelPrefix)=>{
+    if(looksLikeProse(subject)) return{err:true,reason:`${labelPrefix}: Subject অস্বাভাবিক লম্বা/বাক্যের মতো মনে হচ্ছে ("${subject.substring(0,40)}...") — মনে হয় উত্তরের অংশ ভুলে Subject হয়ে গেছে, লাইনটা চেক করো`};
+    if(looksLikeProse(topic)) return{err:true,reason:`${labelPrefix}: Topic অস্বাভাবিক লম্বা/বাক্যের মতো মনে হচ্ছে ("${topic.substring(0,40)}...") — মনে হয় উত্তরের অংশ ভুলে Topic হয়ে গেছে, লাইনটা চেক করো`};
+    return null;
+  };
+
   if(effectiveType==="Study"){
     const si=tr.indexOf(";");
     if(si===-1)return{err:true,reason:"Study: প্রথম ';' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
@@ -60,6 +86,7 @@ function parseBulkEntry(entry, effectiveType){
     if(parts.length>=4){
       if(!subject)return{err:true,reason:"Written: Subject খালি"};
       if(!topic)return{err:true,reason:"Written: Topic খালি"};
+      const sc=sanityCheck(subject,topic,"Written"); if(sc)return sc;
     }
     return{ok:true,q,correct:ans,subject,topic,explanation};
 
@@ -82,6 +109,7 @@ function parseBulkEntry(entry, effectiveType){
       if(parts.length>=8){
         if(!subject)return{err:true,reason:"MCQ: Subject খালি"};
         if(!topic)return{err:true,reason:"MCQ: Topic খালি"};
+        const sc=sanityCheck(subject,topic,"MCQ"); if(sc)return sc;
       }
       return{ok:true,q:parts[0],opt1:parts[1],opt2:parts[2],opt3:parts[3],opt4:parts[4],correct:parts[5],subject,topic,explanation};
     }
@@ -98,6 +126,7 @@ function parseBulkEntry(entry, effectiveType){
     if(!ocorrect)return{err:true,reason:"MCQ: সঠিক উত্তর খালি"};
     if(!subject)return{err:true,reason:"MCQ: Subject খালি"};
     if(!topic)return{err:true,reason:"MCQ: Topic খালি"};
+    const sc=sanityCheck(subject,topic,"MCQ"); if(sc)return sc;
     return{ok:true,q,opt1:o1,opt2:o2,opt3:o3,opt4:o4,correct:ocorrect,subject,topic,explanation:""};
   }
 }
