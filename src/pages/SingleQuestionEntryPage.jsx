@@ -283,7 +283,7 @@ function SingleQuestionEntryPage({push}){
         item, subject:subjectSel.name.trim(), subtopic:topicName, qtype:effQtype,
         audienceTags:tagsArr, mainQpaper:"", subjectId:subjRes.id, topicId:topicRes.id,
       });
-      const res=await saveRowsToSheet({rows:[row],targetTab:targetMode,gasSecret,push,examAppearance});
+      const res=await saveRowsToSheet({rows:[row],targetTab:targetMode,gasSecret,push,examAppearance,source:"Single_Text"});
       if(res.added>0){
         push("success","✅ যোগ হয়েছে!",`এই সেশনে মোট ${sessionCount+1}টি`);
         if(res.examAppearancesLinkedToExisting>0) push("success","🔗 প্রশ্নটা আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
