@@ -407,7 +407,7 @@ function BrowseTab({push,tick}){
         qtype:isStudy?"Study":(e.qtype||"Written"),
         audienceTags:(e.audienceTags||"").split(",").filter(Boolean),
       }));
-      const result=await saveRowsToSheet({rows,targetTab:sheet,gasSecret,push});
+      const result=await saveRowsToSheet({rows,targetTab:sheet,gasSecret,push,source:"Reformat"});
       if(result.added>0){
         // নতুন entries সফলভাবে লেখা হওয়ার পরই পুরনো বান্ডিল entries ডিলিট করা হয় — ডেটা হারানোর ঝুঁকি এড়াতে
         const sourceIds=[...new Set(included.map(e=>e.sourceKey).filter(Boolean))];
