@@ -1,10 +1,9 @@
 name: QBank to Quiz
 
 on:
-  schedule:
-    # দিনে দুইবার: রাত ২টা আর দুপুর ২টা (বাংলাদেশ সময়, UTC+6) — UTC-তে রাত ৮টা আর সকাল ৮টা
-    - cron: "0 20 * * *"
-    - cron: "0 8 * * *"
+  # schedule:
+  #   - cron: "0 20 * * *"
+  #   - cron: "0 8 * * *"
   workflow_dispatch: # GitHub-এর Actions ট্যাব থেকে "Run workflow" চেপে ম্যানুয়ালিও চালানো যাবে, ফিল্টার বসিয়েও
     inputs:
       filter_audience:
