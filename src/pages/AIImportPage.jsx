@@ -135,7 +135,7 @@ function AIImportPage({push,onSendToBulk}){
       item, subject:subjectName, subtopic:topicName,
       qtype:effQtype, audienceTags, subjectId, topicId,
     }));
-    const result=await saveRowsToSheet({rows,targetTab:effMode,gasSecret,push,examAppearance});
+    const result=await saveRowsToSheet({rows,targetTab:effMode,gasSecret,push,examAppearance,source:"Single_OCR"});
     setDirectProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setDirectRunning(false);
     if(result.failedRows.length) pushFailedItems("AI Import (OCR)","sheet",effMode,result.failedRows);
