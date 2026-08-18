@@ -2551,7 +2551,7 @@ function doPost(e) {
             "option1": r.opt1 || '', "option2": r.opt2 || '', "option3": r.opt3 || '', "option4": r.opt4 || '',
             "correct": r.correct || '',
             "subject": r.subject || '',
-            "sub_topic": r.sub_topic || '',
+            "topic": r.sub_topic || '',
             "subject_id": refIds.subjectId,
             "topic_id": refIds.topicId,
             "explanation": r.explanation || '',
