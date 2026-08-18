@@ -967,27 +967,10 @@ function doGet(e) {
     var targetId=(e.parameter.id||"").toString().trim();
     var content=(e.parameter.content||"");
     var ufAtC=uHdrNorm.indexOf("updatedat");
-    // ── 🆕 Added by / Edited by / Review — কে/কখন/কী বদলালো তার audit trail।
-    // editSource না পাঠালে ডিফল্ট "Admin App" (এখন পর্যন্ত updateField শুধু Admin
-    // App থেকেই কল হয়) — Main Smart Study App থেকে কোনোদিন এই একই endpoint
-    // কল হলে "Main App" পাঠালেই যথেষ্ট, বাকিটা এমনিই কাজ করবে। এডিট-কলামগুলো
-    // (edited_by/review) sheet-এ না থাকলে চুপচাপ স্কিপ হয়ে যাবে (ক্ষতি নেই),
-    // তাই বাকি সব এডিট আগের মতোই কাজ করবে যতক্ষণ না কলাম দুটো ম্যানুয়ালি
-    // Quiz/QBank/Study শিটে যোগ করা হচ্ছে। ──
-    var editSource=(e.parameter.editSource||"Admin App").toString().trim();
-    var editedByC=uHdrNorm.indexOf("editedby");
-    var reviewC=uHdrNorm.indexOf("review");
-    var reviewLabel=reviewLabelForField(fld);
     for(var ur=1;ur<uRows.length;ur++){
       if(uRows[ur][idC].toString().trim()===targetId){
         uSheet.getRange(ur+1,fldC+1).setValue(content);
         if(ufAtC!==-1) uSheet.getRange(ur+1,ufAtC+1).setValue(Date.now());
-        if(editedByC!==-1) uSheet.getRange(ur+1,editedByC+1).setValue(editSource+" - "+new Date().toLocaleString('bn-BD'));
-        if(reviewC!==-1 && reviewLabel){
-          var prevReview=(uRows[ur][reviewC]||"").toString().trim();
-          var nextReview=prevReview?(prevReview+", "+reviewLabel):reviewLabel;
-          uSheet.getRange(ur+1,reviewC+1).setValue(nextReview);
-        }
         syncToFirebase(shName,shName);
         // 🐛 ফিক্স (Admin App audit-এ পাওয়া): field নিজেই "topic_id" হলে
         // pre-write snapshot (uRows[ur][uTopicIdC]) ব্যবহার করলে *নতুন* topic_id
@@ -1161,21 +1144,6 @@ function doGet(e) {
      Subjects/Topics/Tags/Posts/Institutions reference-টেবিল
      ও paginated question-fetch এর জন্য
   ══════════════════════════════════════════════════════════ */
-
-  // ── reviewLabelForField — কোন ফিল্ড এডিট হলে Review কলামে কোন লেবেল যোগ হবে
-  // তার ম্যাপিং। শুধু "মূল প্রশ্ন/উত্তর/option/ব্যাখ্যা/subject/topic" — এই ৬
-  // ক্যাটাগরির এডিটই ট্র্যাক করা হয় (technique/tags/timestamp-জাতীয় মেটাডেটা
-  // এডিটে Review কলাম ছোঁয়া হয় না, নাহলে অপ্রয়োজনীয় শব্দে ভরে যাবে)। ──
-  function reviewLabelForField(fld){
-    var f=(fld||"").toString().toLowerCase().trim();
-    if(f==="question") return "Question Reviewed";
-    if(f==="correct") return "Ans Reviewed";
-    if(f==="opt1"||f==="opt2"||f==="opt3"||f==="opt4"||f==="option1"||f==="option2"||f==="option3"||f==="option4") return "Option Reviewed";
-    if(f==="explanation") return "Explanation Reviewed";
-    if(f==="subject"||f==="subject_id"||f==="subjectid") return "Subject Reviewed";
-    if(f==="topic"||f==="sub_topic"||f==="subtopic"||f==="topic_id"||f==="topicid") return "Topic Reviewed";
-    return null;
-  }
 
   // ── REF_TABS: reference-টেবিলের নাম ও তাদের id-কলাম ──
   var REF_TABS = {
@@ -2562,7 +2530,6 @@ function doPost(e) {
             "audiencetags": r.audienceTags || 'Job',
             "updatedat": Date.now(),
             "notfirebase": "NF",
-            "added_by": "Q2Q",
           });
           qcNewRows.push(rowArr);
           added++;
@@ -2798,15 +2765,7 @@ function doPost(e) {
               // না দিলে ফাঁকা থাকবে (পরে Admin App-এর Reference ট্যাব দিয়ে ঠিক করা যাবে) ──
               "subjectid":row.subject_id||"", "topicid":row.topic_id||"",
               "groupid":row.group_id||"",
-              "subindex":row.sub_index||"", "audiencetagsids":row.audienceTagsIds||"",
-              // 🆕 Added by — কোন ফিচার এই প্রশ্ন যোগ করলো (Bulk_Text/Bulk_OCR/Single_OCR/
-              // Single_Text ইত্যাদি, ফ্রন্টএন্ড params.source দিয়ে পাঠায়)। row.editId থাকলে
-              // (মানে এটা নতুন ইনসার্ট না, বিদ্যমান রো-র উপর edit/resubmit — যেমন ArchivePage)
-              // params.source দিয়ে ওভাররাইট না করে, row নিজে যদি added_by পাঠায় সেটাই রাখা
-              // হচ্ছে, নাহলে ফাঁকা রেখে দেওয়া হচ্ছে (আগের মান অক্ষত রাখতে buildRowArray-এর
-              // সীমাবদ্ধতা — পুরো রো নতুন করে বসে, তাই edit-path-এ ক্লায়েন্টকেই আগের
-              // added_by ফেরত পাঠাতে হবে চাইলে)।
-              "added_by": row.added_by||(row.editId?"":(params.source||""))
+              "subindex":row.sub_index||"", "audiencetagsids":row.audienceTagsIds||""
             };
             var bLine=buildRowArray(bFieldMap);
             if(bTab==="Typing"){ /* Typing-এর সরল schema — শুধু id/language/content/updatedAt/NF দরকার, বাকি field map-এ থাকলেও ক্ষতি নেই কারণ কলাম না থাকলে ignore হয় */ }
