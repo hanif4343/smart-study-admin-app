@@ -1992,6 +1992,48 @@ function doGet(e) {
     return json({status:"success",result:"success",markedCount:Object.keys(matDirty).length});
   }
 
+  // ── countOrphanQuestions — Diagnostic (read-only, নিরাপদ)। কোন Sheet-এ
+  // কতগুলো প্রশ্নের topic_id ফাঁকা বা Topics reference-শিটে নেই (orphan/
+  // unclassified) — এগুলো markAllTopicsDirty-এর dirty-list-এই কখনো ঢোকে না
+  // (সেটা Topics শিট থেকে topic_id নেয়), তাই কখনো publish/CDN-এ যায় না।
+  // sanity-check-এ "Sheet total ≠ manifest total" দেখা গেলে এটা দিয়েই সঠিক
+  // কারণ ও সংখ্যা বোঝা যাবে। ──
+  if (action==="countOrphanQuestions") {
+    var coqSs = SpreadsheetApp.getActiveSpreadsheet();
+    var coqTopicsSh = coqSs.getSheetByName("Topics");
+    var coqValidIds = {};
+    if (coqTopicsSh) {
+      var coqTData = coqTopicsSh.getDataRange().getValues(), coqTHdr = coqTData[0];
+      var coqTIdCol = coqTHdr.indexOf("topic_id");
+      if (coqTIdCol >= 0) {
+        for (var ct=1; ct<coqTData.length; ct++) {
+          var ctid = (coqTData[ct][coqTIdCol]||"").toString();
+          if (ctid) coqValidIds[ctid] = 1;
+        }
+      }
+    }
+    var coqResult = {};
+    ["Quiz", "QBank", "Study"].forEach(function (sheetName) {
+      var sh = coqSs.getSheetByName(sheetName);
+      if (!sh) { coqResult[sheetName] = { total: 0, blank: 0, orphan: 0 }; return; }
+      var data = sh.getDataRange().getValues(), hdr = data[0];
+      var topicIdCol = hdr.indexOf("topic_id");
+      var total = Math.max(0, data.length - 1);
+      var blank = 0, orphan = 0;
+      if (topicIdCol >= 0) {
+        for (var r=1; r<data.length; r++) {
+          var tid = (data[r][topicIdCol]||"").toString();
+          if (!tid) blank++;
+          else if (!coqValidIds[tid]) orphan++;
+        }
+      } else {
+        blank = total; // কলামই নেই মানে সবগুলোই "topic_id নেই" ধরা হচ্ছে
+      }
+      coqResult[sheetName] = { total: total, blank: blank, orphan: orphan, ok: total - blank - orphan };
+    });
+    return json({status:"success",result:"success",bySheet:coqResult});
+  }
+
   // ── adminNotify ──
   if (action==="adminNotify") {
     var adminPhone=(cfg.ADMIN_PHONE||"").toString().replace(/^'+/,'').trim();
