@@ -3,7 +3,7 @@ import { GAS } from "./config.js";
 import { fbPush, fbSet } from "./firebase.js";
 import { invalidate } from "./dataCache.js";
 
-async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSize,examAppearance}){
+async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSize,examAppearance,source}){
   if(!rows.length)return{added:0,skipped:0,failedRows:[]};
   if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{added:0,skipped:0,failedRows:rows}; }
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও"); return{added:0,skipped:0,failedRows:rows}; }
@@ -24,6 +24,9 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
       // না প্রশ্নটা আগে কোথাও যোগ করা ছিল কিনা।
       const body={secret:gasSecret,type:"bulk_save_rows",targetTab,rows:chunk,sync:isLast};
       if(examAppearance) body.examAppearance=examAppearance;
+      // 🆕 কোন ফিচার এই প্রশ্নগুলো যোগ করছে (Bulk_Text/Bulk_OCR/Single_OCR/Single_Text
+      // ইত্যাদি) — GAS "added_by" কলামে বসাবে (কলাম না থাকলে চুপচাপ ignore হবে)।
+      if(source) body.source=source;
       const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)});
       const data=await resp.json().catch(()=>({}));
       if(data.result==="error"){ failedRows.push(...chunk); continue; }
@@ -96,12 +99,17 @@ async function renameFieldInSheet({sheet,field,oldVal,newVal,gasSecret,push}){
    sync করে)। এটা ইচ্ছাকৃতভাবে best-effort: GAS URL/secret না থাকলে বা network/permission
    error হলেও শুধু {ok:false} রিটার্ন করে — throw করে না, যাতে caller-এর মূল Firebase-flow
    (যেটা এর আগেই সফলভাবে সেভ হয়ে গেছে) কখনো আটকে না যায়। ── */
-async function updateFieldInSheet({sheet,id,field,value,gasSecret}){
+async function updateFieldInSheet({sheet,id,field,value,gasSecret,editSource}){
   if(!GAS||!gasSecret||!id)return{ok:false,error:"missing GAS/secret/id"};
   try{
+    // 🆕 editSource — GAS "edited_by" কলামে "Admin App - <সময়>" বা "Main App - <সময়>"
+    // বসায় (কলাম না থাকলে চুপচাপ ignore হয়)। এই ফাংশনটা এখন পর্যন্ত শুধু Admin App-এর
+    // টুলগুলো থেকেই কল হয়, তাই ডিফল্ট "Admin App" — ভবিষ্যতে Main Smart Study App
+    // থেকে কখনো এই একই endpoint কল হলে editSource:"Main App" পাঠালেই যথেষ্ট।
     const url=`${GAS}?action=updateField&secret=${encodeURIComponent(gasSecret)}`+
       `&sheet=${encodeURIComponent(sheet)}&id=${encodeURIComponent(id)}`+
-      `&field=${encodeURIComponent(field)}&content=${encodeURIComponent(value??"")}`;
+      `&field=${encodeURIComponent(field)}&content=${encodeURIComponent(value??"")}`+
+      `&editSource=${encodeURIComponent(editSource||"Admin App")}`;
     const resp=await fetch(url);
     const data=await resp.json().catch(()=>({}));
     if(data.result!=="success")return{ok:false,error:data.error||"unknown GAS error"};
@@ -112,10 +120,10 @@ async function updateFieldInSheet({sheet,id,field,value,gasSecret}){
 /* ── InlineEditModal-এর জন্য: একসাথে একাধিক field Sheet-এ sync (প্রতিটা field আলাদা
    updateField কল, সবগুলো parallel-এ চলে)। Firebase patch ইতিমধ্যে হয়ে গেছে ধরে নেওয়া হয় —
    এটা শুধু Sheet mirror-কে একই অবস্থায় আনার জন্য (best-effort, silent-fail per field)। ── */
-async function syncFieldsToSheet({sheet,id,fields,gasSecret}){
+async function syncFieldsToSheet({sheet,id,fields,gasSecret,editSource}){
   const entries=Object.entries(fields||{});
   if(!GAS||!gasSecret||!id)return{ok:false,failed:entries.map(([f])=>f)};
-  const results=await Promise.all(entries.map(([field,value])=>updateFieldInSheet({sheet,id,field,value,gasSecret})));
+  const results=await Promise.all(entries.map(([field,value])=>updateFieldInSheet({sheet,id,field,value,gasSecret,editSource})));
   const failed=entries.filter((_,i)=>!results[i].ok).map(([f])=>f);
   return{ok:failed.length===0,failed};
 }
@@ -272,39 +280,4 @@ async function deleteExamAppearance({appearanceId,gasSecret,push}){
   }catch(e){ push?.("error","❌ Appearance মুছতে ব্যর্থ",e.message); return{ok:false}; }
 }
 
-/* ══════════ CDN Publish (GitHub CDN Plan — দেখো GAS_CDN_PLANNING.md) ══════════
-   "_DirtyTopics" শিটে জমে থাকা dirty-topic-গুলোই publish হয় — updateField/
-   deleteByIds/moveQuestions/moveTopic/renameField/renameReferenceItem/
-   deleteByReferenceId/bulk_save_rows — এই সব action GAS-সাইডে নিজে থেকেই dirty
-   মার্ক করে, আলাদা করে ক্লায়েন্ট থেকে কিছু পাঠাতে হয় না। ── */
-
-/* কতগুলো Topic publish-এর অপেক্ষায় আছে (Publish বাটনের ওপরে দেখানোর জন্য,
-   read-only, দ্রুত) */
-async function fetchDirtyTopicsCount({gasSecret}){
-  if(!GAS||!gasSecret) return null;
-  try{
-    const url=`${GAS}?action=getDirtyTopicsCount&secret=${encodeURIComponent(gasSecret)}`;
-    const resp=await fetch(url);
-    const data=await resp.json().catch(()=>({}));
-    if(data.status!=="success") return null;
-    return data.dirtyCount ?? 0;
-  }catch(_){ return null; }
-}
-
-/* আসল Publish — dirty topic-গুলো GitHub-এ commit করে manifest.json আপডেট করে।
-   dirty topic বেশি হলে (bulk move-এর পরে) কয়েক সেকেন্ড-১/২ মিনিট লাগতে পারে,
-   তাই timeout বাড়িয়ে রাখা হলো (fetch-এর ডিফল্ট timeout নেই, কিন্তু browser-এর
-   নিজস্ব limit থাকতে পারে — সাধারণত যথেষ্ট বড়)। */
-async function publishNow({gasSecret,push}){
-  if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{ok:false}; }
-  if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","উপরে Secret Key বসাও"); return{ok:false}; }
-  try{
-    const url=`${GAS}?action=publishNow&secret=${encodeURIComponent(gasSecret)}`;
-    const resp=await fetch(url);
-    const data=await resp.json().catch(()=>({}));
-    if(data.status==="error"){ push?.("error","❌ Publish ব্যর্থ",data.message||"অজানা error"); return{ok:false,...data}; }
-    return{ok:true,...data}; // {status, published, failed, errors, totalQuestions, manifestVersion, sanityWarning}
-  }catch(e){ push?.("error","❌ Publish ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
-}
-
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow };
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance };
