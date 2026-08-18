@@ -367,7 +367,7 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
       return row;
     });
     try{
-      const result=await saveRowsToSheet({rows,targetTab:"Quiz",gasSecret,push,onProgress:setSaveProgress,chunkSize:saveChunkSize});
+      const result=await saveRowsToSheet({rows,targetTab:"Quiz",gasSecret,push,onProgress:setSaveProgress,chunkSize:saveChunkSize,source:"QB_Convert"});
       // ⚡ Quiz sheet-এ নতুন প্রশ্ন যোগ হলো — কাশ করা Quiz ডাটা invalidate করা হলো যাতে
       // dedup-এর "ইতিমধ্যে Quiz-এ আছে" চেক সাথে সাথেই এই নতুন প্রশ্নগুলো ধরে ফেলে।
       if(result.added>0) invalidate("Quiz");
