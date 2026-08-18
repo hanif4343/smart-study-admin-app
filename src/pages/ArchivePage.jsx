@@ -132,7 +132,7 @@ function ArchivePage({push,onSendToBulk}){
       item, subject:subjectName, subtopic:topicName,
       qtype:effQtype, audienceTags:[], subjectId, topicId,
     }));
-    const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance});
+    const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance,source:"Archive_Resubmit"});
     if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
     setSubmittingId(null);
     const subjLabel=[...new Set(r.resolved.map(x=>x.subjectName))].join(", ");
