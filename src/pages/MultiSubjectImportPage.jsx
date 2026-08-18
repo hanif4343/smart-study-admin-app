@@ -757,7 +757,7 @@ function MultiSubjectImportPage({push}){
         subject:subjectName,subtopic:topicName,qtype:qType||"Written",audienceTags:[],
         subjectId,topicId,mainQpaper:item.mainQpaper,
       }));
-      const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance});
+      const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance,source:"Bulk_OCR"});
       totalAdded+=res.added||0; totalSkipped+=res.skipped||0;
       totalLinkedExisting+=res.examAppearancesLinkedToExisting||0;
       if(res.failedRows.length) totalFailed=totalFailed.concat(res.failedRows);
