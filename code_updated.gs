@@ -967,10 +967,27 @@ function doGet(e) {
     var targetId=(e.parameter.id||"").toString().trim();
     var content=(e.parameter.content||"");
     var ufAtC=uHdrNorm.indexOf("updatedat");
+    // ── 🆕 Added by / Edited by / Review — কে/কখন/কী বদলালো তার audit trail।
+    // editSource না পাঠালে ডিফল্ট "Admin App" (এখন পর্যন্ত updateField শুধু Admin
+    // App থেকেই কল হয়) — Main Smart Study App থেকে কোনোদিন এই একই endpoint
+    // কল হলে "Main App" পাঠালেই যথেষ্ট, বাকিটা এমনিই কাজ করবে। এডিট-কলামগুলো
+    // (edited_by/review) sheet-এ না থাকলে চুপচাপ স্কিপ হয়ে যাবে (ক্ষতি নেই),
+    // তাই বাকি সব এডিট আগের মতোই কাজ করবে যতক্ষণ না কলাম দুটো ম্যানুয়ালি
+    // Quiz/QBank/Study শিটে যোগ করা হচ্ছে। ──
+    var editSource=(e.parameter.editSource||"Admin App").toString().trim();
+    var editedByC=uHdrNorm.indexOf("editedby");
+    var reviewC=uHdrNorm.indexOf("review");
+    var reviewLabel=reviewLabelForField(fld);
     for(var ur=1;ur<uRows.length;ur++){
       if(uRows[ur][idC].toString().trim()===targetId){
         uSheet.getRange(ur+1,fldC+1).setValue(content);
         if(ufAtC!==-1) uSheet.getRange(ur+1,ufAtC+1).setValue(Date.now());
+        if(editedByC!==-1) uSheet.getRange(ur+1,editedByC+1).setValue(editSource+" - "+new Date().toLocaleString('bn-BD'));
+        if(reviewC!==-1 && reviewLabel){
+          var prevReview=(uRows[ur][reviewC]||"").toString().trim();
+          var nextReview=prevReview?(prevReview+", "+reviewLabel):reviewLabel;
+          uSheet.getRange(ur+1,reviewC+1).setValue(nextReview);
+        }
         syncToFirebase(shName,shName);
         // 🐛 ফিক্স (Admin App audit-এ পাওয়া): field নিজেই "topic_id" হলে
         // pre-write snapshot (uRows[ur][uTopicIdC]) ব্যবহার করলে *নতুন* topic_id
@@ -1145,6 +1162,21 @@ function doGet(e) {
      ও paginated question-fetch এর জন্য
   ══════════════════════════════════════════════════════════ */
 
+  // ── reviewLabelForField — কোন ফিল্ড এডিট হলে Review কলামে কোন লেবেল যোগ হবে
+  // তার ম্যাপিং। শুধু "মূল প্রশ্ন/উত্তর/option/ব্যাখ্যা/subject/topic" — এই ৬
+  // ক্যাটাগরির এডিটই ট্র্যাক করা হয় (technique/tags/timestamp-জাতীয় মেটাডেটা
+  // এডিটে Review কলাম ছোঁয়া হয় না, নাহলে অপ্রয়োজনীয় শব্দে ভরে যাবে)। ──
+  function reviewLabelForField(fld){
+    var f=(fld||"").toString().toLowerCase().trim();
+    if(f==="question") return "Question Reviewed";
+    if(f==="correct") return "Ans Reviewed";
+    if(f==="opt1"||f==="opt2"||f==="opt3"||f==="opt4"||f==="option1"||f==="option2"||f==="option3"||f==="option4") return "Option Reviewed";
+    if(f==="explanation") return "Explanation Reviewed";
+    if(f==="subject"||f==="subject_id"||f==="subjectid") return "Subject Reviewed";
+    if(f==="topic"||f==="sub_topic"||f==="subtopic"||f==="topic_id"||f==="topicid") return "Topic Reviewed";
+    return null;
+  }
+
   // ── REF_TABS: reference-টেবিলের নাম ও তাদের id-কলাম ──
   var REF_TABS = {
     subjects:     {sheet:"Subjects",     idCol:"subject_id",   nameCol:"subject_name"},
@@ -1153,6 +1185,82 @@ function doGet(e) {
     posts:        {sheet:"Posts",        idCol:"post_id",      nameCol:"post_name"},
     institutions: {sheet:"Institutions", idCol:"institution_id", nameCol:"institution_name"}
   };
+
+  // ── resolveOrCreateSubjectTopicId — যেসব automation-এ (যেমন QBank→Quiz
+  // converter) শুধু subject/topic-এর নাম আসে, কোনো id আসে না, সেখান থেকে সরাসরি
+  // id resolve/create করার জন্য। addReferenceItem-এর সাথে হুবহু একই ID-কনভেনশন
+  // মেনে চলে (Quiz→QZ_S, QBank→QB, Study→ST_S; topic সবসময় subject_id+"_T"+
+  // সিরিয়াল) — নাম মিলিয়ে (case/space-insensitive) বিদ্যমান subject/topic থাকলে
+  // সেটাই রিইউজ করে, না থাকলে নতুন তৈরি করে। batchCache দিলে (একই ব্যাচে বারবার
+  // sheet না পড়ে) in-memory-তেই নতুন তৈরি হওয়া entry গুলো cache থাকে। ──
+  function resolveOrCreateSubjectTopicId(sheetName, subjectName, topicName, batchCache){
+    subjectName=(subjectName||"").toString().trim();
+    topicName=(topicName||"").toString().trim();
+    if(!subjectName) return{subjectId:"",topicId:""};
+    var rstNorm=function(s){return (s||"").toString().trim().toLowerCase().replace(/\s+/g," ");};
+    var rstSs=SpreadsheetApp.getActiveSpreadsheet();
+    var cache=batchCache||{};
+
+    if(!cache._subjSh){
+      cache._subjSh=rstSs.getSheetByName("Subjects");
+      cache._subjData=cache._subjSh.getDataRange().getValues();
+      cache._subjHdr=cache._subjData[0];
+      cache._subjIdCol=cache._subjHdr.indexOf("subject_id");
+      cache._subjNameCol=cache._subjHdr.indexOf("subject_name");
+      cache._subjSheetCol=cache._subjHdr.indexOf("sheet");
+    }
+    if(!cache._topicSh){
+      cache._topicSh=rstSs.getSheetByName("Topics");
+      cache._topicData=cache._topicSh.getDataRange().getValues();
+      cache._topicHdr=cache._topicData[0];
+      cache._topicIdCol=cache._topicHdr.indexOf("topic_id");
+      cache._topicNameCol=cache._topicHdr.indexOf("topic_name");
+      cache._topicSubCol=cache._topicHdr.indexOf("subject_id");
+    }
+
+    var subjectId="";
+    for(var rs=1;rs<cache._subjData.length;rs++){
+      if(cache._subjData[rs][cache._subjSheetCol]===sheetName && rstNorm(cache._subjData[rs][cache._subjNameCol])===rstNorm(subjectName)){
+        subjectId=(cache._subjData[rs][cache._subjIdCol]||"").toString(); break;
+      }
+    }
+    if(!subjectId){
+      var rstPrefix=(sheetName==="Quiz"?"QZ_S":sheetName==="QBank"?"QB":"ST_S");
+      var rstMax=0;
+      for(var rs2=1;rs2<cache._subjData.length;rs2++){
+        var rsId=(cache._subjData[rs2][cache._subjIdCol]||"").toString();
+        if(rsId.indexOf(rstPrefix)===0){ var rsN=parseInt(rsId.substring(rstPrefix.length),10); if(!isNaN(rsN)&&rsN>rstMax) rstMax=rsN; }
+      }
+      subjectId=rstPrefix+(rstMax+1<10?"0"+(rstMax+1):(rstMax+1));
+      var rstNewSubjRow=new Array(cache._subjHdr.length).fill("");
+      rstNewSubjRow[cache._subjIdCol]=subjectId; rstNewSubjRow[cache._subjNameCol]=subjectName; rstNewSubjRow[cache._subjSheetCol]=sheetName;
+      cache._subjSh.appendRow(rstNewSubjRow);
+      cache._subjData.push(rstNewSubjRow); // in-memory cache-ও আপডেট, একই ব্যাচে আবার লাগলে সেভ হওয়া রো-ই রিইউজ হবে
+    }
+
+    if(!topicName) return{subjectId:subjectId,topicId:""};
+
+    var topicId="";
+    for(var rt=1;rt<cache._topicData.length;rt++){
+      if((cache._topicData[rt][cache._topicSubCol]||"").toString()===subjectId && rstNorm(cache._topicData[rt][cache._topicNameCol])===rstNorm(topicName)){
+        topicId=(cache._topicData[rt][cache._topicIdCol]||"").toString(); break;
+      }
+    }
+    if(!topicId){
+      var rstTPrefix=subjectId+"_T";
+      var rstTMax=0;
+      for(var rt2=1;rt2<cache._topicData.length;rt2++){
+        var rtId=(cache._topicData[rt2][cache._topicIdCol]||"").toString();
+        if(rtId.indexOf(rstTPrefix)===0){ var rtN=parseInt(rtId.substring(rstTPrefix.length),10); if(!isNaN(rtN)&&rtN>rstTMax) rstTMax=rtN; }
+      }
+      topicId=rstTPrefix+(rstTMax+1<10?"0"+(rstTMax+1):(rstTMax+1));
+      var rstNewTopicRow=new Array(cache._topicHdr.length).fill("");
+      rstNewTopicRow[cache._topicIdCol]=topicId; rstNewTopicRow[cache._topicNameCol]=topicName; rstNewTopicRow[cache._topicSubCol]=subjectId;
+      cache._topicSh.appendRow(rstNewTopicRow);
+      cache._topicData.push(rstNewTopicRow);
+    }
+    return{subjectId:subjectId,topicId:topicId};
+  }
 
   // ── getReferenceData — Subjects/Topics/Tags/Posts/Institutions
   // সবগুলো ছোট রেফারেন্স-টেবিল একবারে fetch করে (এগুলো ছোট বলেই বাল্ক-ফেচ
@@ -2380,12 +2488,48 @@ function doPost(e) {
     // এটা শুধু Sheet-এ লেখে, কখনো syncToFirebase() কল করে না — ইচ্ছাকৃতভাবে,
     // কারণ Firebase quota রিসেট না হওয়া পর্যন্ত এই ডেটা শুধু Sheet-এ staging হিসেবে থাকবে।
     if (params.type === "qbank_to_quiz_bulk") {
+      return withWriteLock(function(){
       var targetSheetName = params.targetSheet || "Quiz";
       var qcSh = ss.getSheetByName(targetSheetName);
       if (!qcSh) return json({ result: "error", error: "Sheet not found: " + targetSheetName });
 
+      // 🐛 ফিক্স: আগে এখানে rowData একটা ফিক্সড ১৬-এলিমেন্ট positional array ছিল
+      // (subject_id/topic_id/group_id ইত্যাদি কলাম যোগ হওয়ার আগের পুরনো কোড) — তাই
+      // subject_id/topic_id কখনো লেখাই হতো না (এই দুটো কলাম array-তে ছিলই না), আর
+      // Quiz শিটের আসল কলাম-অর্ডার এখন এই assume করা অর্ডারের সাথে না মেলায় বাকি
+      // ফিল্ডও ভুল কলামে বসে যাওয়ার ঝুঁকি ছিল। bulk_save_rows যেভাবে header-name
+      // মিলিয়ে row বসায়, এখানেও ঠিক সেই একই পদ্ধতি ব্যবহার করা হচ্ছে — কলাম যেই
+      // অর্ডারেই থাকুক, নাম মিলিয়ে সঠিক জায়গায় বসবে। ──
+      var qcData=qcSh.getDataRange().getValues();
+      var qcRawHdr=qcData.length?qcData[0]:[];
+      var qcKeyNorm=function(s){return (s||"").toString().toLowerCase().replace(/[^a-z0-9]/g,"");};
+      var qcColIdx={};
+      for(var qch=0; qch<qcRawHdr.length; qch++){ qcColIdx[qcKeyNorm(qcRawHdr[qch])]=qch; }
+      function qcBuildRow(fieldMap){
+        var arr=new Array(qcRawHdr.length).fill("");
+        for(var fk in fieldMap){ var ci=qcColIdx[qcKeyNorm(fk)]; if(ci!==undefined) arr[ci]=fieldMap[fk]; }
+        return arr;
+      }
+
+      // ── ID generation — bulk_save_rows-এর সাথে সামঞ্জস্যপূর্ণ (QZ-00001 স্টাইল),
+      // sheet স্ক্যান করেই max বের করা হয় (getNextId()-এর আলাদা script-property
+      // কাউন্টারের উপর নির্ভর না করে) — নাহলে দুটো ভিন্ন insert-path আলাদা কাউন্টার
+      // ব্যবহার করলে একই id দুইবার জেনারেট হয়ে যাওয়ার (collision) ঝুঁকি থাকে। ──
+      var qcPrefix=(targetSheetName==="Quiz"?"QZ-":targetSheetName==="QBank"?"QB-":targetSheetName==="Study"?"ST-":"");
+      var qcMaxNum=0;
+      var qcIdColIdx=qcColIdx["id"];
+      if(qcPrefix && qcIdColIdx!==undefined){
+        for(var qcr=1;qcr<qcData.length;qcr++){
+          var qcv=(qcData[qcr][qcIdColIdx]||"").toString();
+          if(qcv.indexOf(qcPrefix)===0){ var qcn=parseInt(qcv.substring(qcPrefix.length),10); if(!isNaN(qcn)&&qcn>qcMaxNum) qcMaxNum=qcn; }
+        }
+      }
+      var qcCurId=qcMaxNum;
+
       var rows = params.rows || [];
       var added = 0, skipped = 0, errors = [];
+      var qcRefCache={}; // এই ব্যাচের জন্য Subjects/Topics-এর in-memory cache (resolveOrCreateSubjectTopicId দেখো)
+      var qcNewRows=[];
 
       rows.forEach(function(r) {
         try {
@@ -2393,31 +2537,46 @@ function doPost(e) {
             skipped++;
             return;
           }
-          var newId = getNextId(targetSheetName);
-          var rowData = [
-            newId,
-            r.question || '',
-            r.opt1 || '', r.opt2 || '', r.opt3 || '', r.opt4 || '',
-            r.correct || '',
-            r.subject || '',
-            r.sub_topic || '',
-            r.explanation || '',
-            r.technique || '',
-            r.prevExam || '',              // QBank-এর মূল exam paper-এর নাম এখানে থাকবে
-            r.qType || 'MCQ',
-            r.timestamp || new Date().toLocaleString('bn-BD'),
-            r.audienceTags || 'Job',
-            Date.now(),
-            "NF"
-          ];
-          qcSh.appendRow(rowData);
+          var newId;
+          if(qcPrefix){ qcCurId++; newId=qcPrefix+(qcCurId<10000?("0000"+qcCurId).slice(-5):qcCurId); }
+          else { newId=getNextId(targetSheetName); }
+
+          // 🐛 ফিক্স: subject/topic-এর নাম দিয়ে id resolve/create করা হচ্ছে —
+          // আগে এই ধাপটাই ছিল না, তাই subject_id/topic_id সবসময় ফাঁকা থাকতো।
+          var refIds=resolveOrCreateSubjectTopicId(targetSheetName, r.subject||'', r.sub_topic||'', qcRefCache);
+
+          var rowArr=qcBuildRow({
+            "id": newId,
+            "question": r.question || '',
+            "option1": r.opt1 || '', "option2": r.opt2 || '', "option3": r.opt3 || '', "option4": r.opt4 || '',
+            "correct": r.correct || '',
+            "subject": r.subject || '',
+            "sub_topic": r.sub_topic || '',
+            "subject_id": refIds.subjectId,
+            "topic_id": refIds.topicId,
+            "explanation": r.explanation || '',
+            "technique": r.technique || '',
+            "previousexam": r.prevExam || '',       // QBank-এর মূল exam paper-এর নাম এখানে থাকবে
+            "questiontype": r.qType || 'MCQ',
+            "timestamp": r.timestamp || new Date().toLocaleString('bn-BD'),
+            "audiencetags": r.audienceTags || 'Job',
+            "updatedat": Date.now(),
+            "notfirebase": "NF",
+            "added_by": "Q2Q",
+          });
+          qcNewRows.push(rowArr);
           added++;
         } catch (rowErr) {
           errors.push({ q: (r.question || '').substring(0, 40), err: rowErr.toString() });
         }
       });
 
+      if(qcNewRows.length){
+        qcSh.getRange(qcSh.getLastRow()+1, 1, qcNewRows.length, qcRawHdr.length).setValues(qcNewRows);
+      }
+
       return json({ result: "success", added: added, skipped: skipped, errors: errors });
+      });
     }
 
     if(params.action==="getAI"||e.parameter.action==="getAI"){
@@ -2639,7 +2798,15 @@ function doPost(e) {
               // না দিলে ফাঁকা থাকবে (পরে Admin App-এর Reference ট্যাব দিয়ে ঠিক করা যাবে) ──
               "subjectid":row.subject_id||"", "topicid":row.topic_id||"",
               "groupid":row.group_id||"",
-              "subindex":row.sub_index||"", "audiencetagsids":row.audienceTagsIds||""
+              "subindex":row.sub_index||"", "audiencetagsids":row.audienceTagsIds||"",
+              // 🆕 Added by — কোন ফিচার এই প্রশ্ন যোগ করলো (Bulk_Text/Bulk_OCR/Single_OCR/
+              // Single_Text ইত্যাদি, ফ্রন্টএন্ড params.source দিয়ে পাঠায়)। row.editId থাকলে
+              // (মানে এটা নতুন ইনসার্ট না, বিদ্যমান রো-র উপর edit/resubmit — যেমন ArchivePage)
+              // params.source দিয়ে ওভাররাইট না করে, row নিজে যদি added_by পাঠায় সেটাই রাখা
+              // হচ্ছে, নাহলে ফাঁকা রেখে দেওয়া হচ্ছে (আগের মান অক্ষত রাখতে buildRowArray-এর
+              // সীমাবদ্ধতা — পুরো রো নতুন করে বসে, তাই edit-path-এ ক্লায়েন্টকেই আগের
+              // added_by ফেরত পাঠাতে হবে চাইলে)।
+              "added_by": row.added_by||(row.editId?"":(params.source||""))
             };
             var bLine=buildRowArray(bFieldMap);
             if(bTab==="Typing"){ /* Typing-এর সরল schema — শুধু id/language/content/updatedAt/NF দরকার, বাকি field map-এ থাকলেও ক্ষতি নেই কারণ কলাম না থাকলে ignore হয় */ }
