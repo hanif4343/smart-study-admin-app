@@ -180,8 +180,20 @@ function PublishTab({push}){
           <div style={{fontSize:12,color:C.muted}}>{publishStats.message}</div>
         ) : (
           <div style={{fontSize:13,color:C.text}}>
-            📚 <b>{publishStats.totalQuestions}</b>টি প্রশ্ন · <b>{publishStats.topicCount}</b>টি Topic
-            <div style={{fontSize:11,color:C.muted,marginTop:3}}>
+            <div style={{marginBottom:8}}>
+              📚 মোট <b>{publishStats.totalQuestions}</b>টি প্রশ্ন · <b>{publishStats.topicCount}</b>টি Topic
+            </div>
+            {publishStats.bySheet && ["Quiz","QBank","Study"].map(sheetName=>{
+              const s=publishStats.bySheet[sheetName];
+              if(!s) return null;
+              return(
+                <div key={sheetName} style={{display:"flex",justifyContent:"space-between",fontSize:12,padding:"4px 0",borderTop:`1px solid ${C.border}`}}>
+                  <span style={{color:C.muted}}>{sheetName}</span>
+                  <span>{s.questions}টি প্রশ্ন <span style={{color:C.muted}}>({s.topics}টি Topic)</span></span>
+                </div>
+              );
+            })}
+            <div style={{fontSize:11,color:C.muted,marginTop:8}}>
               manifest v{publishStats.version}{publishStats.publishedAt?` · সর্বশেষ ${new Date(publishStats.publishedAt).toLocaleString("bn-BD")}`:""}
             </div>
           </div>
