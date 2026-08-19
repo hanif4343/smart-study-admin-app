@@ -2150,10 +2150,22 @@ function doGet(e) {
       var gpsManifest = JSON.parse(gpsManifestGet.content);
       var gpsTopics = gpsManifest.topics || {};
       var gpsTotalQ = 0, gpsTopicCount = 0;
+      // ── প্রতিটা topic_id-এর prefix দিয়েই কোন Sheet-এর (Quiz/QBank/Study)
+      // বোঝা যায় — publishDirtyTopics-এ ঠিক এই একই prefix-detection ব্যবহার
+      // হয় (QZ→Quiz, QB→QBank, ST→Study), তাই এখানেও সামঞ্জস্যপূর্ণ রাখা হলো। ──
+      var gpsBySheet = {
+        Quiz:  {questions:0, topics:0},
+        QBank: {questions:0, topics:0},
+        Study: {questions:0, topics:0},
+      };
       for (var gpsT in gpsTopics) {
-        if (gpsTopics.hasOwnProperty(gpsT)) { gpsTotalQ += (gpsTopics[gpsT].count || 0); gpsTopicCount++; }
+        if (!gpsTopics.hasOwnProperty(gpsT)) continue;
+        var gpsCount = gpsTopics[gpsT].count || 0;
+        gpsTotalQ += gpsCount; gpsTopicCount++;
+        var gpsSheetName = gpsT.indexOf("QZ")===0 ? "Quiz" : gpsT.indexOf("QB")===0 ? "QBank" : gpsT.indexOf("ST")===0 ? "Study" : null;
+        if (gpsSheetName) { gpsBySheet[gpsSheetName].questions += gpsCount; gpsBySheet[gpsSheetName].topics++; }
       }
-      return json({status:"success",result:"success",totalQuestions:gpsTotalQ,topicCount:gpsTopicCount,version:gpsManifest.version||0,publishedAt:gpsManifest.publishedAt||null});
+      return json({status:"success",result:"success",totalQuestions:gpsTotalQ,topicCount:gpsTopicCount,bySheet:gpsBySheet,version:gpsManifest.version||0,publishedAt:gpsManifest.publishedAt||null});
     } catch (gpsErr) {
       return json({status:"error",result:"error",message:"manifest.json parse ব্যর্থ: "+gpsErr});
     }
