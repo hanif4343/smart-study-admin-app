@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { C } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
-import { fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty } from "../../core/sheetSave.js";
+import { fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions } from "../../core/sheetSave.js";
 
 const LS_LAST_PUBLISH = "cdn_last_publish_result"; // persistent status — localStorage-এ থাকে, অ্যাপ বন্ধ করলেও শেষ ফলাফল দেখা যায়
 
@@ -65,6 +65,36 @@ function PublishTab({push}){
     if(result.ok){
       push?.("success",`✅ ${result.markedCount}টা Topic dirty মার্ক হলো`,"এখন একাধিকবার Publish Now চাপলে ধীরে ধীরে সব CDN-এ উঠবে");
       refreshCount();
+    }
+  };
+
+  // ── Orphan প্রশ্ন — যাদের topic_id দেওয়া আছে কিন্তু Topics শিটে সেই id-ই
+  // নেই (পুরনো টপিক মুছে/rename হয়ে যাওয়ায় এতিম হয়ে গেছে)। "blank"
+  // (topic_id ফাঁকা) আলাদা — সেগুলো ভালো প্রশ্ন, Review ট্যাবে ক্যাটাগরাইজ
+  // হওয়ার অপেক্ষায়, এখানে ছোঁয়া হয় না। ──
+  const[orphanStats,setOrphanStats]=useState(null);
+  const[loadingOrphan,setLoadingOrphan]=useState(false);
+  const refreshOrphan=useCallback(async()=>{
+    if(!gasSecret) return;
+    setLoadingOrphan(true);
+    const s=await fetchOrphanStats({gasSecret});
+    setOrphanStats(s);
+    setLoadingOrphan(false);
+  },[gasSecret]);
+  useEffect(()=>{ refreshOrphan(); },[refreshOrphan]);
+
+  const totalOrphan=orphanStats?Object.values(orphanStats).reduce((s,v)=>s+(v.orphan||0),0):0;
+  const[deleteOrphanTarget,setDeleteOrphanTarget]=useState(null); // sheet name বা "all"
+  const[deletingOrphan,setDeletingOrphan]=useState(false);
+  const doDeleteOrphan=async()=>{
+    const target=deleteOrphanTarget;
+    setDeleteOrphanTarget(null);
+    setDeletingOrphan(true);
+    const result=await deleteOrphanQuestions({gasSecret,push,sheet:target==="all"?undefined:target});
+    setDeletingOrphan(false);
+    if(result.ok){
+      push?.("success",`🗑️ ${result.deletedCount}টা Orphan প্রশ্ন মুছে ফেলা হলো`,"");
+      refreshOrphan();
     }
   };
 
@@ -157,6 +187,64 @@ function PublishTab({push}){
           </div>
         )}
       </div>
+
+      {/* ── Orphan Questions — যেসব প্রশ্নের topic_id Topics শিটে অস্তিত্বই নেই ── */}
+      <div className="card" style={{marginBottom:12,border:totalOrphan>0?`1px solid ${C.warning}40`:undefined}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <div style={{fontSize:13,fontWeight:700}}>🧟 Orphan প্রশ্ন</div>
+          <button className="btn bg" style={{fontSize:11,padding:"4px 9px"}} onClick={refreshOrphan} disabled={loadingOrphan}>
+            {loadingOrphan?"⏳":"🔄"} রিফ্রেশ
+          </button>
+        </div>
+        {orphanStats===null ? (
+          <div style={{fontSize:12,color:C.muted}}>{loadingOrphan?"লোড হচ্ছে...":"এখনো চেক করা হয়নি"}</div>
+        ) : totalOrphan===0 ? (
+          <div style={{fontSize:13,color:C.success}}>✅ কোনো Orphan প্রশ্ন নেই</div>
+        ) : (
+          <>
+            <div style={{fontSize:11,color:C.muted,marginBottom:8,lineHeight:1.5}}>
+              এই প্রশ্নগুলোর topic_id দেওয়া আছে কিন্তু সেই টপিক Topics শিটে নেই (মুছে/rename হয়ে গেছে) — CDN publish-এ এগুলো নেওয়া যায় না। (ফাঁকা topic_id-এর প্রশ্ন এখানে দেখানো হয় না — সেগুলো Review ট্যাবে ঠিক করার জন্য।)
+            </div>
+            {["Quiz","QBank","Study"].map(sheetName=>{
+              const s=orphanStats[sheetName];
+              if(!s||!s.orphan) return null;
+              return(
+                <div key={sheetName} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderTop:`1px solid ${C.border}`}}>
+                  <span style={{fontSize:12,color:C.text}}>{sheetName}: <b style={{color:C.warning}}>{s.orphan}</b>টি</span>
+                  <button className="btn" style={{fontSize:10,padding:"4px 8px",background:`${C.warning}18`,color:C.warning}}
+                    disabled={deletingOrphan} onClick={()=>setDeleteOrphanTarget(sheetName)}>🗑️ মুছো</button>
+                </div>
+              );
+            })}
+            {totalOrphan>1 && (
+              <button className="btn" style={{width:"100%",justifyContent:"center",marginTop:8,fontSize:11,padding:"7px",background:C.warning,color:"#fff"}}
+                disabled={deletingOrphan} onClick={()=>setDeleteOrphanTarget("all")}>
+                {deletingOrphan?"⏳ মুছা হচ্ছে...":`🗑️ সবগুলো মুছো (${totalOrphan}টি)`}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+
+      {/* ── Orphan Delete Confirm ডায়ালগ ── */}
+      {deleteOrphanTarget && (
+        <div className="ovl">
+          <div className="modal">
+            <div className="mh"/>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>🗑️ Orphan প্রশ্ন মুছবে?</div>
+            <div style={{background:`${C.warning}12`,border:`1px solid ${C.warning}30`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
+              {deleteOrphanTarget==="all"
+                ? <>Quiz/QBank/Study — তিনটা শিটের সব orphan প্রশ্ন (মোট <b style={{color:C.text}}>{totalOrphan}টি</b>) মুছে যাবে।</>
+                : <><b style={{color:C.text}}>{deleteOrphanTarget}</b> শিটের <b style={{color:C.text}}>{orphanStats?.[deleteOrphanTarget]?.orphan||0}টি</b> orphan প্রশ্ন মুছে যাবে।</>
+              } এটা <b style={{color:C.text}}>ফিরিয়ে আনা যাবে না</b>। ফাঁকা topic_id-এর প্রশ্ন এতে ছোঁয়া হবে না।
+            </div>
+            <div style={{display:"flex",gap:7}}>
+              <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={()=>setDeleteOrphanTarget(null)}>বাতিল</button>
+              <button className="btn" style={{flex:2,justifyContent:"center",background:C.warning,color:"#fff"}} onClick={doDeleteOrphan}>🗑️ হ্যাঁ, মুছে ফেলো</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Pre-publish safety checklist ── */}
       {dirtyCount>0 && (
