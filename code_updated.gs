@@ -102,7 +102,12 @@ function markTopicsDirty(topicIdSet) {
    ══════════════════════════════════════════════════════════════════════════ */
 function withWriteLock(fn) {
   var lock = LockService.getScriptLock();
-  lock.waitLock(30000);
+  try {
+    lock.waitLock(30000);
+  } catch (lockErr) {
+    logError_("withWriteLock", "Lock timeout/failure: " + lockErr);
+    throw lockErr; // আগের মতোই ছড়িয়ে যাবে, শুধু আগে একটা লগ থেকে যাচ্ছে
+  }
   try {
     return fn();
   } finally {
@@ -311,6 +316,7 @@ function doPublish_() {
           "Publish " + topicId + " (" + questions.length + " questions)", knownSha);
         if (!putResult.success) {
           results.errors.push(topicId + ": GitHub commit ব্যর্থ — " + putResult.error);
+          logError_("publishDirtyTopics/ghPutFile_", topicId + ": " + putResult.error);
           results.failed++;
           return;
         }
@@ -323,6 +329,7 @@ function doPublish_() {
 
       } catch (topicErr) {
         results.errors.push(topicId + ": " + topicErr);
+        logError_("publishDirtyTopics/topicErr", topicId + ": " + topicErr);
         results.failed++;
       }
     });
@@ -357,6 +364,7 @@ function doPublish_() {
     manifest.publishedAt = Date.now();
     var manifestPut = ghPutFile_(ghOwner, ghRepo, ghBranch, "manifest.json", JSON.stringify(manifest), ghToken, "Update manifest (v" + manifest.version + ")");
     if (!manifestPut.success) {
+      logError_("publishDirtyTopics/manifestCommit", "manifest.json commit ব্যর্থ: " + manifestPut.error + " (topics published: " + results.published + ")");
       return { status: "error", result: "error", message: "Topic ফাইল publish হলেও manifest.json commit ব্যর্থ: " + manifestPut.error, published: results.published, failed: results.failed };
     }
   }
@@ -405,13 +413,55 @@ function publishScheduled() {
 
 /* ── GitHub Contents API helpers (write path, GAS UrlFetchApp দিয়ে) ── */
 
+// ── logError_ — Logger.log() ব্রাউজার/এক্সিকিউশন বন্ধ হলেই হারিয়ে যায়, তাই
+// ক্রিটিক্যাল এরর (GitHub publish ব্যর্থতা, lock timeout ইত্যাদি) একটা
+// স্থায়ী "_SystemLogs" শিটে জমা রাখা হচ্ছে — sheet না থাকলে প্রথমবার কল হলেই
+// নিজে থেকে তৈরি হয়ে যায়। লগিং নিজেই ব্যর্থ হলেও (quota/permission ইত্যাদি)
+// চুপচাপ ignore হয় — মূল ফ্লো কখনো এই কারণে ভাঙবে না। ──
+function logError_(context, message) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sh = ss.getSheetByName("_SystemLogs");
+    if (!sh) {
+      sh = ss.insertSheet("_SystemLogs");
+      sh.appendRow(["timestamp", "context", "message"]);
+    }
+    sh.appendRow([new Date().toLocaleString('bn-BD'), context, (message||"").toString().substring(0, 500)]);
+  } catch (logErr) { /* logging ব্যর্থ হলেও মূল ফ্লো অক্ষত থাকবে */ }
+}
+
+// ── fetchWithRetry_ — GitHub API মাঝেমধ্যে rate-limit (403/429) বা সাময়িক
+// সার্ভার সমস্যা (502/503/504) দিতে পারে, যেটা সাথে সাথে আবার চেষ্টা করলেই
+// প্রায়ই ঠিক হয়ে যায়। শুধু এই transient কোডগুলোতেই retry হয় (১s, ২s, ৩s
+// ব্যাকঅফ) — 404 (ইচ্ছাকৃতভাবে "ফাইল নেই" বোঝাতে ব্যবহার হয়, ghGetFile_ দেখো)
+// বা অন্য client error (400/401/422) রিট্রাই করা হয় না, কারণ বারবার একই
+// ভুলই হবে। নেটওয়ার্ক এক্সসেপশন হলেও শেষ চেষ্টায় ব্যর্থ হলে exception-ই
+// ছড়িয়ে যায় (কল করা কোড আগের মতোই catch করে)। ──
+function fetchWithRetry_(url, options, maxRetries) {
+  var retries = maxRetries || 3;
+  var lastResp = null;
+  for (var i = 0; i < retries; i++) {
+    try {
+      var resp = UrlFetchApp.fetch(url, options);
+      var code = resp.getResponseCode();
+      if (code < 400 || code === 404) return resp;
+      if ([403, 429, 502, 503, 504].indexOf(code) === -1) return resp; // অন্য client error রিট্রাই করে লাভ নেই
+      lastResp = resp;
+    } catch (e) {
+      if (i === retries - 1) throw e;
+    }
+    if (i < retries - 1) Utilities.sleep(1000 * (i + 1));
+  }
+  return lastResp;
+}
+
 function sheetLowerName_(sheetName) {
   return sheetName === "Quiz" ? "quiz" : sheetName === "QBank" ? "qbank" : sheetName === "Study" ? "study" : sheetName.toLowerCase();
 }
 
 function ghGetFile_(owner, repo, branch, path, token) {
   var url = "https://api.github.com/repos/" + owner + "/" + repo + "/contents/" + path + "?ref=" + branch;
-  var resp = UrlFetchApp.fetch(url, {
+  var resp = fetchWithRetry_(url, {
     method: "get",
     headers: {
       "Authorization": "Bearer " + token,
@@ -446,7 +496,7 @@ function ghPutFile_(owner, repo, branch, path, contentStr, token, message, known
   };
   if (sha) payload.sha = sha;
 
-  var resp = UrlFetchApp.fetch(url, {
+  var resp = fetchWithRetry_(url, {
     method: "put",
     contentType: "application/json",
     headers: {
@@ -472,7 +522,7 @@ function ghDeleteFile_(owner, repo, branch, path, token, knownSha) {
     return { success: true }; // knownSha explicitly null/falsy — tree-তেই ছিল না, মানে আগে থেকেই নেই
   }
   var url = "https://api.github.com/repos/" + owner + "/" + repo + "/contents/" + path;
-  var resp = UrlFetchApp.fetch(url, {
+  var resp = fetchWithRetry_(url, {
     method: "delete",
     contentType: "application/json",
     headers: {
@@ -492,7 +542,7 @@ function ghDeleteFile_(owner, repo, branch, path, token, knownSha) {
  *  স্বয়ংক্রিয়ভাবে fallback করে (ghPutFile_-এ knownSha=undefined মানেই সেটা)। */
 function ghGetTree_(owner, repo, branch, token) {
   var url = "https://api.github.com/repos/" + owner + "/" + repo + "/git/trees/" + branch + "?recursive=1";
-  var resp = UrlFetchApp.fetch(url, {
+  var resp = fetchWithRetry_(url, {
     method: "get",
     headers: {
       "Authorization": "Bearer " + token,
@@ -2076,6 +2126,37 @@ function doGet(e) {
       gdcCount = Object.keys(gdcUniq).length;
     }
     return json({status:"success",result:"success",dirtyCount:gdcCount});
+  }
+
+  // ── getPublishStats — CDN-এ এই মুহূর্তে বাস্তবে কতগুলো প্রশ্ন/টপিক আছে তা
+  // দেখানোর জন্য (read-only) — সর্বশেষ publish-এর manifest.json সরাসরি
+  // GitHub থেকে পড়ে গুনে ফেরত দেয়, কোনো নতুন publish ট্রিগার করে না। এটাই
+  // "real-time" যতটা সম্ভব হতে পারে (CDN আসলে যা আছে ঠিক তাই দেখাবে, dirty
+  // থাকা টপিকগুলো এখনো এই সংখ্যায় যোগ হবে না যতক্ষণ না পরের Publish হয়)। ──
+  if (action==="getPublishStats") {
+    var gpsProps = PropertiesService.getScriptProperties();
+    var gpsOwner = gpsProps.getProperty("GH_OWNER");
+    var gpsRepo = gpsProps.getProperty("GH_REPO");
+    var gpsBranch = gpsProps.getProperty("GH_BRANCH") || "main";
+    var gpsToken = gpsProps.getProperty("GITHUB_WRITE_TOKEN");
+    if (!gpsOwner || !gpsRepo || !gpsToken) {
+      return json({status:"error",result:"error",message:"GitHub config (GH_OWNER/GH_REPO/GITHUB_WRITE_TOKEN) সেট করা নেই"});
+    }
+    var gpsManifestGet = ghGetFile_(gpsOwner, gpsRepo, gpsBranch, "manifest.json", gpsToken);
+    if (!gpsManifestGet.exists) {
+      return json({status:"success",result:"success",totalQuestions:0,topicCount:0,version:0,publishedAt:null,message:"এখনো কখনো Publish হয়নি"});
+    }
+    try {
+      var gpsManifest = JSON.parse(gpsManifestGet.content);
+      var gpsTopics = gpsManifest.topics || {};
+      var gpsTotalQ = 0, gpsTopicCount = 0;
+      for (var gpsT in gpsTopics) {
+        if (gpsTopics.hasOwnProperty(gpsT)) { gpsTotalQ += (gpsTopics[gpsT].count || 0); gpsTopicCount++; }
+      }
+      return json({status:"success",result:"success",totalQuestions:gpsTotalQ,topicCount:gpsTopicCount,version:gpsManifest.version||0,publishedAt:gpsManifest.publishedAt||null});
+    } catch (gpsErr) {
+      return json({status:"error",result:"error",message:"manifest.json parse ব্যর্থ: "+gpsErr});
+    }
   }
 
   // ── markAllTopicsDirty — "ধাপ ৮: পুরোটা স্কেল করা"-এর জন্য। Phase ১ deploy
