@@ -280,4 +280,39 @@ async function deleteExamAppearance({appearanceId,gasSecret,push}){
   }catch(e){ push?.("error","❌ Appearance মুছতে ব্যর্থ",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance };
+/* ══════════ CDN Publish (GitHub CDN Plan — দেখো GAS_CDN_PLANNING.md) ══════════
+   "_DirtyTopics" শিটে জমে থাকা dirty-topic-গুলোই publish হয় — updateField/
+   deleteByIds/moveQuestions/moveTopic/renameField/renameReferenceItem/
+   deleteByReferenceId/bulk_save_rows — এই সব action GAS-সাইডে নিজে থেকেই dirty
+   মার্ক করে, আলাদা করে ক্লায়েন্ট থেকে কিছু পাঠাতে হয় না। ── */
+
+/* কতগুলো Topic publish-এর অপেক্ষায় আছে (Publish বাটনের ওপরে দেখানোর জন্য,
+   read-only, দ্রুত) */
+async function fetchDirtyTopicsCount({gasSecret}){
+  if(!GAS||!gasSecret) return null;
+  try{
+    const url=`${GAS}?action=getDirtyTopicsCount&secret=${encodeURIComponent(gasSecret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status!=="success") return null;
+    return data.dirtyCount ?? 0;
+  }catch(_){ return null; }
+}
+
+/* আসল Publish — dirty topic-গুলো GitHub-এ commit করে manifest.json আপডেট করে।
+   dirty topic বেশি হলে (bulk move-এর পরে) কয়েক সেকেন্ড-১/২ মিনিট লাগতে পারে,
+   তাই timeout বাড়িয়ে রাখা হলো (fetch-এর ডিফল্ট timeout নেই, কিন্তু browser-এর
+   নিজস্ব limit থাকতে পারে — সাধারণত যথেষ্ট বড়)। */
+async function publishNow({gasSecret,push}){
+  if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{ok:false}; }
+  if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","উপরে Secret Key বসাও"); return{ok:false}; }
+  try{
+    const url=`${GAS}?action=publishNow&secret=${encodeURIComponent(gasSecret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status==="error"){ push?.("error","❌ Publish ব্যর্থ",data.message||"অজানা error"); return{ok:false,...data}; }
+    return{ok:true,...data}; // {status, published, failed, errors, totalQuestions, manifestVersion, sanityWarning}
+  }catch(e){ push?.("error","❌ Publish ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow };
