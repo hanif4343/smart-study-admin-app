@@ -315,4 +315,34 @@ async function publishNow({gasSecret,push}){
   }catch(e){ push?.("error","❌ Publish ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow };
+/* CDN-এ এই মুহূর্তে বাস্তবে কতগুলো প্রশ্ন/টপিক আছে (read-only, কোনো নতুন
+   Publish ট্রিগার করে না — সরাসরি GitHub-এর manifest.json পড়ে গোনে) */
+async function fetchPublishStats({gasSecret}){
+  if(!GAS||!gasSecret) return null;
+  try{
+    const url=`${GAS}?action=getPublishStats&secret=${encodeURIComponent(gasSecret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status!=="success") return null;
+    return data; // {totalQuestions, topicCount, version, publishedAt}
+  }catch(_){ return null; }
+}
+
+/* "ধাপ ৮" — Phase ১ deploy হওয়ার আগে থেকে থাকা সব পুরনো প্রশ্ন (যেগুলো
+   কখনো dirty মার্ক হয়নি, তাই এখনো CDN-এ যায়নি) একসাথে dirty মার্ক করে দেয়।
+   এটার পর একাধিকবার "Publish Now" চাপলে (৪০০-এর cap থাকায়) ধীরে ধীরে পুরো
+   প্রশ্নব্যাংক প্রথমবার সম্পূর্ণভাবে CDN-এ উঠে যাবে। এক-কালীন কাজ — সাবধানে
+   ব্যবহার করা উচিত (হুট করে অনেক Topic dirty হয়ে যাবে)। */
+async function markAllTopicsDirty({gasSecret,push}){
+  if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই",""); return{ok:false}; }
+  if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও",""); return{ok:false}; }
+  try{
+    const url=`${GAS}?action=markAllTopicsDirty&secret=${encodeURIComponent(gasSecret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status==="error"){ push?.("error","❌ ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    return{ok:true,markedCount:data.markedCount||0};
+  }catch(e){ push?.("error","❌ ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty };
