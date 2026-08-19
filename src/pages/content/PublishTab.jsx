@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { C } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
-import { fetchDirtyTopicsCount, publishNow } from "../../core/sheetSave.js";
+import { fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty } from "../../core/sheetSave.js";
 
 const LS_LAST_PUBLISH = "cdn_last_publish_result"; // persistent status — localStorage-এ থাকে, অ্যাপ বন্ধ করলেও শেষ ফলাফল দেখা যায়
 
@@ -39,6 +39,34 @@ function PublishTab({push}){
   const[lastResult,setLastResult]=useState(loadLastPublish);
   const[confirmOpen,setConfirmOpen]=useState(false);
   const[checked,setChecked]=useState(()=>CHECKLIST_ITEMS.map(()=>false));
+
+  // ── CDN-এ বাস্তবে এখন কতগুলো প্রশ্ন আছে (read-only, সরাসরি manifest.json
+  // থেকে) — Publish না করলেও দেখা যায়, dirty count-এর পাশে আলাদা কার্ডে ──
+  const[publishStats,setPublishStats]=useState(null);
+  const[loadingStats,setLoadingStats]=useState(false);
+  const refreshStats=useCallback(async()=>{
+    if(!gasSecret) return;
+    setLoadingStats(true);
+    const s=await fetchPublishStats({gasSecret});
+    setPublishStats(s);
+    setLoadingStats(false);
+  },[gasSecret]);
+  useEffect(()=>{ refreshStats(); },[refreshStats]);
+
+  // ── "সব Topic Dirty মার্ক করো" — Phase ১-এর আগের পুরনো প্রশ্নগুলো একবারে
+  // CDN-এ তোলার জন্য (এক-কালীন, সাবধানে ব্যবহারের জন্য আলাদা confirm) ──
+  const[markAllOpen,setMarkAllOpen]=useState(false);
+  const[markingAll,setMarkingAll]=useState(false);
+  const doMarkAllDirty=async()=>{
+    setMarkAllOpen(false);
+    setMarkingAll(true);
+    const result=await markAllTopicsDirty({gasSecret,push});
+    setMarkingAll(false);
+    if(result.ok){
+      push?.("success",`✅ ${result.markedCount}টা Topic dirty মার্ক হলো`,"এখন একাধিকবার Publish Now চাপলে ধীরে ধীরে সব CDN-এ উঠবে");
+      refreshCount();
+    }
+  };
 
   const refreshCount=useCallback(async()=>{
     if(!gasSecret) return;
@@ -72,6 +100,7 @@ function PublishTab({push}){
       if(result.sanityWarning) push?.("warn","⚠️ Sanity-check সতর্কতা",result.sanityWarning);
     }
     refreshCount();
+    refreshStats();
     setChecked(CHECKLIST_ITEMS.map(()=>false)); // পরের বারের জন্য চেকলিস্ট রিসেট
   };
 
@@ -107,6 +136,28 @@ function PublishTab({push}){
         )}
       </div>
 
+      {/* ── CDN-এ এখন বাস্তবে কতটা আছে (read-only, manifest.json থেকে সরাসরি) ── */}
+      <div className="card" style={{marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <div style={{fontSize:13,fontWeight:700}}>🌐 CDN-এ এখন যা আছে</div>
+          <button className="btn bg" style={{fontSize:11,padding:"4px 9px"}} onClick={refreshStats} disabled={loadingStats}>
+            {loadingStats?"⏳":"🔄"} রিফ্রেশ
+          </button>
+        </div>
+        {publishStats===null ? (
+          <div style={{fontSize:12,color:C.muted}}>{loadingStats?"লোড হচ্ছে...":"এখনো চেক করা হয়নি"}</div>
+        ) : publishStats.message ? (
+          <div style={{fontSize:12,color:C.muted}}>{publishStats.message}</div>
+        ) : (
+          <div style={{fontSize:13,color:C.text}}>
+            📚 <b>{publishStats.totalQuestions}</b>টি প্রশ্ন · <b>{publishStats.topicCount}</b>টি Topic
+            <div style={{fontSize:11,color:C.muted,marginTop:3}}>
+              manifest v{publishStats.version}{publishStats.publishedAt?` · সর্বশেষ ${new Date(publishStats.publishedAt).toLocaleString("bn-BD")}`:""}
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* ── Pre-publish safety checklist ── */}
       {dirtyCount>0 && (
         <div className="card" style={{marginBottom:12,border:`1px solid ${C.warning}40`}}>
@@ -137,6 +188,40 @@ function PublishTab({push}){
       </button>
       {dirtyCount>0 && !allChecked && (
         <div style={{fontSize:11,color:C.muted,textAlign:"center",marginTop:6}}>উপরের সবগুলো চেক করলে বাটন চালু হবে</div>
+      )}
+
+      {/* ── Advanced/এক-কালীন কাজ — আলাদাভাবে দেখানো, যাতে মূল Publish বাটনের
+          সাথে গুলিয়ে না যায় (হুট করে সব Topic dirty হয়ে যাওয়া সাধারণ কাজ না) ── */}
+      <div style={{marginTop:20,paddingTop:16,borderTop:`1px dashed ${C.border}`}}>
+        <div style={{fontSize:11,color:C.muted,marginBottom:8}}>⚙️ অ্যাডভান্সড — সাধারণত লাগে না</div>
+        <button
+          className="btn bg"
+          style={{width:"100%",justifyContent:"center",padding:"9px",fontSize:12}}
+          disabled={!gasSecret || markingAll}
+          onClick={()=>setMarkAllOpen(true)}
+        >
+          {markingAll ? "⏳ মার্ক হচ্ছে..." : "🔄 সব Topic Dirty মার্ক করো"}
+        </button>
+        <div style={{fontSize:10,color:C.muted,marginTop:5,lineHeight:1.5}}>
+          শুধু তখনই দরকার যখন পুরনো (Publish Pipeline চালু হওয়ার আগের) সব প্রশ্ন প্রথমবার CDN-এ তুলতে চাও — একবার মার্ক করলে এরপর একাধিকবার "Publish Now" চেপে ধীরে ধীরে সব উঠবে।
+        </div>
+      </div>
+
+      {/* ── Mark All Dirty Confirm ডায়ালগ ── */}
+      {markAllOpen && (
+        <div className="ovl">
+          <div className="modal">
+            <div className="mh"/>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>🔄 সব Topic Dirty মার্ক করবে?</div>
+            <div style={{background:`${C.warning}12`,border:`1px solid ${C.warning}30`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
+              এতে <b style={{color:C.text}}>প্রতিটা</b> Topic dirty মার্ক হয়ে যাবে (নতুন বা পুরনো, সব)। এটা এক-কালীন কাজ, শুধু প্রথমবার পুরো ডেটাবেজ CDN-এ তোলার জন্য। এরপর ৪০০-এর cap থাকায় একাধিকবার Publish Now চাপতে হবে সব শেষ হতে।
+            </div>
+            <div style={{display:"flex",gap:7}}>
+              <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={()=>setMarkAllOpen(false)}>বাতিল</button>
+              <button className="btn" style={{flex:2,justifyContent:"center",background:C.warning,color:"#fff"}} onClick={doMarkAllDirty}>🔄 হ্যাঁ, সব মার্ক করো</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* ── Confirm ডায়ালগ ── */}
