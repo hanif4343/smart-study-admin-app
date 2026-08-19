@@ -28,9 +28,6 @@ const CONTENT_TOOL_SECTIONS=[
     {page:"qtype",       icon:"🏷️",label:"QType",       desc:"বাল্ক প্রশ্নের ধরন বদলান"},
     {page:"modeltest",   icon:"🧪",label:"Model Test",   desc:"মডেল টেস্ট জেনারেট করুন"},
   ]},
-  {key:"cdn",title:"🚀 CDN Publish",color:C.ai,items:[
-    {page:"publish", icon:"🚀",label:"Publish Now", desc:"পরিবর্তিত Topic-গুলো CDN-এ প্রকাশ করুন"},
-  ]},
   {key:"danger",title:"⚠️ বিপজ্জনক",color:C.danger,items:[
     {page:"delete", icon:"🗑️",label:"Delete", desc:"বাল্ক কনটেন্ট ডিলিট — সতর্কভাবে ব্যবহার করুন"},
   ]},
@@ -42,16 +39,23 @@ const TOOL_LABELS={
   audience:{icon:"🎯",label:"Audience"},
   qtype:{icon:"🏷️",label:"QType"},
   modeltest:{icon:"🧪",label:"Model Test"},
-  publish:{icon:"🚀",label:"Publish Now"},
   delete:{icon:"🗑️",label:"Delete"},
 };
 
 function ContentManagerPage({push,tick,pushLayer}){
-  const[tab,setTab]=useState("browse"); // "browse" | "tools" | rename/reference/appearances/audience/qtype/modeltest/delete
+  const[tab,setTab]=useState("browse"); // "browse" | "tools" | "cdn" | rename/reference/appearances/audience/qtype/modeltest/delete
 
   /* Browse → Tools: layer push করা হয় যাতে Android system-back চাপলে সরাসরি Browse-এ ফিরে যায় */
   const goTools=useCallback(()=>{
     setTab("tools");
+    if(pushLayer){ const pop=pushLayer(()=>setTab("browse")); return pop; }
+  },[pushLayer]);
+
+  /* Browse → CDN: এটাও Tools-এর মতোই top-level, কিন্তু সরাসরি নিজের বাটন থেকে
+     — Publish/Dirty-count/Orphan-count রোজকার কাজ, Tools-এর গ্রিডের ভিতরে
+     ঢুকে খুঁজে বের করতে হবে না */
+  const goCdn=useCallback(()=>{
+    setTab("cdn");
     if(pushLayer){ const pop=pushLayer(()=>setTab("browse")); return pop; }
   },[pushLayer]);
 
@@ -67,10 +71,21 @@ function ContentManagerPage({push,tick,pushLayer}){
 
       {tab==="browse"&&(
         <>
-          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginBottom:12}}>
+            <button className="tools-btn" onClick={goCdn}>🚀 CDN</button>
             <button className="tools-btn" onClick={goTools}>🧰 Tools</button>
           </div>
           <BrowseTab push={push} tick={tick}/>
+        </>
+      )}
+
+      {tab==="cdn"&&(
+        <>
+          <div className="sub-head">
+            <button className="icon-btn" onClick={()=>setTab("browse")}>←</button>
+            <div className="sub-head-title">🚀 CDN Publish</div>
+          </div>
+          <PublishTab push={push}/>
         </>
       )}
 
@@ -96,7 +111,6 @@ function ContentManagerPage({push,tick,pushLayer}){
           {tab==="audience"    && <AudienceTagRenameTab push={push} tick={tick}/>}
           {tab==="qtype"       && <BulkQTypeTab push={push} tick={tick}/>}
           {tab==="modeltest"   && <ModelTestTab push={push} tick={tick}/>}
-          {tab==="publish"     && <PublishTab push={push}/>}
           {tab==="delete"      && <DeleteTab push={push} tick={tick}/>}
         </>
       )}
