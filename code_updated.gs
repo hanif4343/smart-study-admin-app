@@ -2223,6 +2223,57 @@ function doGet(e) {
     return json({status:"success",result:"success",bySheet:coqResult});
   }
 
+  // ── deleteOrphanQuestions — countOrphanQuestions যা গোনে তার মধ্যে **শুধু
+  // "orphan"** ক্যাটাগরি (topic_id দেওয়া আছে কিন্তু সেই topic_id Topics
+  // reference-শিটে অস্তিত্বই নেই — পুরনো টপিক মুছে/rename হয়ে যাওয়ায় প্রশ্নটা
+  // "এতিম" হয়ে গেছে) — এটাই একমাত্র জিনিস এখানে মোছা হয়। ⚠️ "blank"
+  // ক্যাটাগরি (topic_id একদম ফাঁকা) ইচ্ছাকৃতভাবে **কখনো মোছা হয় না** — এগুলো
+  // আসল প্রশ্ন, শুধু এখনো Subject/Topic বসানো বাকি (Admin App-এর Review ট্যাবে
+  // এগুলোই ঠিক করা হয়) — bulk delete করলে ভালো প্রশ্ন হারিয়ে যাবে। sheet
+  // param না দিলে Quiz/QBank/Study তিনটাতেই চালানো হয়। withWriteLock-এর
+  // ভিতরে, প্রতিটা সফল ডিলিটের পর _SystemLogs-এ এন্ট্রি থাকে (audit trail,
+  // destructive action বলে)। ──
+  if (action==="deleteOrphanQuestions") {
+    return withWriteLock(function(){
+      var doqSs = SpreadsheetApp.getActiveSpreadsheet();
+      var doqTopicsSh = doqSs.getSheetByName("Topics");
+      var doqValidIds = {};
+      if (doqTopicsSh) {
+        var doqTData = doqTopicsSh.getDataRange().getValues(), doqTHdr = doqTData[0];
+        var doqTIdCol = doqTHdr.indexOf("topic_id");
+        if (doqTIdCol >= 0) {
+          for (var dt=1; dt<doqTData.length; dt++) {
+            var dtid = (doqTData[dt][doqTIdCol]||"").toString();
+            if (dtid) doqValidIds[dtid] = 1;
+          }
+        }
+      }
+      var doqSheets = e.parameter.sheet ? [e.parameter.sheet] : ["Quiz","QBank","Study"];
+      var doqTotalDeleted = 0;
+      var doqBySheet = {};
+      doqSheets.forEach(function(sheetName){
+        var sh = doqSs.getSheetByName(sheetName);
+        if (!sh) { doqBySheet[sheetName]=0; return; }
+        var data = sh.getDataRange().getValues(), hdr = data[0];
+        var topicIdCol = hdr.indexOf("topic_id");
+        if (topicIdCol < 0) { doqBySheet[sheetName]=0; return; }
+        var deleted = 0;
+        // নিচ থেকে উপরে ডিলিট — নাহলে deleteRow-এর পর বাকি রো-গুলোর index শিফট হয়ে যাবে
+        for (var r=data.length-1; r>=1; r--) {
+          var tid = (data[r][topicIdCol]||"").toString();
+          if (tid && !doqValidIds[tid]) {
+            sh.deleteRow(r+1);
+            deleted++;
+          }
+        }
+        doqBySheet[sheetName]=deleted;
+        doqTotalDeleted += deleted;
+      });
+      if (doqTotalDeleted>0) logError_("deleteOrphanQuestions", "Deleted "+doqTotalDeleted+" orphan rows: "+JSON.stringify(doqBySheet));
+      return json({status:"success",result:"success",deletedCount:doqTotalDeleted,bySheet:doqBySheet});
+    });
+  }
+
   // ── adminNotify ──
   if (action==="adminNotify") {
     var adminPhone=(cfg.ADMIN_PHONE||"").toString().replace(/^'+/,'').trim();
