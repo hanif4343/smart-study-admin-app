@@ -100,6 +100,20 @@ function markTopicsDirty(topicIdSet) {
    (getNextId()-এর ১৫ সেকেন্ডের চেয়ে একটু বেশি, কারণ moveQuestions/deleteByIds
    বড় sheet-এ কিছুটা সময় নিতে পারে)।
    ══════════════════════════════════════════════════════════════════════════ */
+// ── notifyAdminPublishFailure_ — Publish ব্যর্থ হলে ADMIN_PHONE-এ FCM push
+// পাঠায় (adminNotify action যেভাবে করে ঠিক সেই একই sendFCMToPhone_ ব্যবহার
+// করে) — এখন এই notification পাওয়ার জন্য Publish ট্যাব খুলে বসে থাকতে হবে
+// না, বিশেষ করে auto-scheduled publish (publishScheduled) ব্যর্থ হলে এটাই
+// একমাত্র সংকেত। notification পাঠানো ব্যর্থ হলেও (ADMIN_PHONE সেট নেই,
+// token নেই ইত্যাদি) মূল publish ফ্লো কখনো এর কারণে ভাঙবে না। ──
+function notifyAdminPublishFailure_(message) {
+  try {
+    var adminPhone = (PropertiesService.getScriptProperties().getProperty("ADMIN_PHONE")||"").toString().replace(/^'+/,'').trim();
+    if (!adminPhone) return;
+    sendFCMToPhone(adminPhone, "🚨 CDN Publish ব্যর্থ!", (message||"").toString().substring(0,150), {type:"publish_failed", url:"publish"});
+  } catch (notifyErr) { /* নোটিফিকেশন ব্যর্থ হলেও মূল publish ফ্লো অক্ষত থাকবে */ }
+}
+
 function withWriteLock(fn) {
   var lock = LockService.getScriptLock();
   try {
@@ -156,6 +170,7 @@ function publishDirtyTopics() {
     return doPublish_();
   } catch (pubErr) {
     Logger.log("publishDirtyTopics FATAL error: " + pubErr);
+    notifyAdminPublishFailure_("Publish crash (unexpected): " + pubErr);
     return { status: "error", result: "error", message: "Publish ব্যর্থ (unexpected): " + pubErr };
   } finally {
     props.deleteProperty("isPublishing");
@@ -335,6 +350,10 @@ function doPublish_() {
     });
   });
 
+  if (results.failed > 0) {
+    notifyAdminPublishFailure_(results.failed + "টা Topic publish হতে ব্যর্থ হয়েছে (মোট " + results.published + "টা সফল)। বিস্তারিত _SystemLogs শিটে।");
+  }
+
   // ── Reference ডেটা (Subjects/Topics তালিকা) — প্রতিবার publish-এ রিফ্রেশ,
   // এটা ছোট ডেটা বলে আলাদা dirty-tracking না করে সবসময় আপডেট করাই সহজ ──
   if (results.published > 0) {
@@ -365,6 +384,7 @@ function doPublish_() {
     var manifestPut = ghPutFile_(ghOwner, ghRepo, ghBranch, "manifest.json", JSON.stringify(manifest), ghToken, "Update manifest (v" + manifest.version + ")");
     if (!manifestPut.success) {
       logError_("publishDirtyTopics/manifestCommit", "manifest.json commit ব্যর্থ: " + manifestPut.error + " (topics published: " + results.published + ")");
+      notifyAdminPublishFailure_("manifest.json commit ব্যর্থ (topics published: " + results.published + "): " + manifestPut.error);
       return { status: "error", result: "error", message: "Topic ফাইল publish হলেও manifest.json commit ব্যর্থ: " + manifestPut.error, published: results.published, failed: results.failed };
     }
   }
