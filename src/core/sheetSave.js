@@ -345,4 +345,35 @@ async function markAllTopicsDirty({gasSecret,push}){
   }catch(e){ push?.("error","❌ ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty };
+/* Orphan প্রশ্ন — যাদের topic_id দেওয়া আছে কিন্তু সেই topic_id Topics
+   reference-শিটে নেই (পুরনো টপিক মুছে/rename হয়ে যাওয়ায় এতিম হয়ে গেছে)।
+   "blank" (topic_id একদম ফাঁকা) আলাদা, Review ট্যাবে ট্র্যাক হয়, এখানে ধরা
+   হয় না — সেগুলো ভালো প্রশ্ন, শুধু ক্যাটাগরাইজ করা বাকি। */
+async function fetchOrphanStats({gasSecret}){
+  if(!GAS||!gasSecret) return null;
+  try{
+    const url=`${GAS}?action=countOrphanQuestions&secret=${encodeURIComponent(gasSecret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status!=="success") return null;
+    return data.bySheet; // {Quiz:{total,blank,orphan,ok}, QBank:{...}, Study:{...}}
+  }catch(_){ return null; }
+}
+
+/* শুধু "orphan" ক্যাটাগরি (blank না) এক ক্লিকে মুছে দেয় — sheet না দিলে
+   Quiz/QBank/Study তিনটাতেই চলে। destructive, তাই caller-এর নিজের confirm
+   দরকার এটা কল করার আগে। */
+async function deleteOrphanQuestions({gasSecret,push,sheet}){
+  if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই",""); return{ok:false}; }
+  if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও",""); return{ok:false}; }
+  try{
+    let url=`${GAS}?action=deleteOrphanQuestions&secret=${encodeURIComponent(gasSecret)}`;
+    if(sheet) url+=`&sheet=${encodeURIComponent(sheet)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status==="error"){ push?.("error","❌ ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    return{ok:true,deletedCount:data.deletedCount||0,bySheet:data.bySheet||{}};
+  }catch(e){ push?.("error","❌ ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions };
