@@ -958,6 +958,182 @@ function syncNFRows(sheetName, folderName){
 /* ══════════════════════════════════════════════════════════
    doGet
 ══════════════════════════════════════════════════════════ */
+// ── runRebuildIndexCore — rebuildIndex action-এর আসল লজিক, রিইউজযোগ্য ফাংশনে
+// বের করে আনা হলো (আগে এটা শুধু action==="rebuildIndex" HTTP handler-এর ভিতরেই
+// ছিল, ম্যানুয়ালি কল করতে হতো)। এখন এই একই ফাংশন moveQuestions/moveTopic/
+// deleteByIds/deleteByReferenceId-এর শেষে automatic-ভাবেও কল হয় (নিচে দেখো),
+// আর installAutoReindexTrigger()-এর periodic safety-net trigger থেকেও। ──
+function runRebuildIndexCore() {
+  var ribResults={};
+  var ribSheets=[{name:"Quiz",prefix:"subject_id"},{name:"QBank",prefix:"subject_id"},{name:"Study",prefix:"subject_id"}];
+  var ribSs=SpreadsheetApp.getActiveSpreadsheet();
+  var ribTopicsSh=ribSs.getSheetByName("Topics");
+  var ribTopicsData=ribTopicsSh?ribTopicsSh.getDataRange().getValues():[];
+  var ribTopicsHdr=ribTopicsData[0]||[];
+  var ribNumTopicRows=Math.max(ribTopicsData.length-1,0); // header বাদে ডেটা-রো সংখ্যা
+
+  // ── FIX (bug: Quiz/Study-তে প্রশ্ন 0 দেখাতো যদিও QBank-এ ঠিক দেখাতো) ──
+  // আগে row_start/row_count Topics-এ মাত্র ১টা কলাম-জোড়া ছিল, আর নিচের লুপে
+  // একটাই shared ribIndexMap (শুধু topic_id দিয়ে key করা) Quiz→QBank→Study
+  // তিনটা শিট প্রসেস করতো। কোনো topic_id একাধিক শিটে (যেমন Quiz আর QBank দুটোতেই)
+  // থাকলে পরের শিট আগেরটার index চুপচাপ ওভাররাইট করে দিতো — ফলে Quiz browse
+  // করার সময় getQuestionsPage ভুল sheet-এর row-range Quiz ট্যাবে apply করতে
+  // যেতো (range Quiz ট্যাবের বাইরে পড়লে getRange() এরর দেয়, ক্লায়েন্টে সেটাই
+  // "কোনো প্রশ্ন পাওয়া যায়নি — ইন্টারনেট চেক করো" হয়ে দেখা যায়)।
+  // এখন প্রতিটা শিটের জন্য আলাদা row_start_<sheet>/row_count_<sheet> কলাম-জোড়া
+  // রাখা হচ্ছে, তাই কোনো ওভাররাইট হয় না — একই topic_id তিন শিটেই থাকলেও
+  // প্রতিটার নিজের সঠিক row-range নিজের কলামে থাকে। ──
+  var ribColPairs={}; // sheetName -> {rsCol, rcCol}
+  for (var rp=0;rp<ribSheets.length;rp++){
+    var ribPName=ribSheets[rp].name;
+    var ribRsColName="row_start_"+ribPName.toLowerCase();
+    var ribRcColName="row_count_"+ribPName.toLowerCase();
+    var ribRsC=ribTopicsHdr.indexOf(ribRsColName), ribRcC=ribTopicsHdr.indexOf(ribRcColName);
+    if (ribTopicsSh && ribRsC<0) { ribTopicsSh.getRange(1,ribTopicsHdr.length+1).setValue(ribRsColName); ribRsC=ribTopicsHdr.length; ribTopicsHdr.push(ribRsColName); }
+    if (ribTopicsSh && ribRcC<0) { ribTopicsSh.getRange(1,ribTopicsHdr.length+1).setValue(ribRcColName); ribRcC=ribTopicsHdr.length; ribTopicsHdr.push(ribRcColName); }
+    ribColPairs[ribPName]={rsCol:ribRsC,rcCol:ribRcC};
+  }
+  // ⚠️ legacy generic row_start/row_count কলাম থাকলেও রেখে দেওয়া হলো (পুরনো ক্লায়েন্ট/
+  // স্ক্রিপ্ট এখনো পড়তে পারে বলে), কিন্তু নতুন লজিক এখন এগুলোর ওপর নির্ভর করে না।
+  var ribLegacyRsCol=ribTopicsHdr.indexOf("row_start"), ribLegacyRcCol=ribTopicsHdr.indexOf("row_count");
+
+  // ── QUOTA/স্পিড ফিক্স ("অটোমেশনের জন্য লিমিট খাব না তো?"): আগে প্রতিটা Topic-রো,
+  // প্রতিটা কলামের জন্য আলাদা getRange().setValue() কল হতো — মানে টপিক-সংখ্যা × sheet ×
+  // কলাম-সংখ্যা যতগুলো, ততগুলো আলাদা Sheets API কল (কয়েকশো/হাজার টপিক থাকলে এটাই সবচেয়ে
+  // ধীর অংশ ছিল, GAS-এর ৬-মিনিট/এক্সিকিউশন লিমিটে ধাক্কা খাওয়ার ঝুঁকি তৈরি করতো)। এখন সব
+  // মান আগে মেমোরিতে (in-memory array) জমিয়ে শেষে কলাম-প্রতি মাত্র ১টা batch setValues()
+  // কল করা হয় — টপিক-সংখ্যা যতই হোক না কেন, মোট কল-সংখ্যা এখন ধ্রুবক (কয়েক-ডজন, sheet ও
+  // কলাম-সংখ্যার ওপর নির্ভর করে, টপিক-সংখ্যার ওপর না)। ──
+  var ribColBuffers={}; // colIndex -> array[ribNumTopicRows] of value (pre-filled "")
+  function ribGetBuffer(colIdx){
+    if (!ribColBuffers[colIdx]) {
+      var buf=new Array(ribNumTopicRows);
+      for (var bi=0;bi<ribNumTopicRows;bi++) buf[bi]="";
+      ribColBuffers[colIdx]=buf;
+    }
+    return ribColBuffers[colIdx];
+  }
+
+  for (var rs=0;rs<ribSheets.length;rs++) {
+    var ribShName=ribSheets[rs].name;
+    var ribSh=ribSs.getSheetByName(ribShName);
+    if (!ribSh || ribSh.getLastRow()<2) continue;
+    var ribRange=ribSh.getDataRange();
+    var ribData=ribRange.getValues();
+    var ribHdr=ribData[0];
+    var ribSubCol=ribHdr.indexOf("subject_id"), ribTopCol=ribHdr.indexOf("topic_id");
+    if (ribSubCol<0) { ribResults[ribShName]="subject_id column missing — skip"; continue; }
+    // sort by subject_id, topic_id (header বাদে)
+    var ribSortCols=[{column:ribSubCol+1,ascending:true}];
+    if (ribTopCol>=0) ribSortCols.push({column:ribTopCol+1,ascending:true});
+    ribSh.getRange(2,1,ribSh.getLastRow()-1,ribSh.getLastColumn()).sort(ribSortCols);
+    // re-read after sort, build contiguous ranges per topic_id — এই শিটের নিজস্ব ম্যাপে
+    var ribIndexMap={}; // topic_id -> {start,count} — শুধু এই sheet-এর জন্য, আলাদা প্রতিবার
+    var ribData2=ribSh.getDataRange().getValues();
+    var curTopic=null, curStart=2, curCount=0;
+    for (var i5=1;i5<ribData2.length;i5++){
+      var tId=ribTopCol>=0?(ribData2[i5][ribTopCol]||"").toString():"";
+      if (tId!==curTopic) {
+        if (curTopic) ribIndexMap[curTopic]={start:curStart,count:curCount};
+        curTopic=tId; curStart=i5+1; curCount=0;
+      }
+      curCount++;
+    }
+    if (curTopic) ribIndexMap[curTopic]={start:curStart,count:curCount};
+    ribResults[ribShName]="sorted, "+(ribData2.length-1)+" rows";
+
+    // এই শিটের row_start_<sheet>/row_count_<sheet> মান memory-buffer-এ বসাও (এখনো
+    // কোনো Sheets API কল না — সব শেষে একসাথে ফ্লাশ হবে)
+    if (ribTopicsSh) {
+      var ribPair=ribColPairs[ribShName];
+      var ribTIdCol=ribTopicsHdr.indexOf("topic_id");
+      var ribRsBuf=ribGetBuffer(ribPair.rsCol), ribRcBuf=ribGetBuffer(ribPair.rcCol);
+      var ribLegacyRsBuf=ribLegacyRsCol>=0?ribGetBuffer(ribLegacyRsCol):null;
+      var ribLegacyRcBuf=ribLegacyRcCol>=0?ribGetBuffer(ribLegacyRcCol):null;
+      for (var t2=1;t2<ribTopicsData.length;t2++){
+        var ribTid=(ribTopicsData[t2][ribTIdCol]||"").toString();
+        var ribEntry=ribIndexMap[ribTid];
+        var bufIdx=t2-1;
+        if (ribEntry) {
+          ribRsBuf[bufIdx]=ribEntry.start;
+          ribRcBuf[bufIdx]=ribEntry.count;
+          // legacy কলাম থাকলে সর্বশেষ প্রসেস হওয়া শিট দিয়ে রেফারেন্সের জন্য আপডেট (backward-compat only)
+          if (ribLegacyRsBuf) ribLegacyRsBuf[bufIdx]=ribEntry.start;
+          if (ribLegacyRcBuf) ribLegacyRcBuf[bufIdx]=ribEntry.count;
+        } else {
+          // এই sheet-এ এই topic_id-এর কোনো রো নেই — "" রাখা হলো (ribGetBuffer-এর ডিফল্ট),
+          // নইলে পুরনো row_start_quiz স্টেল/ভুল range নিয়ে fast-path ভুলভাবে ট্রিগার হতে পারে
+          ribRsBuf[bufIdx]=""; ribRcBuf[bufIdx]="";
+        }
+      }
+    }
+  }
+
+  // ── একদম শেষে — কলাম-প্রতি মাত্র ১টা batch write (ধ্রুবক সংখ্যক API কল) ──
+  if (ribTopicsSh && ribNumTopicRows>0) {
+    Object.keys(ribColBuffers).forEach(function(colIdxStr){
+      var colIdx=parseInt(colIdxStr,10);
+      var buf=ribColBuffers[colIdx];
+      ribTopicsSh.getRange(2,colIdx+1,ribNumTopicRows,1).setValues(buf.map(function(v){return [v];}));
+    });
+  }
+  return ribResults;
+}
+
+// ── AUTO-REINDEX — QUOTA-নিরাপদ ডিজাইন ("অটোমেশনের জন্য লিমিট খাব না তো?") ──
+// moveQuestions/moveTopic/deleteByIds/deleteByReferenceId — প্রথমে এই ৪টা action
+// প্রতিটার শেষেই সরাসরি runRebuildIndexCore() (ভারী, পুরো ৩-শিট সর্ট) সিঙ্ক্রোনাসলি
+// কল করতো। সমস্যা: admin একই সেশনে বারবার move করলে প্রতিবারই এই ভারী কাজ পুরো
+// শেষ না হওয়া পর্যন্ত move/delete-এর রেসপন্সই আটকে থাকতো (ধীর UX), আর বড়
+// ডেটাসেটে GAS-এর প্রতি-এক্সিকিউশন ৬-মিনিট লিমিটে ধাক্কা খাওয়ার ঝুঁকি ছিল।
+//
+// এখন সেই ৪টা action শুধু markReindexNeeded_() কল করে — এটা PropertiesService-এ
+// একটা "dirty" ফ্ল্যাগ বসায়, নিজে কোনো ভারী কাজ করে না (এক-মিলিসেকেন্ডের কম) —
+// তাই move/delete-এর রেসপন্স সাথে সাথেই ফেরত যায়, কোনো অপেক্ষা নেই।
+//
+// আসল ভারী কাজ (runRebuildIndexCore, batch-write করা, দেখো ওপরের কমেন্ট) শুধু
+// পর্যায়ক্রমিক ট্রিগারে (প্রতি ১৫ মিনিটে একবার) চলে, আর তাও শুধু ফ্ল্যাগ সেট থাকলেই —
+// একই ১৫-মিনিট উইন্ডোতে ১০টা move হলেও রিইনডেক্স চলে মাত্র ১বার (debounce)। ফলে দিনে
+// সর্বোচ্চ ৯৬টা ট্রিগার-এক্সিকিউশন (২৪×৪), তার বেশিরভাগই ফ্ল্যাগ না থাকলে সাথে সাথে
+// বেরিয়ে যায় (প্রায় ফ্রি) — Apps Script-এর দৈনিক রানটাইম কোটার (consumer অ্যাকাউন্টে
+// সাধারণত ~৯০ মিনিট/দিন) কাছাকাছিও যাবে না।
+//
+// ⚠️ ONE-TIME SETUP (এটা কোডে বসিয়ে দিলেই অটো চলে না — একবার ম্যানুয়ালি রান
+// করতে হবে): Apps Script এডিটরে এই ফাইল খুলে, ফাংশন ড্রপডাউন থেকে
+// "installAutoReindexTrigger" বেছে নিয়ে ▶ Run বাটনে একবার ক্লিক করো (প্রথমবার
+// authorization চাইতে পারে, allow করে দিও)। এরপর থেকে সারাজীবন প্রতি ১৫ মিনিটে
+// নিজে থেকেই চেক করবে, কোনো ম্যানুয়াল rebuildIndex আর লাগবে না। দ্বিতীয়বার রান
+// করলে আগের ট্রিগার মুছে নতুন বসায় — ডুপ্লিকেট জমবে না। ──
+var REINDEX_FLAG_KEY_ = "NEEDS_REINDEX";
+
+function markReindexNeeded_() {
+  try { PropertiesService.getScriptProperties().setProperty(REINDEX_FLAG_KEY_, "1"); }
+  catch (flagErr) { logError_("markReindexNeeded_", flagErr); }
+}
+
+function installAutoReindexTrigger() {
+  var triggers=ScriptApp.getProjectTriggers();
+  for (var i=0;i<triggers.length;i++){
+    if (triggers[i].getHandlerFunction()==="autoRebuildIndexTriggered") ScriptApp.deleteTrigger(triggers[i]);
+  }
+  ScriptApp.newTrigger("autoRebuildIndexTriggered").timeBased().everyMinutes(15).create();
+  Logger.log("✅ Auto-reindex trigger installed — প্রতি ১৫ মিনিটে চেক করবে, দরকার হলেই (dirty ফ্ল্যাগ থাকলে) রিইনডেক্স চলবে।");
+}
+
+function autoRebuildIndexTriggered() {
+  try {
+    var props=PropertiesService.getScriptProperties();
+    if (props.getProperty(REINDEX_FLAG_KEY_)!=="1") return; // কিছু বদলায়নি — সস্তায় সাথে সাথে বেরিয়ে যাও
+    // ফ্ল্যাগ আগেই ক্লিয়ার করা হচ্ছে (রিইনডেক্স চলাকালীন নতুন move এলে সেটা মিস না হয় —
+    // মিস হলেও ক্ষতি নেই, পরের ১৫-মিনিট সাইকেলেই ধরা পড়বে যেহেতু move নিজেই আবার ফ্ল্যাগ সেট করবে)
+    props.deleteProperty(REINDEX_FLAG_KEY_);
+    var result=runRebuildIndexCore();
+    Logger.log("autoRebuildIndexTriggered: "+JSON.stringify(result));
+  } catch (err) {
+    logError_("autoRebuildIndexTriggered", "reindex failed: "+err);
+  }
+}
+
 function doGet(e) {
  try {
   var action = e.parameter.action;
@@ -1521,9 +1697,150 @@ function doGet(e) {
       if ((driData[d1][driIdCol]||"").toString().trim()===driId){ driSh.deleteRow(d1+1); driFound=true; break; }
     }
     if (!driFound) return json({status:"error",result:"error",message:"id পাওয়া যায়নি: "+driId});
-    return json({status:"success",result:"success",refType:driType,id:driId,deleted:1});
+
+    // ── FIX (App feature request ৩ — QBank Admin: পদবী/প্রতিষ্ঠান Delete):
+    // Post/Institution রেফারেন্স-এন্ট্রি ডিলিট হলে Exam_Appearances-এর সংশ্লিষ্ট
+    // রো-ও cascade-delete করা হয় (নাহলে ওই appearance-গুলো orphan post_id/
+    // institution_id নিয়ে পড়ে থাকত, "পদবী/প্রতিষ্ঠান-মোডে" প্রশ্ন গণনা ভুল দেখাত)।
+    // মূল প্রশ্ন (Quiz/QBank/Study রো) কখনোই টাচ হয় না — শুধু appearance-লিংক মোছে। ──
+    var driEaDeleted=0;
+    if (driType==="posts" || driType==="institutions") {
+      var driEaSh=driSs.getSheetByName("Exam_Appearances");
+      if (driEaSh && driEaSh.getLastRow()>=2) {
+        var driEaData=driEaSh.getDataRange().getValues(), driEaHdr=driEaData[0];
+        var driEaCol=driEaHdr.indexOf(driType==="posts"?"post_id":"institution_id");
+        if (driEaCol>=0) {
+          for (var de1=driEaData.length-1; de1>=1; de1--){
+            if ((driEaData[de1][driEaCol]||"").toString().trim()===driId){
+              driEaSh.deleteRow(de1+1); driEaDeleted++;
+            }
+          }
+        }
+      }
+    }
+    return json({status:"success",result:"success",refType:driType,id:driId,deleted:1,appearancesDeleted:driEaDeleted});
     });
   }
+
+  // ── updateReferenceField — Subjects/Topics/Tags/Posts/Institutions-এর যেকোনো
+  // একটা কলাম (নাম-কলাম ছাড়া অন্য যেকোনো, যেমন "emoji") সেট করে, id দিয়ে খুঁজে।
+  // App feature request ৪ — এডমিন সাবজেক্ট/টপিক/পদবী/প্রতিষ্ঠানের ইমুজি বদলাতে
+  // পারবে। কলামটা শিটে না থাকলে নিজে থেকেই নতুন হেডার কলাম যোগ করে নেয় (তাই
+  // ম্যানুয়ালি শিটে "emoji" কলাম বানিয়ে রাখার দরকার নেই)। ──
+  if (action==="updateReferenceField") {
+    return withWriteLock(function(){
+    var urfType=(e.parameter.refType||"").toLowerCase();
+    var urfId=(e.parameter.id||"").toString().trim();
+    var urfField=(e.parameter.field||"").toString().trim();
+    var urfValue=(e.parameter.value||"").toString();
+    var urfCfg=REF_TABS[urfType];
+    if (!urfCfg) return json({status:"error",result:"error",message:"অজানা refType: "+urfType});
+    if (!urfId || !urfField) return json({status:"error",result:"error",message:"id/field প্রয়োজন"});
+    if (urfField===urfCfg.idCol || urfField===urfCfg.nameCol) {
+      return json({status:"error",result:"error",message:"id/name কলাম এখান থেকে বদলানো যাবে না"});
+    }
+    var urfSs=SpreadsheetApp.getActiveSpreadsheet(), urfSh=urfSs.getSheetByName(urfCfg.sheet);
+    if (!urfSh) return json({status:"error",result:"error",message:"Sheet not found: "+urfCfg.sheet});
+    var urfLastCol=urfSh.getLastColumn();
+    var urfHdr=urfSh.getRange(1,1,1,urfLastCol).getValues()[0];
+    var urfFieldCol=-1;
+    for (var uc=0;uc<urfHdr.length;uc++){
+      if (urfHdr[uc].toString().trim()===urfField) { urfFieldCol=uc; break; }
+    }
+    if (urfFieldCol<0) {
+      // কলাম নেই — শেষে নতুন কলাম যোগ করো (হেডার বসিয়ে)
+      urfFieldCol=urfLastCol;
+      urfSh.getRange(1,urfFieldCol+1).setValue(urfField);
+    }
+    var urfIdColIdx=urfHdr.indexOf(urfCfg.idCol);
+    if (urfIdColIdx<0) return json({status:"error",result:"error",message:"id column not found in "+urfCfg.sheet});
+    var urfLastRow=urfSh.getLastRow();
+    if (urfLastRow<2) return json({status:"error",result:"error",message:"শিট খালি"});
+    var urfIds=urfSh.getRange(2,urfIdColIdx+1,urfLastRow-1,1).getValues();
+    var urfFound=false;
+    for (var ur=0;ur<urfIds.length;ur++){
+      if ((urfIds[ur][0]||"").toString().trim()===urfId){
+        urfSh.getRange(ur+2,urfFieldCol+1).setValue(urfValue);
+        urfFound=true;
+        break;
+      }
+    }
+    if (!urfFound) return json({status:"error",result:"error",message:"id পাওয়া যায়নি: "+urfId});
+    return json({status:"success",result:"success",refType:urfType,id:urfId,field:urfField,value:urfValue});
+    });
+  }
+
+  // ── mergeReferenceItem — App feature request ৩ (QBank Admin "Move"): একটা
+  // Post/Institution-কে আরেকটার ভেতরে merge করে — Exam_Appearances-এর সব
+  // matching রো-র post_id/institution_id fromId থেকে toId-তে বদলে দেয়, তারপর
+  // fromId-এর reference-এন্ট্রি ডিলিট করে (Subject/SubTopic "move"-এর প্যাটার্নেই,
+  // যেখানে একই নামের destination থাকলে auto-merge হয়)। মূল প্রশ্ন কখনো টাচ হয় না। ──
+  if (action==="mergeReferenceItem") {
+    return withWriteLock(function(){
+    var mriType=(e.parameter.refType||"").toLowerCase();
+    var mriFromId=(e.parameter.fromId||"").toString().trim();
+    var mriToId=(e.parameter.toId||"").toString().trim();
+    if (mriType!=="posts" && mriType!=="institutions") {
+      return json({status:"error",result:"error",message:"refType শুধু posts/institutions হতে পারে"});
+    }
+    if (!mriFromId || !mriToId) return json({status:"error",result:"error",message:"fromId/toId প্রয়োজন"});
+    if (mriFromId===mriToId) return json({status:"error",result:"error",message:"fromId ও toId একই হতে পারবে না"});
+    var mriSs=SpreadsheetApp.getActiveSpreadsheet();
+    var mriEaSh=mriSs.getSheetByName("Exam_Appearances");
+    var mriMoved=0;
+    if (mriEaSh && mriEaSh.getLastRow()>=2) {
+      var mriEaData=mriEaSh.getDataRange().getValues(), mriEaHdr=mriEaData[0];
+      var mriEaCol=mriEaHdr.indexOf(mriType==="posts"?"post_id":"institution_id");
+      if (mriEaCol>=0) {
+        for (var me=1;me<mriEaData.length;me++){
+          if ((mriEaData[me][mriEaCol]||"").toString().trim()===mriFromId){
+            mriEaSh.getRange(me+1,mriEaCol+1).setValue(mriToId);
+            mriMoved++;
+          }
+        }
+      }
+    }
+    // ── from-side reference row ডিলিট (এখন আর কোনো appearance এটা পয়েন্ট করে না) ──
+    var mriCfg=REF_TABS[mriType];
+    var mriRefSh=mriSs.getSheetByName(mriCfg.sheet);
+    if (mriRefSh && mriRefSh.getLastRow()>=2) {
+      var mriRefData=mriRefSh.getDataRange().getValues(), mriRefHdr=mriRefData[0];
+      var mriRefIdCol=mriRefHdr.indexOf(mriCfg.idCol);
+      for (var mr=mriRefData.length-1; mr>=1; mr--){
+        if ((mriRefData[mr][mriRefIdCol]||"").toString().trim()===mriFromId){ mriRefSh.deleteRow(mr+1); break; }
+      }
+    }
+    return json({status:"success",result:"success",refType:mriType,fromId:mriFromId,toId:mriToId,rowsMoved:mriMoved});
+    });
+  }
+
+  // ── renameQBankYear — App feature request ৩: QBank "সাল" আসলে Exam_Appearances-এর
+  // কলাম না — এটা সরাসরি QBank শিটের প্রতিটা প্রশ্ন-রো-এর নিজস্ব "year" কলাম (দেখো
+  // QuestionItem.year — "QBank only")। তাই rename মানে: QBank শিটে যেসব রো-র year==
+  // oldYear তাদের সবার year কলাম newYear-এ বদলে দেওয়া (bulk field-update, ঠিক
+  // renameField action-এর মতোই, কিন্তু sheet সবসময় QBank + field সবসময় year এ ফিক্সড
+  // রাখা হলো যাতে Android থেকে ভুল sheet/field পাঠানোর ঝুঁকি না থাকে)। ──
+  if (action==="renameQBankYear") {
+    return withWriteLock(function(){
+    var ryOld=(e.parameter.oldYear||"").toString().trim();
+    var ryNew=(e.parameter.newYear||"").toString().trim();
+    if (!ryOld || !ryNew) return json({status:"error",result:"error",message:"oldYear/newYear প্রয়োজন"});
+    var rySs=SpreadsheetApp.getActiveSpreadsheet(), ryQbSh=rySs.getSheetByName("QBank");
+    if (!ryQbSh || ryQbSh.getLastRow()<2) return json({status:"error",result:"error",message:"QBank sheet খালি"});
+    var ryData=ryQbSh.getDataRange().getValues(), ryHdr=ryData[0];
+    var ryYearCol=ryHdr.indexOf("year");
+    if (ryYearCol<0) return json({status:"error",result:"error",message:"QBank শিটে year কলাম নেই"});
+    var ryCount=0;
+    for (var ry=1;ry<ryData.length;ry++){
+      if ((ryData[ry][ryYearCol]||"").toString().trim()===ryOld){
+        ryQbSh.getRange(ry+1,ryYearCol+1).setValue(ryNew);
+        ryCount++;
+      }
+    }
+    return json({status:"success",result:"success",oldYear:ryOld,newYear:ryNew,rowsChanged:ryCount});
+    });
+  }
+
 
   // ── rebuildIndex — Quiz/QBank/Study প্রতিটাকে subject_id (তারপর topic_id)
   // অনুযায়ী সাজায়, আর Topics ট্যাবে row_start/row_count বসিয়ে দেয়।
@@ -1532,90 +1849,19 @@ function doGet(e) {
   // (bulk add/rename এর পরে) — প্রতিটা ছোট এডিটে না, কারণ পুরো শিট re-sort
   // করে বলে খরচ আছে (কিন্তু এটা batch অপারেশন, admin-triggered, ইউজার-facing
   // read খরচের সাথে সম্পর্কহীন)। ──
+  //
+  // ── AUTO-REINDEX (FIX "রিইনডেক্স ভুলে যাওয়া লাগে না"): এই লজিকটা এখন
+  // runRebuildIndexCore()-এ বের করে আনা হলো যাতে moveQuestions/moveTopic/
+  // deleteByIds/deleteByReferenceId — এই চারটা action, যেগুলো টপিকের প্রশ্ন-
+  // সংখ্যা বদলে দেয়, তারা প্রতিটাই নিজে থেকে (কারো মনে রাখা ছাড়াই) শেষে এটা
+  // কল করে row_count/row_start সবসময় সঠিক রাখে। এছাড়াও নিচে
+  // installAutoReindexTrigger() দিয়ে একটা পর্যায়ক্রমিক (safety-net) টাইম-
+  // ট্রিগার বসানো যায় — single-question add/edit endpoint (doPost, "type"
+  // ভিত্তিক, action ভিত্তিক না) কোনো dirty-marking করে না বলে সেটার জন্য এই
+  // নিরাপত্তা-জাল দরকার। ──
   if (action==="rebuildIndex") {
-    var ribResults={};
-    var ribSheets=[{name:"Quiz",prefix:"subject_id"},{name:"QBank",prefix:"subject_id"},{name:"Study",prefix:"subject_id"}];
-    var ribSs=SpreadsheetApp.getActiveSpreadsheet();
-    var ribTopicsSh=ribSs.getSheetByName("Topics");
-    var ribTopicsData=ribTopicsSh?ribTopicsSh.getDataRange().getValues():[];
-    var ribTopicsHdr=ribTopicsData[0]||[];
-
-    // ── FIX (bug: Quiz/Study-তে প্রশ্ন 0 দেখাতো যদিও QBank-এ ঠিক দেখাতো) ──
-    // আগে row_start/row_count Topics-এ মাত্র ১টা কলাম-জোড়া ছিল, আর নিচের লুপে
-    // একটাই shared ribIndexMap (শুধু topic_id দিয়ে key করা) Quiz→QBank→Study
-    // তিনটা শিট প্রসেস করতো। কোনো topic_id একাধিক শিটে (যেমন Quiz আর QBank দুটোতেই)
-    // থাকলে পরের শিট আগেরটার index চুপচাপ ওভাররাইট করে দিতো — ফলে Quiz browse
-    // করার সময় getQuestionsPage ভুল sheet-এর row-range Quiz ট্যাবে apply করতে
-    // যেতো (range Quiz ট্যাবের বাইরে পড়লে getRange() এরর দেয়, ক্লায়েন্টে সেটাই
-    // "কোনো প্রশ্ন পাওয়া যায়নি — ইন্টারনেট চেক করো" হয়ে দেখা যায়)।
-    // এখন প্রতিটা শিটের জন্য আলাদা row_start_<sheet>/row_count_<sheet> কলাম-জোড়া
-    // রাখা হচ্ছে, তাই কোনো ওভাররাইট হয় না — একই topic_id তিন শিটেই থাকলেও
-    // প্রতিটার নিজের সঠিক row-range নিজের কলামে থাকে। ──
-    var ribColPairs={}; // sheetName -> {rsCol, rcCol}
-    for (var rp=0;rp<ribSheets.length;rp++){
-      var ribPName=ribSheets[rp].name;
-      var ribRsColName="row_start_"+ribPName.toLowerCase();
-      var ribRcColName="row_count_"+ribPName.toLowerCase();
-      var ribRsC=ribTopicsHdr.indexOf(ribRsColName), ribRcC=ribTopicsHdr.indexOf(ribRcColName);
-      if (ribTopicsSh && ribRsC<0) { ribTopicsSh.getRange(1,ribTopicsHdr.length+1).setValue(ribRsColName); ribRsC=ribTopicsHdr.length; ribTopicsHdr.push(ribRsColName); }
-      if (ribTopicsSh && ribRcC<0) { ribTopicsSh.getRange(1,ribTopicsHdr.length+1).setValue(ribRcColName); ribRcC=ribTopicsHdr.length; ribTopicsHdr.push(ribRcColName); }
-      ribColPairs[ribPName]={rsCol:ribRsC,rcCol:ribRcC};
-    }
-    // ⚠️ legacy generic row_start/row_count কলাম থাকলেও রেখে দেওয়া হলো (পুরনো ক্লায়েন্ট/
-    // স্ক্রিপ্ট এখনো পড়তে পারে বলে), কিন্তু নতুন লজিক এখন এগুলোর ওপর নির্ভর করে না।
-    var ribLegacyRsCol=ribTopicsHdr.indexOf("row_start"), ribLegacyRcCol=ribTopicsHdr.indexOf("row_count");
-
-    for (var rs=0;rs<ribSheets.length;rs++) {
-      var ribShName=ribSheets[rs].name;
-      var ribSh=ribSs.getSheetByName(ribShName);
-      if (!ribSh || ribSh.getLastRow()<2) continue;
-      var ribRange=ribSh.getDataRange();
-      var ribData=ribRange.getValues();
-      var ribHdr=ribData[0];
-      var ribSubCol=ribHdr.indexOf("subject_id"), ribTopCol=ribHdr.indexOf("topic_id");
-      if (ribSubCol<0) { ribResults[ribShName]="subject_id column missing — skip"; continue; }
-      // sort by subject_id, topic_id (header বাদে)
-      var ribSortCols=[{column:ribSubCol+1,ascending:true}];
-      if (ribTopCol>=0) ribSortCols.push({column:ribTopCol+1,ascending:true});
-      ribSh.getRange(2,1,ribSh.getLastRow()-1,ribSh.getLastColumn()).sort(ribSortCols);
-      // re-read after sort, build contiguous ranges per topic_id — এই শিটের নিজস্ব ম্যাপে
-      var ribIndexMap={}; // topic_id -> {start,count} — শুধু এই sheet-এর জন্য, আলাদা প্রতিবার
-      var ribData2=ribSh.getDataRange().getValues();
-      var curTopic=null, curStart=2, curCount=0;
-      for (var i5=1;i5<ribData2.length;i5++){
-        var tId=ribTopCol>=0?(ribData2[i5][ribTopCol]||"").toString():"";
-        if (tId!==curTopic) {
-          if (curTopic) ribIndexMap[curTopic]={start:curStart,count:curCount};
-          curTopic=tId; curStart=i5+1; curCount=0;
-        }
-        curCount++;
-      }
-      if (curTopic) ribIndexMap[curTopic]={start:curStart,count:curCount};
-      ribResults[ribShName]="sorted, "+(ribData2.length-1)+" rows";
-
-      // এই শিটের row_start_<sheet>/row_count_<sheet> কলামে বসাও (topic_id ম্যাচ করে)
-      if (ribTopicsSh) {
-        var ribPair=ribColPairs[ribShName];
-        var ribTIdCol=ribTopicsHdr.indexOf("topic_id");
-        for (var t2=1;t2<ribTopicsData.length;t2++){
-          var ribTid=(ribTopicsData[t2][ribTIdCol]||"").toString();
-          var ribEntry=ribIndexMap[ribTid];
-          if (ribEntry) {
-            ribTopicsSh.getRange(t2+1,ribPair.rsCol+1).setValue(ribEntry.start);
-            ribTopicsSh.getRange(t2+1,ribPair.rcCol+1).setValue(ribEntry.count);
-            // legacy কলাম থাকলে সর্বশেষ প্রসেস হওয়া শিট দিয়ে রেফারেন্সের জন্য আপডেট (backward-compat only)
-            if (ribLegacyRsCol>=0) ribTopicsSh.getRange(t2+1,ribLegacyRsCol+1).setValue(ribEntry.start);
-            if (ribLegacyRcCol>=0) ribTopicsSh.getRange(t2+1,ribLegacyRcCol+1).setValue(ribEntry.count);
-          } else {
-            // এই sheet-এ এই topic_id-এর কোনো রো নেই — আগের স্টেল ভ্যালু মুছে দাও,
-            // নইলে পুরনো row_start_quiz স্টেল/ভুল range নিয়ে fast-path ভুলভাবে ট্রিগার হতে পারে
-            ribTopicsSh.getRange(t2+1,ribPair.rsCol+1).setValue("");
-            ribTopicsSh.getRange(t2+1,ribPair.rcCol+1).setValue("");
-          }
-        }
-      }
-    }
-    return json({status:"success",result:"success",message:"Index rebuilt (per-sheet)",details:ribResults});
+    var ribOut=runRebuildIndexCore();
+    return json({status:"success",result:"success",message:"Index rebuilt (per-sheet)",details:ribOut});
   }
 
   // ── getQuestionsPage — subject_id(+topic_id) অনুযায়ী ঠিক ৫০টা (বা limit)
@@ -1891,6 +2137,11 @@ function doGet(e) {
     }
     markTopicsDirty(dbiDirty);
     // Firebase already updated directly from app - DO NOT sync (would overwrite with array)
+
+    // ── AUTO-REINDEX hook — দেখো moveQuestions-এর একই কমেন্ট। deleteByIds
+    // এক-এক করে রো মোছে বলে row_start/row_count পুরোপুরি বাসি হয়ে যায়, তাই এখানেও দরকার। ──
+    markReindexNeeded_();
+
     return json({result:"success",deleted:deleted,sheet:shName2,examAppearancesDeleted:eaDeleted});
     });
   }
@@ -1912,7 +2163,26 @@ function doGet(e) {
     if (!driiTopicsSh) return json({status:"error",result:"error",message:"Topics sheet নেই"});
     var driiTData=driiTopicsSh.getDataRange().getValues(), driiTHdr=driiTData[0];
     var driiTIdCol=driiTHdr.indexOf("topic_id"), driiSubCol=driiTHdr.indexOf("subject_id");
-    var driiRsCol=driiTHdr.indexOf("row_start"), driiRcCol=driiTHdr.indexOf("row_count");
+
+    // sheet নাম বের করা (subject_id/topic_id-এর প্রিফিক্স থেকে) — কলাম রিজলভ
+    // করার *আগে* বের করতে হবে, কারণ row_start/row_count এখন sheet-scoped
+    var driiSheetName=driiId.indexOf("QZ")===0?"Quiz":driiId.indexOf("QB")===0?"QBank":driiId.indexOf("ST")===0?"Study":"";
+    var driiSh=driiSs.getSheetByName(driiSheetName);
+    if (!driiSh) return json({status:"error",result:"error",message:"Sheet not found for id: "+driiId});
+
+    // ── FIX (গুরুতর ডেটা-সেফটি বাগ — "ভুল রেঞ্জ ডিলিট হয়ে যেতে পারতো"):
+    // আগে এখানে জেনেরিক legacy row_start/row_count কলাম পড়া হতো, যেটাতে
+    // rebuildIndex সবসময় সবচেয়ে শেষে প্রসেস হওয়া sheet-এর (Study) row-range
+    // বসিয়ে দিতো (দেখো runRebuildIndexCore()-এর কমেন্ট) — মানে কোনো Quiz/QBank
+    // topic_id ডিলিট করতে গেলে legacy কলামে থাকা Study sheet-এর row-range
+    // ভুলবশত Quiz/QBank sheet-এ apply হয়ে সম্পূর্ণ ভুল/অসম্পর্কিত রো ডিলিট
+    // হয়ে যাওয়ার ঝুঁকি ছিল (getQuestionsPage-এ একই বাগের জন্য আগেই sheet-scoped
+    // কলাম যোগ হয়েছিল, কিন্তু এই action-এ তখন মিস হয়ে গিয়েছিল)। এখন driiSheetName
+    // অনুযায়ী সঠিক row_start_<sheet>/row_count_<sheet> কলাম পড়া হয় (per-sheet
+    // কলাম না থাকলে/পুরনো rebuildIndex চললে legacy-তে fallback করে)। ──
+    var driiSheetKey=driiSheetName.toLowerCase();
+    var driiRsCol=driiTHdr.indexOf("row_start_"+driiSheetKey), driiRcCol=driiTHdr.indexOf("row_count_"+driiSheetKey);
+    if (driiRsCol<0||driiRcCol<0) { driiRsCol=driiTHdr.indexOf("row_start"); driiRcCol=driiTHdr.indexOf("row_count"); }
     if (driiRsCol<0||driiRcCol<0) return json({status:"error",result:"error",message:"Index নেই — আগে action=rebuildIndex চালাও"});
 
     // ── কোন কোন topic-row (Topics ট্যাবে) এই delete-এ প্রভাবিত হবে, আর
@@ -1934,11 +2204,6 @@ function doGet(e) {
     var driiRangeEnd=Math.max.apply(null,driiEnds);
     var driiRangeCount=driiRangeEnd-driiRangeStart+1;
 
-    // sheet নাম বের করা (subject_id/topic_id-এর প্রিফিক্স থেকে)
-    var driiSheetName=driiId.indexOf("QZ")===0?"Quiz":driiId.indexOf("QB")===0?"QBank":driiId.indexOf("ST")===0?"Study":"";
-    var driiSh=driiSs.getSheetByName(driiSheetName);
-    if (!driiSh) return json({status:"error",result:"error",message:"Sheet not found for id: "+driiId});
-
     // ── ডিলিট করার আগে ওই রেঞ্জের সব question id ধরে রাখা (Exam_Appearances cleanup-এর জন্য) ──
     var driiHdr=driiSh.getRange(1,1,1,driiSh.getLastColumn()).getValues()[0];
     var driiIdCol=driiHdr.indexOf("id");
@@ -1959,7 +2224,8 @@ function doGet(e) {
       }
     }
 
-    // ── Topics ইনডেক্স আপডেট: মুছে-যাওয়া topic-row(গুলো) বাদ, বাকিদের row_start শিফট ──
+    // ── Topics ইনডেক্স আপডেট: মুছে-যাওয়া topic-row(গুলো) বাদ, বাকিদের row_start শিফট
+    // (এখন driiRsCol/driiRcCol উপরে sheet-scoped resolve হয়েছে বলে এই শিফটও সঠিক sheet-এ হয়) ──
     var driiRemoveTopicIds={}; driiAffectedTopicRows.forEach(function(i){ driiRemoveTopicIds[driiTData[i][driiTIdCol]]=true; });
     for (var dr=driiTData.length-1;dr>=1;dr--){
       var dTid=(driiTData[dr][driiTIdCol]||"").toString();
@@ -1986,6 +2252,13 @@ function doGet(e) {
     var driiDirty={};
     driiAffectedTopicRows.forEach(function(i){ driiDirty[(driiTData[i][driiTIdCol]||"").toString()]=1; });
     markTopicsDirty(driiDirty);
+
+    // ── AUTO-REINDEX hook (FIX "রিইনডেক্স ভুলে যাওয়া লাগে না"): manual shift
+    // উপরে শুধু এই sheet-এর row_start_<sheet> ঠিক করে — অন্য sheet-এ যদি একই
+    // topic_id-এর আলাদা row_count_<sheet> থাকে সেটা আর legacy কলাম, দুটোই পুরো
+    // reindex ছাড়া বাসি থেকে যেত। try/catch দিয়ে গার্ড করা — reindex ব্যর্থ হলেও
+    // মূল delete response আটকাবে না (পরের periodic auto-trigger-এই ঠিক হয়ে যাবে)। ──
+    markReindexNeeded_();
 
     return json({status:"success",result:"success",deleted:driiRangeCount,examAppearancesDeleted:driiEaDeleted,sheet:driiSheetName});
     });
@@ -2045,6 +2318,11 @@ function doGet(e) {
     var mqFbSynced=true;
     if (mqUpdAtCol>=0 && mqTouchedRows.length) mqFbSynced=syncToFirebase(mqShName,mqShName);
     markTopicsDirty(mqDirty);
+
+    // ── AUTO-REINDEX hook (FIX "রিইনডেক্স ভুলে যাওয়া লাগে না"): move করলে
+    // পুরনো+নতুন দুই টপিকেরই সঠিক প্রশ্ন-সংখ্যা/রেঞ্জ চাই — এখন এখানেই সাথে সাথে
+    // পুরো index রিবিল্ড হয়ে যায়, আলাদা করে rebuildIndex চালানো লাগে না। ──
+    markReindexNeeded_();
 
     return json({status:"success",result:"success",moved:mqMoved,sheet:mqShName,firebaseSynced:mqFbSynced});
     });
@@ -2120,6 +2398,9 @@ function doGet(e) {
     // destination টপিক (effectiveTopicId) — দুটোই publish-এ প্রতিফলিত হতে হবে ──
     markTopicDirty(mtTopicId);
     markTopicDirty(mtEffectiveTopicId);
+
+    // ── AUTO-REINDEX hook — দেখো moveQuestions-এর একই কমেন্ট ──
+    markReindexNeeded_();
 
     return json({status:"success",result:"success",moved:mtMoved,sheet:mtSheetName,mergedInto:mtMergeTopicId||null,firebaseSynced:mtFbSynced});
     });
