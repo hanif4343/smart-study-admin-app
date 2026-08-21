@@ -479,6 +479,30 @@ function sheetLowerName_(sheetName) {
   return sheetName === "Quiz" ? "quiz" : sheetName === "QBank" ? "qbank" : sheetName === "Study" ? "study" : sheetName.toLowerCase();
 }
 
+// ── ghListFileCommits_ — একটা নির্দিষ্ট ফাইলের (এখানে manifest.json) সাম্প্রতিক
+// commit history আনে — Rollback ফিচারের জন্য "কোন কোন পুরনো ভার্সনে ফেরা যায়"
+// তার তালিকা বানাতে ব্যবহার হয়। প্রতিটা commit-এর sha দিয়েই ghGetFile_() কল
+// করলে ঠিক ওই মুহূর্তের ফাইল-কনটেন্ট পাওয়া যায় (GitHub Contents API-তে
+// branch-এর জায়গায় commit sha-ও ref হিসেবে দেওয়া যায়)। ──
+function ghListFileCommits_(owner, repo, branch, path, token, limit) {
+  var url = "https://api.github.com/repos/" + owner + "/" + repo + "/commits?path=" + encodeURIComponent(path) + "&sha=" + branch + "&per_page=" + (limit||15);
+  var resp = fetchWithRetry_(url, {
+    method: "get",
+    headers: {
+      "Authorization": "Bearer " + token,
+      "Accept": "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28"
+    },
+    muteHttpExceptions: true
+  });
+  var code = resp.getResponseCode();
+  if (code !== 200) return { success: false, error: "HTTP " + code + ": " + resp.getContentText() };
+  var commits = JSON.parse(resp.getContentText());
+  return { success: true, commits: commits.map(function(c){
+    return { sha: c.sha, date: c.commit && c.commit.author ? c.commit.author.date : "", message: c.commit ? c.commit.message : "" };
+  })};
+}
+
 function ghGetFile_(owner, repo, branch, path, token) {
   var url = "https://api.github.com/repos/" + owner + "/" + repo + "/contents/" + path + "?ref=" + branch;
   var resp = fetchWithRetry_(url, {
@@ -2470,6 +2494,68 @@ function doGet(e) {
     } catch (gpsErr) {
       return json({status:"error",result:"error",message:"manifest.json parse ব্যর্থ: "+gpsErr});
     }
+  }
+
+  // ── listManifestHistory — manifest.json-এর সাম্প্রতিক কয়েকটা commit (কে,
+  // কবে, কোন ভার্সন) দেখায় — Rollback করার আগে "কোনটায় ফিরবো" বেছে নেওয়ার
+  // জন্য (read-only, কিছু বদলায় না)। ──
+  if (action==="listManifestHistory") {
+    var lmhProps = PropertiesService.getScriptProperties();
+    var lmhOwner = lmhProps.getProperty("GH_OWNER"), lmhRepo = lmhProps.getProperty("GH_REPO");
+    var lmhBranch = lmhProps.getProperty("GH_BRANCH") || "main", lmhToken = lmhProps.getProperty("GITHUB_WRITE_TOKEN");
+    if (!lmhOwner || !lmhRepo || !lmhToken) {
+      return json({status:"error",result:"error",message:"GitHub config সেট করা নেই"});
+    }
+    var lmhResult = ghListFileCommits_(lmhOwner, lmhRepo, lmhBranch, "manifest.json", lmhToken, 15);
+    if (!lmhResult.success) return json({status:"error",result:"error",message:lmhResult.error});
+    // ── প্রতিটা commit-এর manifest content থেকে version/publishedAt/topicCount
+    // বের করে দেখানো হচ্ছে, যাতে UI-তে শুধু sha না, "v41 · ৩২০ Topic" এর মতো
+    // অর্থবহ কিছু দেখানো যায় — কিন্তু ১৫টা কমিটের প্রতিটার জন্য আলাদা GET কল
+    // (fetchWithRetry_-সহ) একটু ধীর হতে পারে, তাই শুধু সাম্প্রতিক কয়েকটাতেই
+    // (৮টা) সীমাবদ্ধ রাখা হলো, বাকিগুলো শুধু sha/date/message-সহ ফেরত যায় ──
+    var lmhEnriched = lmhResult.commits.map(function(c, idx){
+      if (idx >= 8) return c;
+      try {
+        var lmhFile = ghGetFile_(lmhOwner, lmhRepo, c.sha, "manifest.json", lmhToken);
+        if (lmhFile.exists) {
+          var lmhM = JSON.parse(lmhFile.content);
+          c.version = lmhM.version || 0;
+          c.topicCount = Object.keys(lmhM.topics||{}).length;
+        }
+      } catch (lmhErr) { /* এই একটা commit-এর detail না পেলেও বাকিগুলো দেখানো হবে */ }
+      return c;
+    });
+    return json({status:"success",result:"success",commits:lmhEnriched});
+  }
+
+  // ── rollbackManifest — manifest.json-কে আগের কোনো commit-এর অবস্থায়
+  // ফিরিয়ে দেয় (নতুন একটা commit হিসেবেই, history মুছে যায় না — এটাই GitHub-এ
+  // "revert" করার নিরাপদ উপায়)। ⚠️ এটা শুধু manifest.json ফেরায় — পুরনো
+  // manifest যেসব topic ফাইলের কথা বলে, সেই topic JSON ফাইলগুলো GitHub-এই
+  // থেকে যায় (কখনো ডিলিট হয় না), তাই ফেরানোর পর সেগুলোও ঠিকই সেই মুহূর্তের
+  // কনটেন্ট দেখাবে — সম্পূর্ণ নিরাপদ। withWriteLock-এর ভিতরে, audit trail-এর
+  // জন্য _SystemLogs-এ এন্ট্রি থাকে (destructive-ঘেঁষা action বলে)। ──
+  if (action==="rollbackManifest") {
+    return withWriteLock(function(){
+      var rmSha = (e.parameter.sha||"").toString().trim();
+      if (!rmSha) return json({status:"error",result:"error",message:"sha দেওয়া হয়নি"});
+      var rmProps = PropertiesService.getScriptProperties();
+      var rmOwner = rmProps.getProperty("GH_OWNER"), rmRepo = rmProps.getProperty("GH_REPO");
+      var rmBranch = rmProps.getProperty("GH_BRANCH") || "main", rmToken = rmProps.getProperty("GITHUB_WRITE_TOKEN");
+      if (!rmOwner || !rmRepo || !rmToken) {
+        return json({status:"error",result:"error",message:"GitHub config সেট করা নেই"});
+      }
+      var rmOldFile = ghGetFile_(rmOwner, rmRepo, rmSha, "manifest.json", rmToken);
+      if (!rmOldFile.exists) return json({status:"error",result:"error",message:"এই commit-এ manifest.json পাওয়া যায়নি"});
+      var rmPut = ghPutFile_(rmOwner, rmRepo, rmBranch, "manifest.json", rmOldFile.content, rmToken, "Rollback manifest.json to " + rmSha.substring(0,7));
+      if (!rmPut.success) {
+        logError_("rollbackManifest", "commit ব্যর্থ: " + rmPut.error);
+        notifyAdminPublishFailure_("Manifest rollback ব্যর্থ: " + rmPut.error);
+        return json({status:"error",result:"error",message:rmPut.error});
+      }
+      logError_("rollbackManifest", "manifest.json rolled back to " + rmSha.substring(0,7));
+      return json({status:"success",result:"success",message:"manifest.json ফিরিয়ে দেওয়া হয়েছে"});
+    });
   }
 
   // ── markAllTopicsDirty — "ধাপ ৮: পুরোটা স্কেল করা"-এর জন্য। Phase ১ deploy
