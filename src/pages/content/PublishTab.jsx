@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { C } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
-import { fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions } from "../../core/sheetSave.js";
+import { fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest } from "../../core/sheetSave.js";
 
 const LS_LAST_PUBLISH = "cdn_last_publish_result"; // persistent status — localStorage-এ থাকে, অ্যাপ বন্ধ করলেও শেষ ফলাফল দেখা যায়
 
@@ -95,6 +95,37 @@ function PublishTab({push}){
     if(result.ok){
       push?.("success",`🗑️ ${result.deletedCount}টা Orphan প্রশ্ন মুছে ফেলা হলো`,"");
       refreshOrphan();
+    }
+  };
+
+  // ── Rollback — manifest.json-এর পুরনো ভার্সনে ফিরে যাওয়া। History-টা লেজি
+  // লোড হয় (প্যানেল খোলার সময়ই শুধু), কারণ প্রতিটা commit-এর ভার্সন/টপিক-সংখ্যা
+  // বের করতে কয়েকটা GitHub API কল লাগে — এমনি এমনি পেজ খুললেই এটা করার
+  // দরকার নেই। ──
+  const[rollbackOpen,setRollbackOpen]=useState(false);
+  const[history,setHistory]=useState(null);
+  const[loadingHistory,setLoadingHistory]=useState(false);
+  const openRollback=async()=>{
+    setRollbackOpen(true);
+    if(history) return; // আগেই লোড হয়ে থাকলে আবার করবে না
+    setLoadingHistory(true);
+    const h=await fetchManifestHistory({gasSecret});
+    setHistory(h||[]);
+    setLoadingHistory(false);
+  };
+  const[rollbackTarget,setRollbackTarget]=useState(null); // {sha,date,version}
+  const[rollingBack,setRollingBack]=useState(false);
+  const doRollback=async()=>{
+    const target=rollbackTarget;
+    setRollbackTarget(null);
+    setRollingBack(true);
+    const result=await rollbackManifest({gasSecret,push,sha:target.sha});
+    setRollingBack(false);
+    if(result.ok){
+      push?.("success","✅ পুরনো ভার্সনে ফিরিয়ে দেওয়া হলো","");
+      setRollbackOpen(false);
+      setHistory(null); // পরের বার খুললে ফ্রেশ history আনবে
+      refreshStats();
     }
   };
 
@@ -302,10 +333,69 @@ function PublishTab({push}){
         >
           {markingAll ? "⏳ মার্ক হচ্ছে..." : "🔄 সব Topic Dirty মার্ক করো"}
         </button>
-        <div style={{fontSize:10,color:C.muted,marginTop:5,lineHeight:1.5}}>
+        <div style={{fontSize:10,color:C.muted,marginTop:5,marginBottom:12,lineHeight:1.5}}>
           শুধু তখনই দরকার যখন পুরনো (Publish Pipeline চালু হওয়ার আগের) সব প্রশ্ন প্রথমবার CDN-এ তুলতে চাও — একবার মার্ক করলে এরপর একাধিকবার "Publish Now" চেপে ধীরে ধীরে সব উঠবে।
         </div>
+
+        <button
+          className="btn bg"
+          style={{width:"100%",justifyContent:"center",padding:"9px",fontSize:12}}
+          disabled={!gasSecret || rollingBack}
+          onClick={openRollback}
+        >
+          {rollingBack ? "⏳ ফিরিয়ে দেওয়া হচ্ছে..." : "↩️ পুরনো ভার্সনে ফিরে যাও (Rollback)"}
+        </button>
+        <div style={{fontSize:10,color:C.muted,marginTop:5,lineHeight:1.5}}>
+          ভুল ডেটা publish হয়ে গেলে এখান থেকে আগের কোনো ভার্সনে manifest.json ফিরিয়ে নিয়ে যেতে পারবে।
+        </div>
       </div>
+
+      {/* ── Rollback প্যানেল — সাম্প্রতিক ভার্সনগুলোর লিস্ট, একটা বেছে নিলেই confirm ── */}
+      {rollbackOpen && (
+        <div className="ovl" onClick={()=>setRollbackOpen(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div className="mh"/>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>↩️ কোন ভার্সনে ফিরবে?</div>
+            {loadingHistory ? (
+              <div style={{fontSize:12,color:C.muted,textAlign:"center",padding:"20px 0"}}>⏳ লোড হচ্ছে...</div>
+            ) : !history || history.length===0 ? (
+              <div style={{fontSize:12,color:C.muted,textAlign:"center",padding:"20px 0"}}>কোনো পুরনো ভার্সন পাওয়া যায়নি</div>
+            ) : (
+              <div className="ss-scroll" style={{maxHeight:"50vh",overflowY:"auto"}}>
+                {history.map((c,i)=>(
+                  <div key={c.sha} onClick={()=>setRollbackTarget(c)}
+                    style={{padding:"9px 10px",borderRadius:8,border:`1px solid ${C.border}`,marginBottom:6,cursor:"pointer"}}>
+                    <div style={{fontSize:12,fontWeight:700,color:C.text}}>
+                      {i===0?"🟢 বর্তমান — ":""}{c.version?`v${c.version}`:"(ভার্সন অজানা)"}{c.topicCount!==undefined?` · ${c.topicCount}টি Topic`:""}
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,marginTop:2}}>
+                      {c.date?new Date(c.date).toLocaleString("bn-BD"):""} · {c.sha.substring(0,7)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button className="btn bg" style={{width:"100%",justifyContent:"center",marginTop:8}} onClick={()=>setRollbackOpen(false)}>বন্ধ করো</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Rollback Confirm ডায়ালগ ── */}
+      {rollbackTarget && (
+        <div className="ovl">
+          <div className="modal">
+            <div className="mh"/>
+            <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>↩️ এই ভার্সনে ফিরে যাবে?</div>
+            <div style={{background:`${C.warning}12`,border:`1px solid ${C.warning}30`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
+              manifest.json <b style={{color:C.text}}>{rollbackTarget.version?`v${rollbackTarget.version}`:rollbackTarget.sha.substring(0,7)}</b>-এ ফিরে যাবে ({rollbackTarget.date?new Date(rollbackTarget.date).toLocaleString("bn-BD"):""})। এর মাঝের সব Publish-এর পরিবর্তন CDN থেকে সাময়িকভাবে সরে যাবে (পরে আবার নতুন করে Publish করলে ফিরে আসবে)। Topic ফাইলগুলো নিজে মুছে যায় না, শুধু manifest.json বদলায়।
+            </div>
+            <div style={{display:"flex",gap:7}}>
+              <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={()=>setRollbackTarget(null)}>বাতিল</button>
+              <button className="btn" style={{flex:2,justifyContent:"center",background:C.warning,color:"#fff"}} onClick={doRollback}>↩️ হ্যাঁ, ফিরিয়ে দাও</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Mark All Dirty Confirm ডায়ালগ ── */}
       {markAllOpen && (
