@@ -376,4 +376,33 @@ async function deleteOrphanQuestions({gasSecret,push,sheet}){
   }catch(e){ push?.("error","❌ ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions };
+/* manifest.json-এর সাম্প্রতিক কয়েকটা commit history (read-only) — Rollback-এর
+   আগে "কোনটায় ফিরবো" দেখানোর জন্য। */
+async function fetchManifestHistory({gasSecret}){
+  if(!GAS||!gasSecret) return null;
+  try{
+    const url=`${GAS}?action=listManifestHistory&secret=${encodeURIComponent(gasSecret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status!=="success") return null;
+    return data.commits; // [{sha,date,message,version?,topicCount?}]
+  }catch(_){ return null; }
+}
+
+/* manifest.json-কে আগের কোনো commit-এর অবস্থায় ফিরিয়ে দেয় (নতুন commit
+   হিসেবেই, history মুছে যায় না)। destructive-ঘেঁষা, caller নিজের confirm
+   দরকার এটা কল করার আগে। */
+async function rollbackManifest({gasSecret,push,sha}){
+  if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই",""); return{ok:false}; }
+  if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও",""); return{ok:false}; }
+  if(!sha){ push?.("error","❌ কোন ভার্সনে ফিরবে বেছে দাও",""); return{ok:false}; }
+  try{
+    const url=`${GAS}?action=rollbackManifest&secret=${encodeURIComponent(gasSecret)}&sha=${encodeURIComponent(sha)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status==="error"){ push?.("error","❌ Rollback ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    return{ok:true};
+  }catch(e){ push?.("error","❌ ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest };
