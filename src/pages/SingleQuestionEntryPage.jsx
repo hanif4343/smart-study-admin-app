@@ -93,7 +93,21 @@ function SingleQuestionEntryPage({push}){
   const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
   const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
 
-  // ── এই ফিল্ডগুলো প্রতি সাবমিটের পর খালি হয়ে যায় ──
+  // ── REDESIGNED ("বারবার Ctrl+S না, শেষে একবার Ctrl+S"): শুধু QBank target-এ।
+  // Quiz/Study-তে এই ফিল্ড দেখানোই হয় না, কোনো পরিবর্তন নেই।
+  // এই বক্সে টেক্সট লিখলে একটা "চলমান গ্রুপ" শুরু হয় — Subject-এর মতোই সেশনজুড়ে
+  // অক্ষত থাকে। প্রতিটা sub-part (ক, খ, গ...) টাইপ করে Ctrl+Enter চাপলে সেটা
+  // pendingParts লিস্টে (শুধু ব্রাউজারের মেমোরিতে, এখনো কোনো নেটওয়ার্ক কল হয় না)
+  // জমা হয়ে যায়, বক্স খালি হয়ে পরের sub-part-এর জন্য রেডি হয়। সবশেষে একবার
+  // Ctrl+S চাপলে — pendingParts-এ যা জমা আছে + এই মুহূর্তে বক্সে যা লেখা আছে
+  // (শেষ sub-part, আলাদা করে Ctrl+Enter চাপা লাগে না) — সবগুলো একসাথে, একটাই
+  // নেটওয়ার্ক কলে, একই group_id দিয়ে সেভ হয়ে যায়। হেডিং বক্স খালি থাকলে (বা
+  // pendingParts খালি থাকলে) Ctrl+S আগের মতোই তৎক্ষণাৎ একক-প্রশ্ন সাবমিট করে —
+  // Quiz/Study/QBank-non-grouped — সব জায়গায় পুরনো আচরণ অক্ষত। ──
+  const[groupHeadingText,setGroupHeadingText]=useState("");
+  const[pendingParts,setPendingParts]=useState([]); // [{question,correct,opt1..4,explanation}] — এখনো সার্ভারে যায়নি
+
+  // ── এই ফিল্ডগুলো প্রতি sub-part যোগ/সাবমিটের পর খালি হয়ে যায় ──
   const[question,setQuestion]=useState("");
   const[correct,setCorrect]=useState("");
   const[opt1,setOpt1]=useState(""); const[opt2,setOpt2]=useState("");
@@ -140,6 +154,8 @@ function SingleQuestionEntryPage({push}){
     if(d.postSel)setPostSel(d.postSel);
     if(d.instSel)setInstSel(d.instSel);
     if(d.examYear!==undefined)setExamYear(d.examYear);
+    if(d.groupHeadingText!==undefined)setGroupHeadingText(d.groupHeadingText);
+    if(d.pendingParts!==undefined)setPendingParts(d.pendingParts);
     if(d.question!==undefined)setQuestion(d.question);
     if(d.correct!==undefined)setCorrect(d.correct);
     if(d.opt1!==undefined)setOpt1(d.opt1); if(d.opt2!==undefined)setOpt2(d.opt2);
@@ -153,12 +169,12 @@ function SingleQuestionEntryPage({push}){
     if(!draftCheckedRef.current || draftBanner) return;
     if(saving) return;
     const t=setTimeout(()=>{
-      const hasContent=question.trim()||subjectSel.name.trim();
-      if(hasContent) saveDraft(LS_DRAFT_SINGLE,{targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,question,correct,opt1,opt2,opt3,opt4,explanation});
+      const hasContent=question.trim()||subjectSel.name.trim()||pendingParts.length>0;
+      if(hasContent) saveDraft(LS_DRAFT_SINGLE,{targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,groupHeadingText,pendingParts,question,correct,opt1,opt2,opt3,opt4,explanation});
       else clearDraft(LS_DRAFT_SINGLE);
     },800);
     return ()=>clearTimeout(t);
-  },[targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,question,correct,opt1,opt2,opt3,opt4,explanation,saving,draftBanner]);
+  },[targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,groupHeadingText,pendingParts,question,correct,opt1,opt2,opt3,opt4,explanation,saving,draftBanner]);
 
   /* ── কার্সর যেখানে আছে ঠিক সেখানে টেক্সট ইনসার্ট করার গতিশীল ফাংশন ── */
   const insertAtCursor=useCallback((text)=>{
@@ -236,22 +252,49 @@ function SingleQuestionEntryPage({push}){
     setOpt1("");setOpt2("");setOpt3("");setOpt4("");
     setExplanation("");
     activeInputRef.current = "q";
-    setSessionCount(c=>c+1);
     requestAnimationFrame(()=>qRef.current?.focus());
   };
 
-  /* ── Ctrl+S দিয়ে সাবমিট ── */
-  const submit=useCallback(async()=>{
-    if(saving||generating)return;
+  /* ── Ctrl+Enter: বর্তমান sub-part (এখনো সার্ভারে না পাঠিয়ে) pendingParts-এ জমা
+     করে বক্স খালি করে দেয় — পরের sub-part লেখার জন্য রেডি। কোনো নেটওয়ার্ক কল হয় না। ── */
+  const commitCurrentAsPending=useCallback(()=>{
     if(!question.trim()){ push("warn","প্রশ্ন লিখো","");qRef.current?.focus();return; }
     if(!correct.trim()){ push("warn","উত্তর লিখো",""); return; }
-    if(!subjectSel.name.trim()){ push("warn","⚠️ Subject ফাঁকা","আগে পূরণ করো — ফাঁকা থাকলে সাবমিট হবে না"); return; }
     if(isMCQ&&(!opt1.trim()||!opt2.trim()||!opt3.trim()||!opt4.trim())){ push("warn","৪টা অপশনই পূরণ করো","✨ Generate চাপো অথবা নিজে লিখো"); return; }
+    setPendingParts(p=>[...p,{question:question.trim(),correct:correct.trim(),opt1,opt2,opt3,opt4,explanation}]);
+    setQuestion("");setCorrect("");setOpt1("");setOpt2("");setOpt3("");setOpt4("");setExplanation("");
+    activeInputRef.current="q";
+    requestAnimationFrame(()=>qRef.current?.focus());
+  },[question,correct,isMCQ,opt1,opt2,opt3,opt4,explanation,push]);
+
+  const removePending=(idx)=>setPendingParts(p=>p.filter((_,i)=>i!==idx));
+
+  /* ── Ctrl+S দিয়ে সাবমিট — গ্রুপ চলছে থাকলে (pendingParts বা groupHeadingText আছে)
+     pendingParts + বর্তমান বক্সের কনটেন্ট (শেষ sub-part, আলাদা করে Ctrl+Enter লাগে
+     না) সব একসাথে, একটাই নেটওয়ার্ক কলে সাবমিট হয়। গ্রুপ না থাকলে (হেডিং বক্স খালি,
+     pendingParts-ও খালি) আগের মতোই তৎক্ষণাৎ একক-প্রশ্ন সাবমিট — কোনো আচরণ বদলায়নি। ── */
+  const submit=useCallback(async()=>{
+    if(saving||generating)return;
+    const effGroupHeading=targetMode==="QBank"?groupHeadingText.trim():"";
+    const isGroupSubmit=effGroupHeading&&pendingParts.length>0;
+
+    // ── বর্তমান বক্সে কিছু টাইপ করা থাকলে সেটাকেই শেষ sub-part (বা একমাত্র প্রশ্ন)
+    // ধরা হয় — গ্রুপ-সাবমিটের সময় খালি বক্স রেখে শুধু আগে জমানো অংশগুলোও ফাইনাল
+    // করা যাবে (pendingParts.length থাকলে বক্স খালি হলেও চলবে)। ──
+    const hasCurrent=question.trim()||correct.trim();
+    if(!isGroupSubmit && !hasCurrent){ push("warn","প্রশ্ন লিখো","");qRef.current?.focus();return; }
+    if(hasCurrent){
+      if(!question.trim()){ push("warn","প্রশ্ন লিখো","");qRef.current?.focus();return; }
+      if(!correct.trim()){ push("warn","উত্তর লিখো",""); return; }
+      if(isMCQ&&(!opt1.trim()||!opt2.trim()||!opt3.trim()||!opt4.trim())){ push("warn","৪টা অপশনই পূরণ করো","✨ Generate চাপো অথবা নিজে লিখো"); return; }
+    }
+    if(!subjectSel.name.trim()){ push("warn","⚠️ Subject ফাঁকা","আগে পূরণ করো — ফাঁকা থাকলে সাবমিট হবে না"); return; }
     if(!refData){ push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো",""); return; }
 
     setSaving(true);
 
-    // ── Subject/Topic টেক্সট থেকে subject_id/topic_id resolve-or-create ──
+    // ── Subject/Topic টেক্সট থেকে subject_id/topic_id resolve-or-create (একবারই —
+    // গ্রুপ-সাবমিটে সব sub-part একই subject/topic শেয়ার করে) ──
     const subjRes=await resolveOrCreateReference({sel:subjectSel,refType:"subjects",options:subjectOptions,gasSecret,sheet:targetMode,push});
     if(!subjRes.ok){ setSaving(false); push("error","❌ Subject যোগ/খুঁজে পাওয়া যায়নি",""); return; }
     const topicName=topicSel.name.trim()||subjectSel.name.trim();
@@ -275,34 +318,44 @@ function SingleQuestionEntryPage({push}){
       if(postRes.created||instRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
     }
 
-    const item={q:question.trim(),correct:correct.trim(),opt1,opt2,opt3,opt4,explanation};
     const tagsArr=audienceTags.split(",").map(s=>s.trim()).filter(Boolean);
     const effQtype=isStudy?"Study":(isMCQ?"MCQ":"Written");
+
+    // ── সবগুলো sub-part (আগে থেকে জমা + এখন বক্সে যা আছে) — একই group_id, ক্রমিক sub_index ──
+    const allParts=[...pendingParts];
+    if(hasCurrent) allParts.push({question:question.trim(),correct:correct.trim(),opt1,opt2,opt3,opt4,explanation});
+    const groupId=effGroupHeading?("GRP_"+Date.now().toString(36).toUpperCase()):"";
+
     try{
-      const row=buildSheetRow({
-        item, subject:subjectSel.name.trim(), subtopic:topicName, qtype:effQtype,
+      const rows=allParts.map((part,idx)=>buildSheetRow({
+        item:{q:part.question,correct:part.correct,opt1:part.opt1,opt2:part.opt2,opt3:part.opt3,opt4:part.opt4,explanation:part.explanation},
+        subject:subjectSel.name.trim(), subtopic:topicName, qtype:effQtype,
         audienceTags:tagsArr, mainQpaper:"", subjectId:subjRes.id, topicId:topicRes.id,
-      });
-      const res=await saveRowsToSheet({rows:[row],targetTab:targetMode,gasSecret,push,examAppearance,source:"Single_Text"});
+        groupId, subIndex:groupId?(idx+1):null, groupHeading:groupId?effGroupHeading:"",
+      }));
+      const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance,source:"Single_Text"});
       if(res.added>0){
-        push("success","✅ যোগ হয়েছে!",`এই সেশনে মোট ${sessionCount+1}টি`);
-        if(res.examAppearancesLinkedToExisting>0) push("success","🔗 প্রশ্নটা আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
+        push("success",`✅ ${rows.length>1?rows.length+"টা sub-part একসাথে":""} যোগ হয়েছে!`,`এই সেশনে মোট ${sessionCount+rows.length}টি`);
+        if(res.examAppearancesLinkedToExisting>0) push("success","🔗 কিছু প্রশ্ন আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
+        setPendingParts([]);
+        setSessionCount(c=>c+rows.length);
         resetForNext();
       }
       else if(res.skipped>0) push("warn","⚠️ ইতিমধ্যে Sheet-এ আছে (duplicate)","একই প্রশ্ন আগে থেকেই আছে বলে যোগ হয়নি");
       else push("error","সেভ ব্যর্থ","Sheet-এ যোগ হয়নি — নেটওয়ার্ক সমস্যা হতে পারে, একটু পর আবার চেষ্টা করো");
     }catch(e){ push("error","সেভ ব্যর্থ",e.message); }
     setSaving(false);
-  },[saving,generating,question,correct,subjectSel,topicSel,subjectOptions,topicOptions,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,refData,postSel,instSel,examYear,postOptions,instOptions,sessionCount,push]);
+  },[saving,generating,question,correct,subjectSel,topicSel,subjectOptions,topicOptions,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,refData,postSel,instSel,examYear,postOptions,instOptions,groupHeadingText,pendingParts,sessionCount,push]);
 
-  /* ── গ্লোবাল Ctrl+S ক্যাচার ── */
+  /* ── গ্লোবাল Ctrl+S (ফাইনাল সাবমিট) ও Ctrl+Enter (পরবর্তী sub-part-এ যাও, এখনো সাবমিট না) ক্যাচার ── */
   useEffect(()=>{
     const onKey=e=>{
       if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){ e.preventDefault(); submit(); }
+      else if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){ e.preventDefault(); commitCurrentAsPending(); }
     };
     window.addEventListener("keydown",onKey);
     return()=>window.removeEventListener("keydown",onKey);
-  },[submit]);
+  },[submit,commitCurrentAsPending]);
 
   return(
     <div className="page">
@@ -407,6 +460,39 @@ function SingleQuestionEntryPage({push}){
         </div>
       )}
 
+      {targetMode==="QBank"&&(
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 10px",marginBottom:10}}>
+          <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:2}}>🏷️ গ্রুপ হেডিং (ঐচ্ছিক)</div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:6,lineHeight:1.5}}>
+            খালি = নিচের প্রশ্ন Ctrl+S দিলেই সাথে সাথে স্বাধীনভাবে সাবমিট হয়ে যাবে (আগের মতোই)।
+            টেক্সট লিখলে = প্রতিটা sub-part লিখে <b>Ctrl+Enter</b> দিয়ে জমা রাখো (এখনো সাবমিট হয়
+            না), সবশেষেরটা লিখে <b>Ctrl+S</b> দিলে জমা হওয়া সবগুলো + এইটা — একসাথে, একবারে
+            গ্রুপ হয়ে সাবমিট হবে।
+          </div>
+          <input
+            className="inp"
+            placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"'
+            value={groupHeadingText}
+            onChange={e=>setGroupHeadingText(e.target.value)}
+          />
+          {pendingParts.length>0&&(
+            <div style={{marginTop:8,background:"#0000002a",borderRadius:8,padding:"6px 8px"}}>
+              <div style={{fontSize:10,fontWeight:800,color:"#facc15",marginBottom:4}}>
+                🔗 জমা আছে (এখনো সাবমিট হয়নি): {pendingParts.length}টা sub-part
+              </div>
+              {pendingParts.map((p,idx)=>(
+                <div key={idx} style={{display:"flex",alignItems:"center",gap:6,fontSize:10,color:C.muted,padding:"2px 0"}}>
+                  <span style={{flexShrink:0,fontWeight:700,color:C.text}}>{["ক","খ","গ","ঘ","ঙ","চ","ছ","জ","ঝ","ঞ"][idx]||idx+1})</span>
+                  <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.question}</span>
+                  <button onClick={()=>removePending(idx)} style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:12,flexShrink:0}}>✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+
       <div style={{height:1,background:C.border,margin:"12px 0"}}/>
 
       {/* ── প্রশ্ন বক্স ── */}
@@ -463,12 +549,23 @@ function SingleQuestionEntryPage({push}){
         </button>
       </div>
 
+      {targetMode==="QBank"&&groupHeadingText.trim()&&(
+        <button className="btn" disabled={saving||generating||!question.trim()||!correct.trim()}
+          onClick={commitCurrentAsPending}
+          style={{width:"100%",justifyContent:"center",padding:"10px 0",fontSize:13,marginBottom:8,
+            background:"#facc1522",color:"#facc15",border:"1px solid #facc1544"}}>
+          ➕ এই sub-part জমা রাখো, পরেরটা লিখো (Ctrl+Enter)
+        </button>
+      )}
+
       <button className="btn bg" disabled={saving||generating} onClick={submit} tabIndex={9}
         style={{width:"100%",justifyContent:"center",padding:"12px 0",fontSize:14}}>
-        {saving?"⏳ সেভ হচ্ছে...":"💾 সাবমিট করো (Ctrl+S)"}
+        {saving?"⏳ সেভ হচ্ছে...":pendingParts.length>0?`💾 সবগুলো (${pendingParts.length+(question.trim()?1:0)}টা) একসাথে সাবমিট করো (Ctrl+S)`:"💾 সাবমিট করো (Ctrl+S)"}
       </button>
       <div style={{textAlign:"center",fontSize:10,color:C.muted,marginTop:8}}>
-        Tab দিয়ে পরের বক্সে যাও · Ctrl+S দিয়ে যেকোনো জায়গা থেকেই সাবমিট হবে
+        {targetMode==="QBank"&&groupHeadingText.trim()
+          ?"Ctrl+Enter দিয়ে sub-part জমা রাখো · Ctrl+S দিয়ে সব একসাথে ফাইনাল সাবমিট"
+          :"Tab দিয়ে পরের বক্সে যাও · Ctrl+S দিয়ে যেকোনো জায়গা থেকেই সাবমিট হবে"}
       </div>
     </div>
   );
