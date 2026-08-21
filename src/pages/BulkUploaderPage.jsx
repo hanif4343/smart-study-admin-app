@@ -45,7 +45,14 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const[refLoading,setRefLoading]=useState(false);
   const[bulkText,setBulkText]=useState("");
   const[tagIds,setTagIds]=useState([]); // আগে audienceTags (নামের array) ছিল — এখন Tags-রেফারেন্স-টেবিলের id array
-  const[groupMode,setGroupMode]=useState(false); // ✅ ON করলে এই ব্যাচের সব প্রশ্ন একই group_id পাবে (multi-part প্রশ্ন — যেমন "কারক নির্ণয় কর" ৫টা sub-question)
+  const[groupMode,setGroupMode]=useState(false); // ✅ Quiz/Study mode-এ — ON করলে এই ব্যাচের সব প্রশ্ন একই group_id পাবে, কোনো হেডিং টেক্সট ছাড়াই (পুরনো আচরণ, অপরিবর্তিত)
+  // ── SIMPLIFIED, শুধু QBank mode-এর জন্য ("হেডিং অন করে টেক্সট বসালেই তো হবে"):
+  // আগে এখানেও groupMode বুলিয়ান + আলাদা show_heading টগল ছিল — বাস্তবে "গ্রুপ করা
+  // কিন্তু হেডিং নেই" এমন কেস কখনো হয় না, তাই একটাই টেক্সট ফিল্ড। খালি = প্রতিটা
+  // লাইন স্বাধীন প্রশ্ন (group_id নেই), টেক্সট থাকলে = পুরো ব্যাচ গ্রুপ হয়ে সেটাই
+  // হেডিং হিসেবে বসে (group_id বসে + group_heading কলামে এই টেক্সট)। Quiz/Study
+  // mode-এ এটা ব্যবহার হয় না, ওখানে ওপরের পুরনো groupMode টগলই চলে। ──
+  const[groupHeadingQBank,setGroupHeadingQBank]=useState("");
   const[validStats,setValidStats]=useState(null);
   const[validDetail,setValidDetail]=useState(null); // detail modal data
   const[showDetail,setShowDetail]=useState(false);
@@ -95,6 +102,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     if(d.instSel)setInstSel(d.instSel);
     if(d.examYear!==undefined)setExamYear(d.examYear);
     if(d.groupMode!==undefined)setGroupMode(d.groupMode);
+    if(d.groupHeadingQBank!==undefined)setGroupHeadingQBank(d.groupHeadingQBank);
     setBulkText(d.bulkText||"");
     runValidate(d.bulkText||"",d.mode||mode,d.qtype||qtype);
     setDraftBanner(null);
@@ -110,13 +118,13 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     if(running) return;
     const t=setTimeout(()=>{
       if(bulkText.trim()){
-        saveDraft(LS_DRAFT_BULK,{bulkText,mode,qtype,fallbackSubject,fallbackTopic,postSel,instSel,examYear,groupMode});
+        saveDraft(LS_DRAFT_BULK,{bulkText,mode,qtype,fallbackSubject,fallbackTopic,postSel,instSel,examYear,groupMode,groupHeadingQBank});
       }else{
         clearDraft(LS_DRAFT_BULK);
       }
     },800);
     return ()=>clearTimeout(t);
-  },[bulkText,mode,qtype,fallbackSubject,fallbackTopic,postSel,instSel,examYear,groupMode,running,draftBanner]);
+  },[bulkText,mode,qtype,fallbackSubject,fallbackTopic,postSel,instSel,examYear,groupMode,groupHeadingQBank,running,draftBanner]);
 
   // mode বদলালে subject/topic সিলেকশন রিসেট (আগের mode-এর id নতুন mode-এ ভুল হতে পারে)
   useEffect(()=>{ setSubjectId(""); setTopicId(""); if(mode!=="QBank"){ setPostSel({id:"",name:""}); setInstSel({id:"",name:""}); setExamYear(""); } },[mode]);
@@ -348,10 +356,14 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       if(r.anyCreated) loadRefData(); // নতুন subject/topic তৈরি হলে dropdown-ও রিফ্রেশ হোক
     }
 
-    // ── group_id: groupMode ON থাকলে এই পুরো ব্যাচের সব প্রশ্ন একই group_id
-    // পাবে (multi-part প্রশ্ন — "কারক নির্ণয় কর" ৫টা sub-question একসাথে
-    // দেখানোর জন্য), sub_index ক্রমিক (1,2,3...) ──
-    const batchGroupId=groupMode?("GRP_"+Date.now().toString(36).toUpperCase()):"";
+    // ── group_id: mode অনুযায়ী দুই রকম —
+    // • QBank: groupHeadingQBank-এ টেক্সট থাকলেই ব্যাচ গ্রুপ হয় (হেডিং অন করে টেক্সট
+    //   বসালেই তো হবে — আলাদা টগলের দরকার নেই)
+    // • Quiz/Study: পুরনো groupMode বুলিয়ান টগল অপরিবর্তিত (কোনো হেডিং টেক্সট নেই) ──
+    const effGroupHeading=mode==="QBank"?groupHeadingQBank.trim():"";
+    const batchGroupId=mode==="QBank"
+      ? (effGroupHeading?("GRP_"+Date.now().toString(36).toUpperCase()):"")
+      : (groupMode?("GRP_"+Date.now().toString(36).toUpperCase()):"");
 
     // NO-FIREBASE POLICY: Quiz/QBank/Study/Typing এখন শুধু Google Sheet-এ যায় (GAS দিয়ে),
     // Firebase-এ সরাসরি লেখার পুরনো পথটা ইচ্ছাকৃতভাবে সরানো হয়েছে। GAS-এর
@@ -363,6 +375,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           qtype:eff, audienceTags:tagNames,
           subjectId:sId, topicId:tId, tagIds,
           groupId:batchGroupId, subIndex:batchGroupId?(idx+1):null,
+          groupHeading:batchGroupId?effGroupHeading:"",
         }))
       : entries.map((item,idx)=>buildSheetRow({
           item, subject:subjectName,
@@ -370,6 +383,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           qtype:eff, audienceTags:tagNames,
           subjectId, topicId, tagIds,
           groupId:batchGroupId, subIndex:batchGroupId?(idx+1):null,
+          groupHeading:batchGroupId?effGroupHeading:"",
         }));
     const result=await saveRowsToSheet({rows,targetTab:mode,gasSecret,push,examAppearance,source:"Bulk_Text"});
     entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
@@ -530,16 +544,45 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         </div>
       )}
 
-      {/* Group Mode — multi-part প্রশ্নের জন্য (যেমন "কারক নির্ণয় কর" ৫টা sub-question) */}
-      <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div>
-          <div style={{fontSize:11,fontWeight:800,color:C.text}}>🔗 Group Mode</div>
-          <div style={{fontSize:10,color:C.muted,marginTop:2}}>ON করলে নিচের সব প্রশ্ন একই group_id পাবে (একই instruction-এর sub-question — এক জায়গায় দেখাবে, স্কোর আলাদা)</div>
+      {/* Group Mode — Quiz/Study mode-এ পুরনো টগল, অপরিবর্তিত (multi-part প্রশ্নের জন্য,
+          যেমন "কারক নির্ণয় কর" ৫টা sub-question) */}
+      {mode!=="QBank"&&(
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{fontSize:11,fontWeight:800,color:C.text}}>🔗 Group Mode</div>
+            <div style={{fontSize:10,color:C.muted,marginTop:2}}>ON করলে নিচের সব প্রশ্ন একই group_id পাবে (একই instruction-এর sub-question — এক জায়গায় দেখাবে, স্কোর আলাদা)</div>
+          </div>
+          <button onClick={()=>setGroupMode(g=>!g)} style={{flexShrink:0,width:44,height:24,borderRadius:20,border:"none",background:groupMode?C.accent:C.border,position:"relative",cursor:"pointer"}}>
+            <div style={{position:"absolute",top:2,left:groupMode?22:2,width:20,height:20,borderRadius:"50%",background:"#fff",transition:"left .15s"}}/>
+          </button>
         </div>
-        <button onClick={()=>setGroupMode(g=>!g)} style={{flexShrink:0,width:44,height:24,borderRadius:20,border:"none",background:groupMode?C.accent:C.border,position:"relative",cursor:"pointer"}}>
-          <div style={{position:"absolute",top:2,left:groupMode?22:2,width:20,height:20,borderRadius:"50%",background:"#fff",transition:"left .15s"}}/>
-        </button>
-      </div>
+      )}
+
+      {/* ── SIMPLIFIED — শুধু QBank mode-এ ("হেডিং অন করে টেক্সট বসালেই তো হবে"): আলাদা
+          Group Mode টগল নেই, একটাই টেক্সট ফিল্ড — খালি রাখলে নিচের প্রতিটা লাইন স্বাধীন
+          প্রশ্ন (নিজস্ব সিরিয়াল নম্বর), টেক্সট লিখলে পুরো ব্যাচ একসাথে গ্রুপ হয়ে সেটাই
+          বোল্ড হেডিং হিসেবে দেখাবে। ⚠️ মনে রাখতে হবে: এখন টেক্সটবক্সে (নিচে) যা যা
+          লেখা আছে তার *পুরোটাই* এক গ্রুপ হয়ে যাবে — তাই আলাদা আলাদা গ্রুপের জন্য
+          আলাদা আলাদা Submit করতে হবে। */}
+      {mode==="QBank"&&(
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 12px",marginBottom:12}}>
+          <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:2}}>🏷️ গ্রুপ হেডিং (ঐচ্ছিক)</div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:6,lineHeight:1.5}}>
+            খালি = নিচের প্রতিটা লাইন আলাদা প্রশ্ন। টেক্সট দিলে = নিচের <b>সবগুলো লাইন একসাথে</b> এক প্রশ্নের ক/খ/গ... sub-part হয়ে যাবে, এই টেক্সটটাই হেডিং হিসেবে দেখাবে।
+          </div>
+          <input
+            className="inp"
+            placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:" — খালি রাখলে গ্রুপিং হবে না'
+            value={groupHeadingQBank}
+            onChange={e=>setGroupHeadingQBank(e.target.value)}
+          />
+          {groupHeadingQBank.trim()&&(
+            <div style={{fontSize:10,color:"#facc15",marginTop:6,lineHeight:1.5,background:"#facc1511",border:"1px solid #facc1533",borderRadius:8,padding:"6px 8px"}}>
+              ⚠️ নিচের টেক্সটবক্সে এখন যা যা লেখা আছে, Submit করলে <b>সবগুলোই</b> এই একটা গ্রুপে চলে যাবে। ভিন্ন প্রশ্নের লাইন এখানে মিশে থাকলে আগে সরিয়ে নাও।
+            </div>
+          )}
+        </div>
+      )}
 
 
       {/* Format Guide */}
