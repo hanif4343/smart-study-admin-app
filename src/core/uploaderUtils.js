@@ -184,7 +184,7 @@ function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id,ma
 
 /* Build Google-Sheet row — shared shape used by both direct-submit (OCR page) and BulkUploaderPage
    when saveLoc==="sheet". Same `item` shape as buildBulkRecord (from parseBulkEntry). */
-function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subjectId,topicId,tagIds,groupId,subIndex}){
+function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subjectId,topicId,tagIds,groupId,subIndex,groupHeading}){
   const isWritten=qtype==="Written";
   return{
     question:item.q,
@@ -202,6 +202,10 @@ function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subj
     subject_id:subjectId||"", topic_id:topicId||"",
     audienceTagsIds:(tagIds||[]).join(","),
     group_id:groupId||"", sub_index:subIndex!=null?String(subIndex):"",
+    // ── SIMPLIFIED ("হেডিং অন করে টেক্সট বসালেই তো হবে") — শুধু QBank-এর নতুন
+    // single-field group-heading UX-এ ব্যবহার হয় (BulkUploaderPage/SingleQuestionEntryPage)।
+    // Quiz/Study-তে এই প্যারামিটার পাস হয় না বলে এখানে "" থাকবে, কোনো প্রভাব নেই। ──
+    group_heading:groupHeading||"",
   };
 }
 
