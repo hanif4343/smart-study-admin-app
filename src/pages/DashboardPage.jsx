@@ -2,7 +2,8 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../core/config.js";
 import { useFB, loadPath } from "../core/dataCache.js";
-import { fmt, toArr, buildSubjectMap, pct } from "../core/utils.js";
+import { fmt, toArr, buildSubjectMap, pct, loadSharedGasSecret } from "../core/utils.js";
+import { fetchDirtyTopicsCount, fetchOrphanStats } from "../core/sheetSave.js";
 import { Bar, Tree } from "../components/shared/MiniComponents.jsx";
 
 /* ── কনটেন্ট-লাইব্রেরি কার্ডের একটা সারি (Quiz/QBank/Study) — আগে এগুলো ৪টা আলাদা
@@ -56,6 +57,23 @@ function DashboardPage({push,tick}){
     return{l:`${d.getDate()}/${d.getMonth()+1}`,v:0};
   }),[]);
 
+  // ── 🩺 Data Health widget — dirty topic count + orphan question count,
+  // এক নজরে দেখার জন্য (আলাদা করে Content → CDN ট্যাবে যেতে হবে না রোজ রোজ
+  // চেক করতে)। gasSecret এখানে prop হিসেবে আসে না, তাই shared localStorage
+  // থেকেই পড়া হচ্ছে (বাকি সব টুল যেভাবে করে) — না থাকলে widget-টা চুপচাপ
+  // "সেট করা নেই" দেখাবে, এরর দেখাবে না। ──
+  const[gasSecret]=useState(loadSharedGasSecret);
+  const[dirtyCount,setDirtyCount]=useState(null);
+  const[orphanTotal,setOrphanTotal]=useState(null);
+  useEffect(()=>{
+    if(!gasSecret) return;
+    fetchDirtyTopicsCount({gasSecret}).then(n=>{ if(n!==null) setDirtyCount(n); }).catch(()=>{});
+    fetchOrphanStats({gasSecret}).then(s=>{
+      if(!s) return;
+      setOrphanTotal(Object.values(s).reduce((sum,v)=>sum+(v.orphan||0),0));
+    }).catch(()=>{});
+  },[gasSecret,tick]);
+
   return(
     <div className="page">
 
@@ -89,6 +107,33 @@ function DashboardPage({push,tick}){
       ) : (
         <div className="card" style={{padding:"12px 16px",marginBottom:20}}>
           <div style={{fontSize:11,color:C.muted,fontWeight:600}}>✅ কোনো পেন্ডিং রিপোর্ট নেই</div>
+        </div>
+      )}
+
+      {/* ── 🩺 Data Health — Publish অপেক্ষায় থাকা Topic ও Orphan প্রশ্ন এক নজরে,
+          যাতে রোজ আলাদা করে Content → CDN ট্যাবে গিয়ে চেক করতে না হয়। সুস্থ
+          (dirty=0, orphan=0) থাকলে কার্ডটাই দেখানো হয় না — শুধু নজরে আনার
+          মতো কিছু থাকলেই দেখাবে। gasSecret সেট করা না থাকলেও চুপচাপ কিছু
+          দেখাবে না (এরর দেখাবে না, শুধু dashboard-এর বাকি অংশ যেমন ছিল
+          তেমনই কাজ করবে)। ── */}
+      {gasSecret && ((dirtyCount??0)>0 || (orphanTotal??0)>0) && (
+        <div className="card" style={{borderColor:`${C.warning}40`,background:`linear-gradient(180deg,${C.warning}0d,${C.card})`,marginBottom:20}}>
+          <div className="sl" style={{color:C.warning,marginBottom:8}}>🩺 ডেটা হেলথ</div>
+          <div style={{display:"flex",gap:16}}>
+            {dirtyCount>0 && (
+              <div>
+                <div style={{fontSize:18,fontWeight:800,color:C.text}}>{fmt(dirtyCount)}</div>
+                <div style={{fontSize:10,color:C.muted}}>🟡 Topic Publish বাকি</div>
+              </div>
+            )}
+            {orphanTotal>0 && (
+              <div>
+                <div style={{fontSize:18,fontWeight:800,color:C.text}}>{fmt(orphanTotal)}</div>
+                <div style={{fontSize:10,color:C.muted}}>🧟 Orphan প্রশ্ন</div>
+              </div>
+            )}
+          </div>
+          <div style={{fontSize:10,color:C.muted,marginTop:8}}>বিস্তারিত ও একশনের জন্য Content → 🚀 CDN-এ যাও</div>
         </div>
       )}
 
