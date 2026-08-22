@@ -347,15 +347,18 @@ function SingleQuestionEntryPage({push}){
     setSaving(false);
   },[saving,generating,question,correct,subjectSel,topicSel,subjectOptions,topicOptions,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,refData,postSel,instSel,examYear,postOptions,instOptions,groupHeadingText,pendingParts,sessionCount,push]);
 
-  /* ── গ্লোবাল Ctrl+S (ফাইনাল সাবমিট) ও Ctrl+Enter (পরবর্তী sub-part-এ যাও, এখনো সাবমিট না) ক্যাচার ── */
+  /* ── গ্লোবাল Ctrl+S (ফাইনাল সাবমিট) ও Ctrl+Enter (পরবর্তী sub-part-এ যাও, এখনো সাবমিট না) ক্যাচার —
+     QBank+Written হলে PaperComposer-এর নিজস্ব keydown হ্যান্ডলার চলে, এটা তখন no-op ── */
+  const isPaperMode = targetMode==="QBank" && qtype==="Written";
   useEffect(()=>{
+    if(isPaperMode) return;
     const onKey=e=>{
       if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){ e.preventDefault(); submit(); }
       else if((e.ctrlKey||e.metaKey)&&e.key==="Enter"){ e.preventDefault(); commitCurrentAsPending(); }
     };
     window.addEventListener("keydown",onKey);
     return()=>window.removeEventListener("keydown",onKey);
-  },[submit,commitCurrentAsPending]);
+  },[submit,commitCurrentAsPending,isPaperMode]);
 
   return(
     <div className="page">
@@ -399,6 +402,10 @@ function SingleQuestionEntryPage({push}){
 
       <SaveLocationPicker value="sheet" onChange={()=>{}} gasSecret={gasSecret} onGasSecretChange={setGasSecret} compact/>
 
+      {isPaperMode ? (
+        <PaperComposer gasSecret={gasSecret} refData={refData} setRefData={setRefData} push={push} sessionCount={sessionCount} setSessionCount={setSessionCount}/>
+      ) : (
+      <>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
         <div className="fld" style={{marginBottom:0}}>
           <label>📚 Subject</label>
@@ -566,6 +573,331 @@ function SingleQuestionEntryPage({push}){
         {targetMode==="QBank"&&groupHeadingText.trim()
           ?"Ctrl+Enter দিয়ে sub-part জমা রাখো · Ctrl+S দিয়ে সব একসাথে ফাইনাল সাবমিট"
           :"Tab দিয়ে পরের বক্সে যাও · Ctrl+S দিয়ে যেকোনো জায়গা থেকেই সাবমিট হবে"}
+      </div>
+      </>
+      )}
+    </div>
+  );
+}
+
+/* ══════════ PAPER COMPOSER — QBank + Written নির্বাচন করলেই এই পুরো ইন্টারফেস চালু
+   হয়ে যায় (Quiz/Study/MCQ-তে কোনো প্রভাব নেই, ওখানে ওপরের পুরনো ফর্মই থাকে)।
+   বাংলা/ইংরেজি/গণিত/GK — ৪টা ট্যাব, প্রতিটায় একাধিক প্রশ্ন/গ্রুপ (ব্রাউজারের
+   মেমোরিতেই) জমতে থাকে — কোনো নেটওয়ার্ক কল ছাড়াই। সবশেষে একদম নিচের "🚀 সব
+   সাবমিট করো" বাটনে একটাই ক্লিকে, একটাই নেটওয়ার্ক কলে, পুরো প্রশ্নপত্র ডাটাবেজে
+   জমা হয়ে যায়। ══════════ */
+
+const PAPER_TABS = [
+  { key:"bangla",  label:"বাংলা",  fixedSubject:"বাংলা",   grouped:true,  gkStyle:false },
+  { key:"english", label:"ইংরেজি", fixedSubject:"English", grouped:true,  gkStyle:false },
+  { key:"math",    label:"গণিত",   fixedSubject:"গণিত",    grouped:false, gkStyle:false },
+  { key:"gk",      label:"GK",     fixedSubject:null,      grouped:false, gkStyle:true  },
+];
+
+const FORMAT_STYLES = [
+  { v:"plain",     label:"Plain — সাধারণ প্রশ্ন-উত্তর" },
+  { v:"table",     label:"Table — শব্দ | ব্যাখ্যা (যেমন সন্ধি বিচ্ছেদ)" },
+  { v:"highlight", label:"Highlight — নির্দিষ্ট শব্দ মার্ক করা (যেমন কারক নির্ণয়)" },
+  { v:"fillblank", label:"Fill-blank — বাক্যের ফাঁকে উত্তর (ইংরেজি)" },
+];
+
+let _paperIdCounter=0;
+const newPaperId=()=>"it_"+(++_paperIdCounter)+"_"+Date.now().toString(36);
+const newPaperItem=()=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:""});
+const newGroupCard=()=>({id:newPaperId(),formatStyle:"plain",heading:"",topicSel:{id:"",name:""},items:[newPaperItem()]});
+const newFlatCard=(isGk)=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:"",topicSel:{id:"",name:""},...(isGk?{subjectSel:{id:"",name:""}}:{})});
+const makeInitialPaper=()=>({bangla:[newGroupCard()],english:[newGroupCard()],math:[newFlatCard(false)],gk:[newFlatCard(true)]});
+const SUBLABELS=["ক","খ","গ","ঘ","ঙ","চ","ছ","জ","ঝ","ঞ","ট","ঠ","ড","ঢ"];
+
+function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessionCount}){
+  const[paper,setPaper]=useState(makeInitialPaper);
+  const[activeTab,setActiveTab]=useState("bangla");
+  const[saving,setSaving]=useState(false);
+  const textareaRefs=useRef({});
+
+  const tabDef=PAPER_TABS.find(t=>t.key===activeTab);
+  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet==="QBank").map(s=>({id:s.subject_id,name:s.subject_name})):[];
+  const topicOptionsFor=subjId=>refData&&subjId?(refData.topics||[]).filter(t=>t.subject_id===subjId).map(t=>({id:t.topic_id,name:t.topic_name})):[];
+
+  const setCards=(tab,updater)=>setPaper(p=>({...p,[tab]:updater(p[tab])}));
+  const updateCard=(tab,cardId,patch)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,...patch}:c));
+  const removeCard=(tab,cardId)=>setCards(tab,cards=>cards.length>1?cards.filter(c=>c.id!==cardId):cards);
+  const addCard=tab=>setCards(tab,cards=>[...cards,tab==="math"?newFlatCard(false):tab==="gk"?newFlatCard(true):newGroupCard()]);
+  const updateItem=(tab,cardId,itemId,patch)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:c.items.map(it=>it.id===itemId?{...it,...patch}:it)}:c));
+  const addSubItem=(tab,cardId)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:[...c.items,newPaperItem()]}:c));
+  const removeSubItem=(tab,cardId,itemId)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:c.items.length>1?c.items.filter(it=>it.id!==itemId):c.items}:c));
+
+  /* ── 🖍 হাইলাইট — টেক্সট সিলেক্ট করে এই বাটন চাপলে সিলেকশনটা __..__ দিয়ে মার্ক হয়ে
+     যায় (User App এই মার্কআপ দেখে সেই অংশটুকু bold/underline করে দেখাবে) ── */
+  const wrapHighlight=(tab,cardId,itemId)=>{
+    const el=textareaRefs.current[itemId];
+    if(!el)return;
+    const start=el.selectionStart, end=el.selectionEnd;
+    if(start===end){ push("warn","আগে যে শব্দ/অংশ হাইলাইট করবে সেটা সিলেক্ট করো",""); return; }
+    const val=el.value;
+    const newVal=val.slice(0,start)+"__"+val.slice(start,end)+"__"+val.slice(end);
+    updateItem(tab,cardId,itemId,{question:newVal});
+    requestAnimationFrame(()=>{ el.focus(); const p=end+4; el.setSelectionRange(p,p); });
+  };
+
+  const tabCount=key=>{
+    const def=PAPER_TABS.find(t=>t.key===key);
+    return (paper[key]||[]).reduce((s,c)=>s+(def.grouped?(c.items||[]).filter(it=>it.question.trim()).length:(c.question.trim()?1:0)),0);
+  };
+  const totalCount=PAPER_TABS.reduce((s,t)=>s+tabCount(t.key),0);
+
+  const submitPaper=useCallback(async()=>{
+    if(saving)return;
+    if(!gasSecret){ push("warn","⚠️ GAS Secret Key দাও","Save Location প্যানেলে বসাও"); return; }
+    const total=PAPER_TABS.reduce((s,t)=>s+tabCount(t.key),0);
+    if(total===0){ push("warn","কোনো প্রশ্নই টাইপ করা হয়নি",""); return; }
+    setSaving(true);
+    try{
+      const subjectIdCache={};
+      const resolveFixedSubject=async name=>{
+        if(subjectIdCache[name])return subjectIdCache[name];
+        const res=await resolveOrCreateReference({sel:{id:"",name},refType:"subjects",options:subjectOptions,gasSecret,sheet:"QBank",push});
+        if(!res.ok)throw new Error(`"${name}" Subject resolve ব্যর্থ`);
+        subjectIdCache[name]=res.id;
+        return res.id;
+      };
+
+      const allRows=[];
+      for(const t of PAPER_TABS){
+        for(const card of (paper[t.key]||[])){
+          if(t.grouped){
+            const validItems=(card.items||[]).filter(it=>it.question.trim());
+            if(!validItems.length)continue;
+            const subjId=await resolveFixedSubject(t.fixedSubject);
+            const topicName=card.topicSel.name.trim();
+            if(!topicName)throw new Error(`"${t.label}" ট্যাবে একটা কার্ডে Topic ফাঁকা আছে — Topic লিখো/বেছে নাও`);
+            const topicRes=await resolveOrCreateReference({sel:card.topicSel,refType:"topics",options:topicOptionsFor(subjId),gasSecret,parentId:subjId,push});
+            if(!topicRes.ok)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
+            const heading=card.heading.trim();
+            const groupId=heading?("GRP_"+Date.now().toString(36).toUpperCase()+Math.random().toString(36).slice(2,6).toUpperCase()):"";
+            validItems.forEach((it,idx)=>{
+              allRows.push(buildSheetRow({
+                item:{q:it.question.trim(),correct:it.answer.trim(),explanation:it.explanation,technique:it.technique},
+                subject:t.fixedSubject,subtopic:topicName,qtype:"Written",
+                audienceTags:[],mainQpaper:"",subjectId:subjId,topicId:topicRes.id,
+                groupId,subIndex:groupId?(idx+1):null,groupHeading:groupId?heading:"",
+                formatStyle:card.formatStyle!=="plain"?card.formatStyle:"",
+              }));
+            });
+          } else {
+            if(!card.question.trim())continue;
+            let subjId;
+            if(t.gkStyle){
+              const subjName=(card.subjectSel.name||"").trim();
+              if(!subjName)throw new Error(`GK ট্যাবে একটা প্রশ্নে Subject ফাঁকা আছে — কোন real subject (যেমন "সাধারণ বিজ্ঞান") সেটা বেছে দাও`);
+              const sres=await resolveOrCreateReference({sel:card.subjectSel,refType:"subjects",options:subjectOptions,gasSecret,sheet:"QBank",push});
+              if(!sres.ok)throw new Error(`"${subjName}" Subject resolve ব্যর্থ`);
+              subjId=sres.id;
+            } else {
+              subjId=await resolveFixedSubject(t.fixedSubject);
+            }
+            const topicName=card.topicSel.name.trim();
+            if(!topicName)throw new Error(`"${t.label}" ট্যাবে একটা প্রশ্নে Topic ফাঁকা আছে`);
+            const topicRes=await resolveOrCreateReference({sel:card.topicSel,refType:"topics",options:topicOptionsFor(subjId),gasSecret,parentId:subjId,push});
+            if(!topicRes.ok)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
+            allRows.push(buildSheetRow({
+              item:{q:card.question.trim(),correct:card.answer.trim(),explanation:card.explanation,technique:card.technique},
+              subject:t.gkStyle?card.subjectSel.name.trim():t.fixedSubject,subtopic:topicName,qtype:"Written",
+              audienceTags:[],mainQpaper:"",subjectId:subjId,topicId:topicRes.id,
+              groupId:"",subIndex:null,groupHeading:"",formatStyle:"",
+            }));
+          }
+        }
+      }
+
+      if(!allRows.length){ push("warn","কোনো সম্পূর্ণ প্রশ্ন পাওয়া যায়নি","Topic ফাঁকা রাখলে সেই প্রশ্ন বাদ পড়ে যায়"); setSaving(false); return; }
+
+      const res=await saveRowsToSheet({rows:allRows,targetTab:"QBank",gasSecret,push,source:"Single_Text_Paper"});
+      if(res.added>0){
+        push("success",`✅ পুরো প্রশ্নপত্র সাবমিট হয়েছে! (${res.added}টা প্রশ্ন)`,`এই সেশনে মোট ${sessionCount+res.added}টি`);
+        setSessionCount(c=>c+res.added);
+        setPaper(makeInitialPaper());
+        setActiveTab("bangla");
+        fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+      } else if(res.skipped>0){
+        push("warn","⚠️ সবগুলোই ইতিমধ্যে Sheet-এ আছে (duplicate)","");
+      } else {
+        push("error","সেভ ব্যর্থ","নেটওয়ার্ক সমস্যা হতে পারে, একটু পর আবার চেষ্টা করো");
+      }
+    }catch(e){
+      push("error","সাবমিট ব্যর্থ",e.message);
+    }
+    setSaving(false);
+  },[saving,gasSecret,paper,subjectOptions,refData,sessionCount,push,setRefData,setSessionCount]);
+
+  useEffect(()=>{
+    const onKey=e=>{ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){ e.preventDefault(); submitPaper(); } };
+    window.addEventListener("keydown",onKey);
+    return()=>window.removeEventListener("keydown",onKey);
+  },[submitPaper]);
+
+  return(
+    <div>
+      {/* ── সাবজেক্ট ট্যাব ── */}
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        {PAPER_TABS.map(t=>(
+          <button key={t.key} onClick={()=>setActiveTab(t.key)}
+            style={{flex:1,padding:"9px 4px",borderRadius:9,border:`1.5px solid ${activeTab===t.key?C.accent:C.border}`,
+              background:activeTab===t.key?C.accent:C.panel,color:activeTab===t.key?"#fff":C.muted,
+              fontSize:12,fontWeight:700,cursor:"pointer",position:"relative"}}>
+            {t.label}
+            {tabCount(t.key)>0&&(
+              <span style={{marginLeft:5,fontSize:9,background:activeTab===t.key?"#ffffff33":C.accent+"33",
+                color:activeTab===t.key?"#fff":C.accent,padding:"1px 6px",borderRadius:10,fontWeight:800}}>{tabCount(t.key)}</span>
+            )}
+          </button>
+        ))}
+      </div>
+
+      {tabDef.grouped ? (
+        <>
+          {(paper[activeTab]||[]).map(card=>(
+            <div key={card.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:12,marginBottom:12}}>
+              <div style={{display:"flex",gap:8,marginBottom:8}}>
+                <select className="inp" value={card.formatStyle} onChange={e=>updateCard(activeTab,card.id,{formatStyle:e.target.value})}
+                  style={{flex:1,fontSize:11}}>
+                  {FORMAT_STYLES.map(f=>(<option key={f.v} value={f.v}>{f.label}</option>))}
+                </select>
+                <button onClick={()=>removeCard(activeTab,card.id)} title="এই প্রশ্ন/গ্রুপ মুছো"
+                  style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:15,padding:"0 6px"}}>🗑</button>
+              </div>
+              <div className="fld" style={{marginBottom:8}}>
+                <label>🏷️ গ্রুপ হেডিং (ঐচ্ছিক — খালি রাখলে প্রতিটা sub-part স্বাধীন প্রশ্ন হবে)</label>
+                <input className="inp" placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"' value={card.heading}
+                  onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}/>
+              </div>
+              <div className="fld" style={{marginBottom:10}}>
+                <label>📌 Topic (এই পুরো গ্রুপের জন্য একবারই)</label>
+                <TypeaheadCombo
+                  options={topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
+                  value={card.topicSel}
+                  onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel})}
+                  placeholder="Topic লিখো বা লিস্ট থেকে বেছে নাও..."
+                  newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}
+                />
+              </div>
+
+              {card.items.map((it,idx)=>(
+                <div key={it.id} style={{display:"flex",gap:8,padding:"8px 0",borderTop:idx>0?`1px dashed ${C.border}`:"none"}}>
+                  <div style={{width:22,flexShrink:0,fontWeight:800,color:C.accent,fontSize:12,paddingTop:8}}>{SUBLABELS[idx]||idx+1}.</div>
+                  <div style={{flex:1}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                      <label style={{margin:0,fontSize:10.5,color:C.muted,fontWeight:700}}>প্রশ্ন</label>
+                      {card.formatStyle==="highlight"&&(
+                        <button onClick={()=>wrapHighlight(activeTab,card.id,it.id)} title="সিলেক্ট করা অংশ হাইলাইট/আন্ডারলাইন করো"
+                          style={{background:"#facc1522",color:"#facc15",border:"1px solid #facc1544",borderRadius:6,
+                            fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>🖍 হাইলাইট করো</button>
+                      )}
+                    </div>
+                    <textarea
+                      ref={el=>{textareaRefs.current[it.id]=el;}}
+                      className="ta" style={{minHeight:44,fontSize:12.5}}
+                      value={it.question} onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}
+                      placeholder={card.formatStyle==="table"?"শব্দ (যেমন: অহর্নিশ)":"প্রশ্ন লিখো..."}/>
+                    <label style={{fontSize:10.5,color:C.muted,fontWeight:700,marginTop:4}}>উত্তর</label>
+                    <input className="inp" style={{fontSize:12.5}}
+                      value={it.answer} onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}
+                      placeholder={card.formatStyle==="table"?"বিচ্ছেদ/ব্যাখ্যা":"উত্তর লিখো..."}/>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:4}}>
+                      <input className="inp" style={{fontSize:11}} placeholder="ব্যাখ্যা (ঐচ্ছিক)"
+                        value={it.explanation} onChange={e=>updateItem(activeTab,card.id,it.id,{explanation:e.target.value})}/>
+                      <input className="inp" style={{fontSize:11}} placeholder="টেকনিক (ঐচ্ছিক)"
+                        value={it.technique} onChange={e=>updateItem(activeTab,card.id,it.id,{technique:e.target.value})}/>
+                    </div>
+                  </div>
+                  {card.items.length>1&&(
+                    <button onClick={()=>removeSubItem(activeTab,card.id,it.id)} style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:12,flexShrink:0,paddingTop:8}}>✕</button>
+                  )}
+                </div>
+              ))}
+              <button onClick={()=>addSubItem(activeTab,card.id)}
+                style={{width:"100%",marginTop:6,background:"transparent",border:`1px dashed ${C.border}`,borderRadius:8,
+                  color:C.muted,fontSize:11,fontWeight:700,padding:8,cursor:"pointer"}}>
+                + আরেকটা সাব-পার্ট (ক/খ/গ...) যোগ করো
+              </button>
+            </div>
+          ))}
+        </>
+      ) : (
+        <>
+          {(paper[activeTab]||[]).map((card,ci)=>(
+            <div key={card.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:12,marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <div style={{fontSize:11,fontWeight:800,color:C.muted}}>প্রশ্ন {ci+1}</div>
+                <button onClick={()=>removeCard(activeTab,card.id)} style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:15}}>🗑</button>
+              </div>
+              {tabDef.gkStyle&&(
+                <div className="fld" style={{marginBottom:8}}>
+                  <label>📚 Subject (real sheet subject — যেমন "সাধারণ বিজ্ঞান")</label>
+                  <TypeaheadCombo
+                    options={subjectOptions}
+                    value={card.subjectSel}
+                    onChange={sel=>updateCard(activeTab,card.id,{subjectSel:sel})}
+                    placeholder="Subject লিখো বা বেছে নাও..."
+                    newLabel={`🆕 "${card.subjectSel.name.trim()}" নতুন Subject হিসেবে যোগ হবে`}
+                  />
+                </div>
+              )}
+              <div className="fld" style={{marginBottom:8}}>
+                <label>📌 Topic</label>
+                <TypeaheadCombo
+                  options={topicOptionsFor(tabDef.gkStyle?card.subjectSel.id:subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
+                  value={card.topicSel}
+                  onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel})}
+                  placeholder={tabDef.gkStyle&&!card.subjectSel.name.trim()?"আগে Subject বেছে নাও":"Topic লিখো বা বেছে নাও..."}
+                  newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}
+                />
+              </div>
+              <div className="fld" style={{marginBottom:8}}>
+                <label>❓ প্রশ্ন</label>
+                <textarea className="ta" style={{minHeight:70}} value={card.question}
+                  onChange={e=>updateCard(activeTab,card.id,{question:e.target.value})}
+                  placeholder="প্রশ্ন লিখো..."/>
+              </div>
+              <div className="fld" style={{marginBottom:8}}>
+                <label>✅ উত্তর</label>
+                <textarea className="ta" style={{minHeight:50}} value={card.answer}
+                  onChange={e=>updateCard(activeTab,card.id,{answer:e.target.value})}
+                  placeholder={activeTab==="math"?"চূড়ান্ত উত্তর (ধাপে-ধাপে সমাধান নিচে ব্যাখ্যায়)...":"উত্তর লিখো..."}/>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+                <div className="fld" style={{marginBottom:0}}>
+                  <label>📖 {activeTab==="math"?"ধাপে-ধাপে সমাধান":"ব্যাখ্যা"} (ঐচ্ছিক)</label>
+                  <textarea className="ta" style={{minHeight:50,fontSize:11.5}} value={card.explanation}
+                    onChange={e=>updateCard(activeTab,card.id,{explanation:e.target.value})}
+                    placeholder={activeTab==="math"?"x^2 এভাবে লিখো, User App-এ x² হয়ে দেখাবে":"ব্যাখ্যা..."}/>
+                </div>
+                <div className="fld" style={{marginBottom:0}}>
+                  <label>💡 টেকনিক (ঐচ্ছিক)</label>
+                  <textarea className="ta" style={{minHeight:50,fontSize:11.5}} value={card.technique}
+                    onChange={e=>updateCard(activeTab,card.id,{technique:e.target.value})}
+                    placeholder="শর্টকাট/টেকনিক..."/>
+                </div>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
+      <button onClick={()=>addCard(activeTab)}
+        style={{width:"100%",marginBottom:16,background:"transparent",border:`1.5px dashed ${C.accent}`,borderRadius:10,
+          color:C.accent,fontSize:12.5,fontWeight:800,padding:10,cursor:"pointer"}}>
+        + নতুন {tabDef.grouped?"প্রশ্ন/গ্রুপ":"প্রশ্ন"} যোগ করো
+      </button>
+
+      <div style={{position:"sticky",bottom:8,background:C.bg,paddingTop:8}}>
+        <button className="btn bg" disabled={saving} onClick={submitPaper}
+          style={{width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14.5}}>
+          {saving?"⏳ সেভ হচ্ছে...":`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
+        </button>
+        <div style={{textAlign:"center",fontSize:9.5,color:C.muted,marginTop:6}}>
+          ৪টা ট্যাবেই যত প্রশ্ন জমা আছে (এখনো ডাটাবেজে যায়নি), সবগুলো একসাথে একবারে সাবমিট হবে
+        </div>
       </div>
     </div>
   );
