@@ -3330,6 +3330,14 @@ function doPost(e) {
               "subjectid":row.subject_id||"", "topicid":row.topic_id||"",
               "groupid":row.group_id||"",
               "subindex":row.sub_index||"", "audiencetagsids":row.audienceTagsIds||"",
+              // 🐛 ফিক্স (Single Entry > QBank > Written — "পরীক্ষার খাতা" PaperComposer):
+              // buildSheetRow() ক্লায়েন্ট থেকে group_heading ও format_style পাঠাচ্ছিল, কিন্তু
+              // এই bFieldMap-এ কোনো key-ই ছিল না — ফলে Sheet-এ কলাম থাকলেও এই দুইটা মান
+              // সবসময় সাইলেন্টলি ফাঁকা যাচ্ছিল (heading/table/highlight/fillblank সবকিছুই
+              // ডাটাবেজে হারিয়ে যাচ্ছিল)। এখন mapping যোগ করা হলো — buildRowArray()
+              // header-name matching-ই করে, তাই Sheet-এ "group_heading"/"format_style"
+              // কলাম না থাকলে এখনো নিরাপদে ignore হবে (ci===undefined), কলাম থাকলে ঠিক বসবে। ──
+              "groupheading":row.group_heading||"", "formatstyle":row.format_style||"",
               // 🆕 Added by — কোন ফিচার এই প্রশ্ন যোগ করলো (Bulk_Text/Bulk_OCR/Single_OCR/
               // Single_Text ইত্যাদি, ফ্রন্টএন্ড params.source দিয়ে পাঠায়)। row.editId থাকলে
               // (মানে এটা নতুন ইনসার্ট না, বিদ্যমান রো-র উপর edit/resubmit — যেমন ArchivePage)
@@ -3652,5 +3660,5 @@ function pullFirebaseToSheet_(sheetName) {
   if (lastRow > 1) sh.getRange(2, 1, lastRow - 1, sh.getLastColumn()).clearContent();
   if (rows.length > 0) sh.getRange(2, 1, rows.length, headerRow.length).setValues(rows);
 
-  Logger.log("✅ " + sheetName + " ব্যাকআপ সম্পন্ন — " + rows.length + " রো (Firebase → Sheet, read-only)।");
+  Logger.log("✅ " + sheetName + " ব্যাকআপ  সম্পন্ন — " + rows.length + " রো (Firebase → Sheet, read-only)।");
 }
