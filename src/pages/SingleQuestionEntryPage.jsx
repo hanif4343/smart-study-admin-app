@@ -758,18 +758,23 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
         <>
           {(paper[activeTab]||[]).map(card=>(
             <div key={card.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:12,marginBottom:12}}>
-              <div style={{display:"flex",gap:8,marginBottom:8}}>
-                <select className="inp" value={card.formatStyle} onChange={e=>updateCard(activeTab,card.id,{formatStyle:e.target.value})}
-                  style={{flex:1,fontSize:11}}>
-                  {FORMAT_STYLES.map(f=>(<option key={f.v} value={f.v}>{f.label}</option>))}
-                </select>
+              <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}>
                 <button onClick={()=>removeCard(activeTab,card.id)} title="এই প্রশ্ন/গ্রুপ মুছো"
-                  style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:15,padding:"0 6px"}}>🗑</button>
+                  style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:15,padding:"0 2px"}}>🗑</button>
               </div>
-              <div className="fld" style={{marginBottom:8}}>
-                <label>🏷️ গ্রুপ হেডিং (ঐচ্ছিক — খালি রাখলে প্রতিটা sub-part স্বাধীন প্রশ্ন হবে)</label>
-                <input className="inp" placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"' value={card.heading}
-                  onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}/>
+              <div style={{display:"flex",gap:8,marginBottom:10}}>
+                <div className="fld" style={{marginBottom:0,flex:1}}>
+                  <label>🏷️ গ্রুপ হেডিং (ঐচ্ছিক — খালি = প্রতিটা sub-part স্বাধীন)</label>
+                  <input className="inp" placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"' value={card.heading}
+                    onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}/>
+                </div>
+                <div className="fld" style={{marginBottom:0,width:120,flexShrink:0}}>
+                  <label>ফরম্যাট</label>
+                  <select className="inp" value={card.formatStyle} onChange={e=>updateCard(activeTab,card.id,{formatStyle:e.target.value})}
+                    style={{fontSize:11}}>
+                    {FORMAT_STYLES.map(f=>(<option key={f.v} value={f.v}>{f.label}</option>))}
+                  </select>
+                </div>
               </div>
               <div className="fld" style={{marginBottom:10}}>
                 <label>📌 Topic (এই পুরো গ্রুপের জন্য একবারই)</label>
