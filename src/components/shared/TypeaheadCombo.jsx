@@ -12,11 +12,19 @@ import { C } from "../../core/config.js";
 
 const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
 
-function TypeaheadCombo({options,value,onChange,placeholder,newLabel,emptyLabel}){
+function TypeaheadCombo({options,value,onChange,placeholder,newLabel,emptyLabel,inputStyle,lightTheme}){
   // options: [{id,name}]   value: {id,name}
   const[text,setText]=useState(value?.name||"");
   const[open,setOpen]=useState(false);
   const boxRef=useRef(null);
+
+  // ── lightTheme: PaperComposer-এর cream থিমে বসানোর জন্য (ঐচ্ছিক) — না দিলে
+  // আগের মতোই dark-theme রং ব্যবহার হয়, বাকি সব পেজে কোনো প্রভাব নেই ──
+  const dropBg    = lightTheme?"#FFFDF7":C.panel;
+  const dropBorder= lightTheme?"#C9BFA0":C.border;
+  const dropText  = lightTheme?"#1B2A4A":C.text;
+  const dropMuted = lightTheme?"#6B6552":C.muted;
+  const newHintCol= lightTheme?"#8A6D1D":C.warning;
 
   // বাইরে থেকে value বদলালে (যেমন রিসেট) টেক্সট সিঙ্ক করো
   useEffect(()=>{ setText(value?.name||""); },[value?.id,value?.name]);
@@ -62,6 +70,7 @@ function TypeaheadCombo({options,value,onChange,placeholder,newLabel,emptyLabel}
     <div ref={boxRef} style={{position:"relative"}}>
       <input
         className="inp"
+        style={inputStyle}
         placeholder={placeholder}
         value={text}
         onChange={e=>handleTextChange(e.target.value)}
@@ -71,14 +80,14 @@ function TypeaheadCombo({options,value,onChange,placeholder,newLabel,emptyLabel}
       {open && matches.length>0 && (
         <div style={{
           position:"absolute",left:0,right:0,top:"calc(100% + 4px)",zIndex:20,
-          background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,
+          background:dropBg,border:`1px solid ${dropBorder}`,borderRadius:9,
           maxHeight:180,overflowY:"auto",boxShadow:"0 8px 20px rgba(0,0,0,.35)"
         }}>
           {matches.map(o=>(
             <div key={o.id}
               onMouseDown={e=>e.preventDefault()}
               onClick={()=>pick(o)}
-              style={{padding:"8px 12px",fontSize:12,cursor:"pointer",borderBottom:`1px solid ${C.border}30`,color:C.text}}
+              style={{padding:"8px 12px",fontSize:12,cursor:"pointer",borderBottom:`1px solid ${dropBorder}30`,color:dropText}}
             >
               {o.name}
             </div>
@@ -88,14 +97,14 @@ function TypeaheadCombo({options,value,onChange,placeholder,newLabel,emptyLabel}
       {open && matches.length===0 && trimmed && (
         <div style={{
           position:"absolute",left:0,right:0,top:"calc(100% + 4px)",zIndex:20,
-          background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,
-          padding:"8px 12px",fontSize:11,color:C.muted
+          background:dropBg,border:`1px solid ${dropBorder}`,borderRadius:9,
+          padding:"8px 12px",fontSize:11,color:dropMuted
         }}>
           {emptyLabel||"কোনো মিল পাওয়া যায়নি"}
         </div>
       )}
       {showNewHint && (
-        <div style={{fontSize:10,color:C.warning,marginTop:4}}>
+        <div style={{fontSize:10,color:newHintCol,marginTop:4}}>
           {newLabel||`🆕 "${trimmed}" নতুন হিসেবে যোগ হবে`}
         </div>
       )}
