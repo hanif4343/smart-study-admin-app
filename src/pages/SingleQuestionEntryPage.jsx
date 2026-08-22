@@ -9,7 +9,7 @@ import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
 import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, loadDraft, saveDraft, clearDraft } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
-import { resolveOrCreateReference } from "../core/referenceHelpers.js";
+import { resolveOrCreateReference, norm } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 
@@ -664,12 +664,34 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
     if(total===0){ push("warn","কোনো প্রশ্নই টাইপ করা হয়নি",""); return; }
     setSaving(true);
     try{
+      // 🐛 ফিক্স: আগে শুধু fixedSubject (বাংলা/English/গণিত)-এর জন্য cache ছিল —
+      // GK ট্যাবে প্রতিটা কার্ডে subjectSel.id ফাঁকা হলে (নতুন real subject, যেমন
+      // "সাধারণ বিজ্ঞান" প্রথমবার টাইপ করে একাধিক প্রশ্নে ব্যবহার করলে) প্রতিবার আলাদা
+      // addReferenceItem কল হতো — refData রিফ্রেশ না হওয়া পর্যন্ত প্রতিটা কার্ডই
+      // "নতুন" ধরে নিতো, ফলে একই নামের ডুপ্লিকেট Subject তৈরি হয়ে যেতে পারতো। Topic-এও
+      // (একই grouped/flat ব্যাচে একই নতুন Topic-নাম একাধিক কার্ডে থাকলে) একই সমস্যা।
+      // এখন Subject+Topic দুটোরই resolve এই একটাই cache-এর মধ্য দিয়ে যায় — পুরো
+      // submitPaper কলজুড়ে একই নাম দ্বিতীয়বার এলে নেটওয়ার্কে না গিয়ে আগের id-ই রিইউজ হয়। ──
       const subjectIdCache={};
-      const resolveFixedSubject=async name=>{
-        if(subjectIdCache[name])return subjectIdCache[name];
+      const resolveSubjectCached=async name=>{
+        const key=norm(name);
+        if(subjectIdCache[key])return subjectIdCache[key];
         const res=await resolveOrCreateReference({sel:{id:"",name},refType:"subjects",options:subjectOptions,gasSecret,sheet:"QBank",push});
         if(!res.ok)throw new Error(`"${name}" Subject resolve ব্যর্থ`);
-        subjectIdCache[name]=res.id;
+        subjectIdCache[key]=res.id;
+        return res.id;
+      };
+      const resolveFixedSubject=name=>resolveSubjectCached(name);
+
+      const topicIdCache={};
+      const resolveTopicCached=async(subjId,topicSel)=>{
+        const topicName=topicSel.name.trim();
+        if(!topicName)return null;
+        const key=subjId+"|"+norm(topicName);
+        if(topicIdCache[key])return topicIdCache[key];
+        const res=await resolveOrCreateReference({sel:topicSel,refType:"topics",options:topicOptionsFor(subjId),gasSecret,parentId:subjId,push});
+        if(!res.ok)return null;
+        topicIdCache[key]=res.id;
         return res.id;
       };
 
@@ -679,18 +701,28 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
           if(t.grouped){
             const validItems=(card.items||[]).filter(it=>it.question.trim());
             if(!validItems.length)continue;
-            const subjId=await resolveFixedSubject(t.fixedSubject);
+            const subjId=await resolveSubjectCached(t.fixedSubject);
             const topicName=card.topicSel.name.trim();
             if(!topicName)throw new Error(`"${t.label}" ট্যাবে একটা কার্ডে Topic ফাঁকা আছে — Topic লিখো/বেছে নাও`);
-            const topicRes=await resolveOrCreateReference({sel:card.topicSel,refType:"topics",options:topicOptionsFor(subjId),gasSecret,parentId:subjId,push});
-            if(!topicRes.ok)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
+            const topicId=await resolveTopicCached(subjId,card.topicSel);
+            if(!topicId)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
             const heading=card.heading.trim();
             const groupId=heading?("GRP_"+Date.now().toString(36).toUpperCase()+Math.random().toString(36).slice(2,6).toUpperCase()):"";
+            // 🐛 ফিক্স (Fill-blank): প্ল্যান অনুযায়ী এই স্টাইলে আলাদা raw answer লাগবে না —
+            // প্রশ্নের ভিতরে 🖍 বাটন দিয়ে __..__ মার্ক করা অংশটাই সরাসরি sheet-এর Ans
+            // কলামে বসবে। আগে এই এক্সট্রাকশনটা কোথাও হতোই না, fillblank কার্ডও প্লেইনের
+            // মতোই answer বক্সের ভ্যালু (প্রায়ই ফাঁকা) নিয়ে সেভ হয়ে যেত। ──
             validItems.forEach((it,idx)=>{
+              let ansText=it.answer.trim();
+              if(card.formatStyle==="fillblank"){
+                const m=/__([^_]+)__/.exec(it.question);
+                if(!m)throw new Error(`"${t.label}" ট্যাবে Fill-blank ফরম্যাটে একটা প্রশ্নে 🖍 মার্ক করা হয়নি — যে শব্দ/অংশ blank হবে সেটা সিলেক্ট করে 🖍 হাইলাইট করো বাটনে চাপো`);
+                ansText=m[1].trim();
+              }
               allRows.push(buildSheetRow({
-                item:{q:it.question.trim(),correct:it.answer.trim(),explanation:it.explanation,technique:it.technique},
+                item:{q:it.question.trim(),correct:ansText,explanation:it.explanation,technique:it.technique},
                 subject:t.fixedSubject,subtopic:topicName,qtype:"Written",
-                audienceTags:[],mainQpaper:"",subjectId:subjId,topicId:topicRes.id,
+                audienceTags:[],mainQpaper:"",subjectId:subjId,topicId,
                 groupId,subIndex:groupId?(idx+1):null,groupHeading:groupId?heading:"",
                 formatStyle:card.formatStyle!=="plain"?card.formatStyle:"",
               }));
@@ -701,20 +733,18 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
             if(t.gkStyle){
               const subjName=(card.subjectSel.name||"").trim();
               if(!subjName)throw new Error(`GK ট্যাবে একটা প্রশ্নে Subject ফাঁকা আছে — কোন real subject (যেমন "সাধারণ বিজ্ঞান") সেটা বেছে দাও`);
-              const sres=await resolveOrCreateReference({sel:card.subjectSel,refType:"subjects",options:subjectOptions,gasSecret,sheet:"QBank",push});
-              if(!sres.ok)throw new Error(`"${subjName}" Subject resolve ব্যর্থ`);
-              subjId=sres.id;
+              subjId=await resolveSubjectCached(subjName);
             } else {
               subjId=await resolveFixedSubject(t.fixedSubject);
             }
             const topicName=card.topicSel.name.trim();
             if(!topicName)throw new Error(`"${t.label}" ট্যাবে একটা প্রশ্নে Topic ফাঁকা আছে`);
-            const topicRes=await resolveOrCreateReference({sel:card.topicSel,refType:"topics",options:topicOptionsFor(subjId),gasSecret,parentId:subjId,push});
-            if(!topicRes.ok)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
+            const topicId=await resolveTopicCached(subjId,card.topicSel);
+            if(!topicId)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
             allRows.push(buildSheetRow({
               item:{q:card.question.trim(),correct:card.answer.trim(),explanation:card.explanation,technique:card.technique},
               subject:t.gkStyle?card.subjectSel.name.trim():t.fixedSubject,subtopic:topicName,qtype:"Written",
-              audienceTags:[],mainQpaper:"",subjectId:subjId,topicId:topicRes.id,
+              audienceTags:[],mainQpaper:"",subjectId:subjId,topicId,
               groupId:"",subIndex:null,groupHeading:"",formatStyle:"",
             }));
           }
@@ -805,21 +835,34 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                   <div style={{flex:1}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                       <label style={{margin:0,fontSize:10.5,color:PC.muted,fontWeight:700}}>প্রশ্ন</label>
-                      {card.formatStyle==="highlight"&&(
-                        <button onClick={()=>wrapHighlight(activeTab,card.id,it.id)} title="সিলেক্ট করা অংশ হাইলাইট/আন্ডারলাইন করো"
+                      {(card.formatStyle==="highlight"||card.formatStyle==="fillblank")&&(
+                        <button onClick={()=>wrapHighlight(activeTab,card.id,it.id)}
+                          title={card.formatStyle==="fillblank"?"যে শব্দ blank হবে সেটা সিলেক্ট করে মার্ক করো — এটাই Answer হয়ে সেভ হবে":"সিলেক্ট করা অংশ হাইলাইট/আন্ডারলাইন করো"}
                           style={{background:"#facc1522",color:"#facc15",border:"1px solid #facc1544",borderRadius:6,
-                            fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>🖍 হাইলাইট করো</button>
+                            fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>🖍 {card.formatStyle==="fillblank"?"Blank মার্ক করো":"হাইলাইট করো"}</button>
                       )}
                     </div>
                     <textarea
                       ref={el=>{textareaRefs.current[it.id]=el;}}
                       className="ta" style={{...pcField,minHeight:44,fontSize:12.5}}
                       value={it.question} onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}
-                      placeholder={card.formatStyle==="table"?"শব্দ (যেমন: অহর্নিশ)":"প্রশ্ন লিখো..."}/>
-                    <label style={{fontSize:10.5,color:PC.muted,fontWeight:700,marginTop:4}}>উত্তর</label>
-                    <input className="inp" style={{...pcField,fontSize:12.5,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}}
-                      value={it.answer} onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}
-                      placeholder={card.formatStyle==="table"?"বিচ্ছেদ/ব্যাখ্যা":"উত্তর লিখো..."}/>
+                      placeholder={card.formatStyle==="table"?"শব্দ (যেমন: অহর্নিশ)":card.formatStyle==="fillblank"?"পুরো বাক্য লিখো, তারপর যে শব্দ blank হবে সেটা সিলেক্ট করে 🖍 বাটনে চাপো...":"প্রশ্ন লিখো..."}/>
+                    {/* 🐛 ফিক্স: Fill-blank ফরম্যাটে আলাদা raw answer বক্সের দরকার নেই — প্রশ্নের
+                        ভিতরে __..__ দিয়ে মার্ক করা অংশটাই সাবমিটের সময় Answer হিসেবে auto বসে
+                        যায় (দেখো submitPaper)। আগে এই বক্সটা fillblank-এও দেখাতো, যেটা টাইপ করা
+                        না হলে Answer ফাঁকা থেকে যেত — এখন hide করে বদলে হিন্ট দেখানো হচ্ছে। */}
+                    {card.formatStyle==="fillblank" ? (
+                      <div style={{fontSize:10,color:PC.gold,fontWeight:700,marginTop:4}}>
+                        🖍 প্রশ্নে মার্ক করা শব্দই Answer হিসেবে অটো সেভ হবে — আলাদা করে টাইপ করা লাগবে না
+                      </div>
+                    ) : (
+                      <>
+                        <label style={{fontSize:10.5,color:PC.muted,fontWeight:700,marginTop:4}}>উত্তর</label>
+                        <input className="inp" style={{...pcField,fontSize:12.5,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}}
+                          value={it.answer} onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}
+                          placeholder={card.formatStyle==="table"?"বিচ্ছেদ/ব্যাখ্যা":"উত্তর লিখো..."}/>
+                      </>
+                    )}
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:4}}>
                       <input className="inp" style={{...pcField,fontSize:11}} placeholder="ব্যাখ্যা (ঐচ্ছিক)"
                         value={it.explanation} onChange={e=>updateItem(activeTab,card.id,it.id,{explanation:e.target.value})}/>
