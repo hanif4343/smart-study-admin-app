@@ -184,7 +184,7 @@ function buildBulkRecord({item,subject,subtopic,mode,qtype,audienceTags,ts,id,ma
 
 /* Build Google-Sheet row — shared shape used by both direct-submit (OCR page) and BulkUploaderPage
    when saveLoc==="sheet". Same `item` shape as buildBulkRecord (from parseBulkEntry). */
-function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subjectId,topicId,tagIds,groupId,subIndex,groupHeading}){
+function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subjectId,topicId,tagIds,groupId,subIndex,groupHeading,formatStyle}){
   const isWritten=qtype==="Written";
   return{
     question:item.q,
@@ -196,7 +196,7 @@ function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subj
     subject, sub_topic:subtopic||subject,
     explanation:item.explanation||"",
     qType:isWritten?"Written":(qtype==="Study"?"Study":"MCQ"),
-    technique:"", prevExam:"", mainQpaper:mainQpaper||"",
+    technique:item.technique||"", prevExam:"", mainQpaper:mainQpaper||"",
     audienceTags:(audienceTags||[]).join(","),
     // ── নতুন schema fields (Phase 2+) — QBank সহ সব সিটেই এখন ২-লেভেল (subject_id/topic_id), SubTopic নেই ──
     subject_id:subjectId||"", topic_id:topicId||"",
@@ -206,6 +206,12 @@ function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subj
     // single-field group-heading UX-এ ব্যবহার হয় (BulkUploaderPage/SingleQuestionEntryPage)।
     // Quiz/Study-তে এই প্যারামিটার পাস হয় না বলে এখানে "" থাকবে, কোনো প্রভাব নেই। ──
     group_heading:groupHeading||"",
+    // ── PAPER COMPOSER ("বাংলা/ইংরেজি — Plain/Table/Highlight/Fill-blank"):
+    // group-এর রেন্ডারিং-হিন্ট — Kotlin User App এই মান দেখে ঠিক করবে কীভাবে
+    // দেখাবে ("table"→শব্দ|বিচ্ছেদ দুই-কলাম, "highlight"→question-এর ভিতরের
+    // __word__ মার্কআপ underline/bold করে দেখাবে, "fillblank"→answer সরাসরি
+    // বাক্যের ফাঁকে বসিয়ে দেখাবে, খালি/"plain"→এখনকার মতোই সাধারণ Q+A)। ──
+    format_style:formatStyle||"",
   };
 }
 
