@@ -609,6 +609,17 @@ const newFlatCard=(isGk)=>({id:newPaperId(),question:"",answer:"",explanation:""
 const makeInitialPaper=()=>({bangla:[newGroupCard()],english:[newGroupCard()],math:[newFlatCard(false)],gk:[newFlatCard(true)]});
 const SUBLABELS=["ক","খ","গ","ঘ","ঙ","চ","ছ","জ","ঝ","ঞ","ট","ঠ","ড","ঢ"];
 
+// ── PAPER COMPOSER-এর নিজস্ব হালকা "পরীক্ষার খাতা" থিম ("black a type kora jhamela") —
+// বাকি অ্যাডমিন অ্যাপ ডার্ক-থিমে থাকলেও এই স্ক্রিনটা লেখাপড়ার/প্রুফ-রিডিং-এর জন্য
+// ব্যবহার হয় বলে হালকা cream ব্যাকগ্রাউন্ড + গাঢ় নেভি টেক্সট — টাইপ করার সময় অনেক
+// সহজ পড়া যায়, ডিজাইন-ডেমোর "📒 পরীক্ষার খাতা" কনসেপ্টের সাথে মিলিয়ে। ──
+const PC = {
+  bg:"#F5F1E6", card:"#FFFDF7", border:"#C9BFA0", ink:"#1B2A4A",
+  muted:"#6B6552", gold:"#8A6D1D", danger:"#A6291F",
+  answerBg:"#EAF1E4", answerText:"#2C4728", inputBg:"#FFFFFF",
+};
+const pcField = {background:PC.inputBg,border:`1px solid ${PC.border}`,color:PC.ink,borderRadius:9,padding:"9px 12px",fontFamily:"inherit",fontSize:13,width:"100%",outline:"none"};
+
 function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessionCount}){
   const[paper,setPaper]=useState(makeInitialPaper);
   const[activeTab,setActiveTab]=useState("bangla");
@@ -737,18 +748,18 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
   },[submitPaper]);
 
   return(
-    <div>
+    <div style={{background:PC.bg,margin:"0 -16px",padding:"14px 14px 4px",borderRadius:0}}>
       {/* ── সাবজেক্ট ট্যাব ── */}
       <div style={{display:"flex",gap:6,marginBottom:12}}>
         {PAPER_TABS.map(t=>(
           <button key={t.key} onClick={()=>setActiveTab(t.key)}
-            style={{flex:1,padding:"9px 4px",borderRadius:9,border:`1.5px solid ${activeTab===t.key?C.accent:C.border}`,
-              background:activeTab===t.key?C.accent:C.panel,color:activeTab===t.key?"#fff":C.muted,
+            style={{flex:1,padding:"9px 4px",borderRadius:9,border:`1.5px solid ${activeTab===t.key?PC.ink:PC.border}`,
+              background:activeTab===t.key?PC.ink:PC.card,color:activeTab===t.key?"#fff":PC.muted,
               fontSize:12,fontWeight:700,cursor:"pointer",position:"relative"}}>
             {t.label}
             {tabCount(t.key)>0&&(
-              <span style={{marginLeft:5,fontSize:9,background:activeTab===t.key?"#ffffff33":C.accent+"33",
-                color:activeTab===t.key?"#fff":C.accent,padding:"1px 6px",borderRadius:10,fontWeight:800}}>{tabCount(t.key)}</span>
+              <span style={{marginLeft:5,fontSize:9,background:activeTab===t.key?"#ffffff33":PC.ink+"33",
+                color:activeTab===t.key?"#fff":PC.ink,padding:"1px 6px",borderRadius:10,fontWeight:800}}>{tabCount(t.key)}</span>
             )}
           </button>
         ))}
@@ -757,7 +768,7 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
       {tabDef.grouped ? (
         <>
           {(paper[activeTab]||[]).map(card=>(
-            <div key={card.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:12,marginBottom:12}}>
+            <div key={card.id} style={{background:PC.card,border:`1px solid ${PC.border}`,borderRadius:12,padding:12,marginBottom:12}}>
               <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}>
                 <button onClick={()=>removeCard(activeTab,card.id)} title="এই প্রশ্ন/গ্রুপ মুছো"
                   style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:15,padding:"0 2px"}}>🗑</button>
@@ -765,13 +776,13 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
               <div style={{display:"flex",gap:8,marginBottom:10}}>
                 <div className="fld" style={{marginBottom:0,flex:1}}>
                   <label>🏷️ গ্রুপ হেডিং (ঐচ্ছিক — খালি = প্রতিটা sub-part স্বাধীন)</label>
-                  <input className="inp" placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"' value={card.heading}
+                  <input className="inp" style={pcField} placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"' value={card.heading}
                     onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}/>
                 </div>
                 <div className="fld" style={{marginBottom:0,width:120,flexShrink:0}}>
                   <label>ফরম্যাট</label>
                   <select className="inp" value={card.formatStyle} onChange={e=>updateCard(activeTab,card.id,{formatStyle:e.target.value})}
-                    style={{fontSize:11}}>
+                    style={{...pcField,fontSize:11}}>
                     {FORMAT_STYLES.map(f=>(<option key={f.v} value={f.v}>{f.label}</option>))}
                   </select>
                 </div>
@@ -784,15 +795,16 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                   onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel})}
                   placeholder="Topic লিখো বা লিস্ট থেকে বেছে নাও..."
                   newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}
+                  inputStyle={pcField} lightTheme
                 />
               </div>
 
               {card.items.map((it,idx)=>(
-                <div key={it.id} style={{display:"flex",gap:8,padding:"8px 0",borderTop:idx>0?`1px dashed ${C.border}`:"none"}}>
-                  <div style={{width:22,flexShrink:0,fontWeight:800,color:C.accent,fontSize:12,paddingTop:8}}>{SUBLABELS[idx]||idx+1}.</div>
+                <div key={it.id} style={{display:"flex",gap:8,padding:"8px 0",borderTop:idx>0?`1px dashed ${PC.border}`:"none"}}>
+                  <div style={{width:22,flexShrink:0,fontWeight:800,color:PC.ink,fontSize:12,paddingTop:8}}>{SUBLABELS[idx]||idx+1}.</div>
                   <div style={{flex:1}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                      <label style={{margin:0,fontSize:10.5,color:C.muted,fontWeight:700}}>প্রশ্ন</label>
+                      <label style={{margin:0,fontSize:10.5,color:PC.muted,fontWeight:700}}>প্রশ্ন</label>
                       {card.formatStyle==="highlight"&&(
                         <button onClick={()=>wrapHighlight(activeTab,card.id,it.id)} title="সিলেক্ট করা অংশ হাইলাইট/আন্ডারলাইন করো"
                           style={{background:"#facc1522",color:"#facc15",border:"1px solid #facc1544",borderRadius:6,
@@ -801,17 +813,17 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                     </div>
                     <textarea
                       ref={el=>{textareaRefs.current[it.id]=el;}}
-                      className="ta" style={{minHeight:44,fontSize:12.5}}
+                      className="ta" style={{...pcField,minHeight:44,fontSize:12.5}}
                       value={it.question} onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}
                       placeholder={card.formatStyle==="table"?"শব্দ (যেমন: অহর্নিশ)":"প্রশ্ন লিখো..."}/>
-                    <label style={{fontSize:10.5,color:C.muted,fontWeight:700,marginTop:4}}>উত্তর</label>
-                    <input className="inp" style={{fontSize:12.5}}
+                    <label style={{fontSize:10.5,color:PC.muted,fontWeight:700,marginTop:4}}>উত্তর</label>
+                    <input className="inp" style={{...pcField,fontSize:12.5,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}}
                       value={it.answer} onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}
                       placeholder={card.formatStyle==="table"?"বিচ্ছেদ/ব্যাখ্যা":"উত্তর লিখো..."}/>
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:4}}>
-                      <input className="inp" style={{fontSize:11}} placeholder="ব্যাখ্যা (ঐচ্ছিক)"
+                      <input className="inp" style={{...pcField,fontSize:11}} placeholder="ব্যাখ্যা (ঐচ্ছিক)"
                         value={it.explanation} onChange={e=>updateItem(activeTab,card.id,it.id,{explanation:e.target.value})}/>
-                      <input className="inp" style={{fontSize:11}} placeholder="টেকনিক (ঐচ্ছিক)"
+                      <input className="inp" style={{...pcField,fontSize:11}} placeholder="টেকনিক (ঐচ্ছিক)"
                         value={it.technique} onChange={e=>updateItem(activeTab,card.id,it.id,{technique:e.target.value})}/>
                     </div>
                   </div>
@@ -821,8 +833,8 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                 </div>
               ))}
               <button onClick={()=>addSubItem(activeTab,card.id)}
-                style={{width:"100%",marginTop:6,background:"transparent",border:`1px dashed ${C.border}`,borderRadius:8,
-                  color:C.muted,fontSize:11,fontWeight:700,padding:8,cursor:"pointer"}}>
+                style={{width:"100%",marginTop:6,background:"transparent",border:`1px dashed ${PC.border}`,borderRadius:8,
+                  color:PC.muted,fontSize:11,fontWeight:700,padding:8,cursor:"pointer"}}>
                 + আরেকটা সাব-পার্ট (ক/খ/গ...) যোগ করো
               </button>
             </div>
@@ -831,9 +843,9 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
       ) : (
         <>
           {(paper[activeTab]||[]).map((card,ci)=>(
-            <div key={card.id} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:12,marginBottom:12}}>
+            <div key={card.id} style={{background:PC.card,border:`1px solid ${PC.border}`,borderRadius:12,padding:12,marginBottom:12}}>
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                <div style={{fontSize:11,fontWeight:800,color:C.muted}}>প্রশ্ন {ci+1}</div>
+                <div style={{fontSize:11,fontWeight:800,color:PC.muted}}>প্রশ্ন {ci+1}</div>
                 <button onClick={()=>removeCard(activeTab,card.id)} style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:15}}>🗑</button>
               </div>
               {tabDef.gkStyle&&(
@@ -845,6 +857,7 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                     onChange={sel=>updateCard(activeTab,card.id,{subjectSel:sel})}
                     placeholder="Subject লিখো বা বেছে নাও..."
                     newLabel={`🆕 "${card.subjectSel.name.trim()}" নতুন Subject হিসেবে যোগ হবে`}
+                    inputStyle={pcField} lightTheme
                   />
                 </div>
               )}
@@ -856,30 +869,31 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                   onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel})}
                   placeholder={tabDef.gkStyle&&!card.subjectSel.name.trim()?"আগে Subject বেছে নাও":"Topic লিখো বা বেছে নাও..."}
                   newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}
+                  inputStyle={pcField} lightTheme
                 />
               </div>
               <div className="fld" style={{marginBottom:8}}>
                 <label>❓ প্রশ্ন</label>
-                <textarea className="ta" style={{minHeight:70}} value={card.question}
+                <textarea className="ta" style={{...pcField,minHeight:70}} value={card.question}
                   onChange={e=>updateCard(activeTab,card.id,{question:e.target.value})}
                   placeholder="প্রশ্ন লিখো..."/>
               </div>
               <div className="fld" style={{marginBottom:8}}>
                 <label>✅ উত্তর</label>
-                <textarea className="ta" style={{minHeight:50}} value={card.answer}
+                <textarea className="ta" style={{...pcField,minHeight:50,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}} value={card.answer}
                   onChange={e=>updateCard(activeTab,card.id,{answer:e.target.value})}
                   placeholder={activeTab==="math"?"চূড়ান্ত উত্তর (ধাপে-ধাপে সমাধান নিচে ব্যাখ্যায়)...":"উত্তর লিখো..."}/>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                 <div className="fld" style={{marginBottom:0}}>
                   <label>📖 {activeTab==="math"?"ধাপে-ধাপে সমাধান":"ব্যাখ্যা"} (ঐচ্ছিক)</label>
-                  <textarea className="ta" style={{minHeight:50,fontSize:11.5}} value={card.explanation}
+                  <textarea className="ta" style={{...pcField,minHeight:50,fontSize:11.5}} value={card.explanation}
                     onChange={e=>updateCard(activeTab,card.id,{explanation:e.target.value})}
                     placeholder={activeTab==="math"?"x^2 এভাবে লিখো, User App-এ x² হয়ে দেখাবে":"ব্যাখ্যা..."}/>
                 </div>
                 <div className="fld" style={{marginBottom:0}}>
                   <label>💡 টেকনিক (ঐচ্ছিক)</label>
-                  <textarea className="ta" style={{minHeight:50,fontSize:11.5}} value={card.technique}
+                  <textarea className="ta" style={{...pcField,minHeight:50,fontSize:11.5}} value={card.technique}
                     onChange={e=>updateCard(activeTab,card.id,{technique:e.target.value})}
                     placeholder="শর্টকাট/টেকনিক..."/>
                 </div>
@@ -890,17 +904,18 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
       )}
 
       <button onClick={()=>addCard(activeTab)}
-        style={{width:"100%",marginBottom:16,background:"transparent",border:`1.5px dashed ${C.accent}`,borderRadius:10,
-          color:C.accent,fontSize:12.5,fontWeight:800,padding:10,cursor:"pointer"}}>
+        style={{width:"100%",marginBottom:16,background:"transparent",border:`1.5px dashed ${PC.ink}`,borderRadius:10,
+          color:PC.ink,fontSize:12.5,fontWeight:800,padding:10,cursor:"pointer"}}>
         + নতুন {tabDef.grouped?"প্রশ্ন/গ্রুপ":"প্রশ্ন"} যোগ করো
       </button>
 
-      <div style={{position:"sticky",bottom:8,background:C.bg,paddingTop:8}}>
-        <button className="btn bg" disabled={saving} onClick={submitPaper}
-          style={{width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14.5}}>
+      <div style={{position:"sticky",bottom:8,background:PC.bg,paddingTop:8}}>
+        <button className="btn" disabled={saving} onClick={submitPaper}
+          style={{width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14.5,
+            background:PC.ink,color:"#fff",border:"none"}}>
           {saving?"⏳ সেভ হচ্ছে...":`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
         </button>
-        <div style={{textAlign:"center",fontSize:9.5,color:C.muted,marginTop:6}}>
+        <div style={{textAlign:"center",fontSize:9.5,color:PC.muted,marginTop:6}}>
           ৪টা ট্যাবেই যত প্রশ্ন জমা আছে (এখনো ডাটাবেজে যায়নি), সবগুলো একসাথে একবারে সাবমিট হবে
         </div>
       </div>
