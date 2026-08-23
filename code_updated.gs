@@ -3229,6 +3229,28 @@ function doPost(e) {
         return arr;
       }
 
+      // ── AUTO-COLUMN-CREATION (FIX: "group_heading/format_style Sheet-এ কলাম না
+      // থাকলে সাইলেন্টলি হারিয়ে যাওয়া"): bFieldMap-এ ব্যবহৃত সব কলাম-নাম নিচে তালিকা
+      // করা আছে — যেগুলো Sheet-এর header-এ এখনো নেই, সেগুলো এখানেই স্বয়ংক্রিয়ভাবে
+      // নতুন কলাম হিসেবে যোগ হয়ে যায় (header সেলে নাম বসিয়ে, in-memory bRawHdr/
+      // bColIndexByNormName চওড়া করে) — এরপর buildRowArray() ওই কলামেও ঠিকমতো
+      // লিখতে পারবে। ফলে ভবিষ্যতে নতুন ফিল্ড client থেকে পাঠালে Sheet-এ ম্যানুয়ালি
+      // কলাম বসানো লাগবে না, নিজে থেকেই প্রথম ব্যবহারেই তৈরি হয়ে যাবে। ──
+      var bExpectedCols=["id","question","option1","option2","option3","option4","correct",
+        "subject","sub_topic","topic","explanation","technique","previousexam","questiontype",
+        "timestamp","audiencetags","questionpaper","visualurl","updatedat","notfirebase",
+        "language","content","subjectid","topicid","groupid","subindex","audiencetagsids",
+        "groupheading","formatstyle","added_by"];
+      for(var eci=0; eci<bExpectedCols.length; eci++){
+        var ecName=bExpectedCols[eci];
+        if(bColIndexByNormName[bKeyNorm(ecName)]===undefined){
+          var newColIdx=bRawHdr.length;
+          bSh.getRange(1,newColIdx+1).setValue(ecName);
+          bRawHdr.push(ecName);
+          bColIndexByNormName[bKeyNorm(ecName)]=newColIdx;
+        }
+      }
+
       var bLock=LockService.getScriptLock(); bLock.waitLock(15000);
       var bAdded=0, bSkipped=0;
       var bDirtyTopics={};   // ── CDN dirty-tracking: নতুন প্রশ্নে topic_id দেওয়া
@@ -3332,11 +3354,11 @@ function doPost(e) {
               "subindex":row.sub_index||"", "audiencetagsids":row.audienceTagsIds||"",
               // 🐛 ফিক্স (Single Entry > QBank > Written — "পরীক্ষার খাতা" PaperComposer):
               // buildSheetRow() ক্লায়েন্ট থেকে group_heading ও format_style পাঠাচ্ছিল, কিন্তু
-              // এই bFieldMap-এ কোনো key-ই ছিল না — ফলে Sheet-এ কলাম থাকলেও এই দুইটা মান
-              // সবসময় সাইলেন্টলি ফাঁকা যাচ্ছিল (heading/table/highlight/fillblank সবকিছুই
-              // ডাটাবেজে হারিয়ে যাচ্ছিল)। এখন mapping যোগ করা হলো — buildRowArray()
-              // header-name matching-ই করে, তাই Sheet-এ "group_heading"/"format_style"
-              // কলাম না থাকলে এখনো নিরাপদে ignore হবে (ci===undefined), কলাম থাকলে ঠিক বসবে। ──
+              // এই bFieldMap-এ কোনো key-ই ছিল না — ফলে এই দুইটা মান সবসময় সাইলেন্টলি ফাঁকা
+              // যাচ্ছিল (heading/table/highlight/fillblank সবকিছুই ডাটাবেজে হারিয়ে যাচ্ছিল)।
+              // এখন mapping যোগ করা হলো, আর ওপরের AUTO-COLUMN-CREATION ব্লক নিশ্চিত করে
+              // Sheet-এ এই কলাম দুটো না থাকলেও প্রথম ব্যবহারেই নিজে থেকে তৈরি হয়ে যাবে —
+              // তাই আর কখনোই সাইলেন্টলি হারানোর ঝুঁকি নেই। ──
               "groupheading":row.group_heading||"", "formatstyle":row.format_style||"",
               // 🆕 Added by — কোন ফিচার এই প্রশ্ন যোগ করলো (Bulk_Text/Bulk_OCR/Single_OCR/
               // Single_Text ইত্যাদি, ফ্রন্টএন্ড params.source দিয়ে পাঠায়)। row.editId থাকলে
