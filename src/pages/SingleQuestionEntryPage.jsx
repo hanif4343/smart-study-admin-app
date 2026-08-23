@@ -630,6 +630,19 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
   const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet==="QBank").map(s=>({id:s.subject_id,name:s.subject_name})):[];
   const topicOptionsFor=subjId=>refData&&subjId?(refData.topics||[]).filter(t=>t.subject_id===subjId).map(t=>({id:t.topic_id,name:t.topic_name})):[];
 
+  // ── পদ/প্রতিষ্ঠান/সাল (Exam Appearance) — SingleQuestionEntryPage-এর পুরনো
+  // (non-Paper) ফর্মে যেই প্যাটার্নটা already কাজ করছিল ঠিক সেটাই এখানে। সেশনজুড়ে
+  // একবার সেট হয় (৪টা ট্যাব — বাংলা/English/Math/GK — সবগুলোতেই একই appearance
+  // যাবে, কারণ এক পরীক্ষার কাগজে সব বিষয়ের প্রশ্নই একই পদ/প্রতিষ্ঠান/সালের)। posts/
+  // institutions আলাদা reference sheet (আইডি সহ) — Subject/Topic-এর মতোই
+  // resolveOrCreateReference দিয়ে resolve/create হয়, ExamAppearancesTab ও
+  // BulkUploaderPage-এ যেভাবে হয় ঠিক সেই একই pattern। ──
+  const[postSel,setPostSel]=useState({id:"",name:""});
+  const[instSel,setInstSel]=useState({id:"",name:""});
+  const[examYear,setExamYear]=useState("");
+  const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
+  const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
+
   const setCards=(tab,updater)=>setPaper(p=>({...p,[tab]:updater(p[tab])}));
   const updateCard=(tab,cardId,patch)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,...patch}:c));
   const removeCard=(tab,cardId)=>setCards(tab,cards=>cards.length>1?cards.filter(c=>c.id!==cardId):cards);
@@ -662,8 +675,29 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
     if(!gasSecret){ push("warn","⚠️ GAS Secret Key দাও","Save Location প্যানেলে বসাও"); return; }
     const total=PAPER_TABS.reduce((s,t)=>s+tabCount(t.key),0);
     if(total===0){ push("warn","কোনো প্রশ্নই টাইপ করা হয়নি",""); return; }
+    // পদ/প্রতিষ্ঠান/সাল — একটাতেও কিছু টাইপ করা থাকলে তিনটাই লাগবে (নাহলে অসম্পূর্ণ
+    // Appearance তৈরি হয়ে যাবে), অথবা তিনটাই ফাঁকা রেখে Appearance ছাড়াই সাবমিট করা যাবে।
+    if(postSel.name.trim()||instSel.name.trim()||examYear.trim()){
+      if(!postSel.name.trim()||!instSel.name.trim()||!examYear.trim()){
+        push("warn","⚠️ পদ, প্রতিষ্ঠান ও সাল — একটা দিলে তিনটাই দিতে হবে (অথবা তিনটাই খালি রাখো)","");
+        return;
+      }
+    }
     setSaving(true);
     try{
+      // পদ/প্রতিষ্ঠান দেওয়া থাকলে সবার আগে resolve/create করা হচ্ছে — ঠিক Subject/Topic-এর
+      // মতোই resolveOrCreateReference দিয়ে (ExamAppearancesTab/BulkUploaderPage-এ যেভাবে
+      // হয় সেই একই pattern), যাতে নিচের লুপে ঢোকার আগেই Appearance নিশ্চিত হয়ে যায়।
+      let examAppearance=null;
+      if(postSel.name.trim()&&instSel.name.trim()&&examYear.trim()){
+        const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
+        if(!postRes.ok)throw new Error("পদ resolve/তৈরি ব্যর্থ");
+        const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
+        if(!instRes.ok)throw new Error("প্রতিষ্ঠান resolve/তৈরি ব্যর্থ");
+        examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
+        if(postRes.created||instRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+      }
+
       // 🐛 ফিক্স: আগে শুধু fixedSubject (বাংলা/English/গণিত)-এর জন্য cache ছিল —
       // GK ট্যাবে প্রতিটা কার্ডে subjectSel.id ফাঁকা হলে (নতুন real subject, যেমন
       // "সাধারণ বিজ্ঞান" প্রথমবার টাইপ করে একাধিক প্রশ্নে ব্যবহার করলে) প্রতিবার আলাদা
@@ -753,23 +787,26 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
 
       if(!allRows.length){ push("warn","কোনো সম্পূর্ণ প্রশ্ন পাওয়া যায়নি","Topic ফাঁকা রাখলে সেই প্রশ্ন বাদ পড়ে যায়"); setSaving(false); return; }
 
-      const res=await saveRowsToSheet({rows:allRows,targetTab:"QBank",gasSecret,push,source:"Single_Text_Paper"});
+      const res=await saveRowsToSheet({rows:allRows,targetTab:"QBank",gasSecret,push,examAppearance,source:"Single_Text_Paper"});
       if(res.added>0){
         push("success",`✅ পুরো প্রশ্নপত্র সাবমিট হয়েছে! (${res.added}টা প্রশ্ন)`,`এই সেশনে মোট ${sessionCount+res.added}টি`);
         setSessionCount(c=>c+res.added);
         setPaper(makeInitialPaper());
         setActiveTab("bangla");
         fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
-      } else if(res.skipped>0){
+      }
+      if(res.examAppearancesLinkedToExisting>0) push("success","🔗 কিছু প্রশ্ন আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
+      if(examAppearance && !res.examAppearancesAdded && !res.examAppearancesLinkedToExisting) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
+      if(res.added===0 && res.skipped>0){
         push("warn","⚠️ সবগুলোই ইতিমধ্যে Sheet-এ আছে (duplicate)","");
-      } else {
+      } else if(res.added===0 && res.skipped===0){
         push("error","সেভ ব্যর্থ","নেটওয়ার্ক সমস্যা হতে পারে, একটু পর আবার চেষ্টা করো");
       }
     }catch(e){
       push("error","সাবমিট ব্যর্থ",e.message);
     }
     setSaving(false);
-  },[saving,gasSecret,paper,subjectOptions,refData,sessionCount,push,setRefData,setSessionCount]);
+  },[saving,gasSecret,paper,subjectOptions,refData,sessionCount,push,setRefData,setSessionCount,postSel,instSel,examYear,postOptions,instOptions]);
 
   useEffect(()=>{
     const onKey=e=>{ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){ e.preventDefault(); submitPaper(); } };
@@ -779,6 +816,40 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
 
   return(
     <div style={{background:PC.bg,margin:"0 -16px",padding:"14px 14px 4px",borderRadius:0}}>
+      {/* ── পদ/প্রতিষ্ঠান/সাল — একদম শুরুতে, ৪টা ট্যাবের সবার উপরে (session-wide,
+          একবার দিলে বাংলা/English/Math/GK — এই সেশনের সব প্রশ্নেই একই Exam Appearance
+          যাবে, কারণ QBank মানেই বিগত পরীক্ষা, এই ৩টা ছাড়া entry অসম্পূর্ণ) ── */}
+      <div style={{background:PC.card,border:`1px solid ${PC.border}`,borderRadius:12,padding:12,marginBottom:12}}>
+        <div style={{fontSize:12,fontWeight:800,color:PC.ink,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? (ঐচ্ছিক)</div>
+        <div style={{fontSize:10.5,color:PC.muted,marginBottom:8}}>দিলে এই সেশনের ৪টা ট্যাবের সব প্রশ্নই এই Exam Appearance পাবে — প্রশ্নের রো ডুপ্লিকেট হয় না, একই প্রশ্ন আগে থেকে থাকলে শুধু Appearance জুড়ে যায়।</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+          <div className="fld" style={{marginBottom:0}}>
+            <label>পদ (Post)</label>
+            <TypeaheadCombo
+              options={postOptions}
+              value={postSel}
+              onChange={setPostSel}
+              placeholder="যেমন: সহকারী শিক্ষক"
+              newLabel={`🆕 "${postSel.name.trim()}" নতুন পদ হিসেবে যোগ হবে`}
+            />
+          </div>
+          <div className="fld" style={{marginBottom:0}}>
+            <label>প্রতিষ্ঠান (Institution)</label>
+            <TypeaheadCombo
+              options={instOptions}
+              value={instSel}
+              onChange={setInstSel}
+              placeholder="যেমন: প্রাথমিক বিদ্যালয়"
+              newLabel={`🆕 "${instSel.name.trim()}" নতুন প্রতিষ্ঠান হিসেবে যোগ হবে`}
+            />
+          </div>
+        </div>
+        <div className="fld" style={{marginBottom:0}}>
+          <label>সাল</label>
+          <input className="inp" style={pcField} placeholder="যেমন: 2025" value={examYear} onChange={e=>setExamYear(e.target.value)}/>
+        </div>
+      </div>
+
       {/* ── সাবজেক্ট ট্যাব ── */}
       <div style={{display:"flex",gap:6,marginBottom:12}}>
         {PAPER_TABS.map(t=>(
