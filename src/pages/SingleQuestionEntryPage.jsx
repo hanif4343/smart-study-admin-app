@@ -675,6 +675,10 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
     if(!gasSecret){ push("warn","⚠️ GAS Secret Key দাও","Save Location প্যানেলে বসাও"); return; }
     const total=PAPER_TABS.reduce((s,t)=>s+tabCount(t.key),0);
     if(total===0){ push("warn","কোনো প্রশ্নই টাইপ করা হয়নি",""); return; }
+    // 🐛 ফিক্স: বাটন disable করলেও Ctrl+S শর্টকাট সরাসরি submitPaper কল করে — তাই এখানেও
+    // গার্ড লাগবে, নাহলে দ্রুত Ctrl+S চাপলে refData লোড হওয়ার আগেই সাবমিট হয়ে ডুপ্লিকেট
+    // Subject তৈরি হয়ে যেতে পারে (দেখো বাটনের ওপরের কমেন্ট)।
+    if(refData===null){ push("warn","⏳ রেফারেন্স ডেটা এখনো লোড হচ্ছে","একটু অপেক্ষা করে আবার চেষ্টা করো"); return; }
     // পদ/প্রতিষ্ঠান/সাল — একটাতেও কিছু টাইপ করা থাকলে তিনটাই লাগবে (নাহলে অসম্পূর্ণ
     // Appearance তৈরি হয়ে যাবে), অথবা তিনটাই ফাঁকা রেখে Appearance ছাড়াই সাবমিট করা যাবে।
     if(postSel.name.trim()||instSel.name.trim()||examYear.trim()){
@@ -1024,10 +1028,21 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
       </button>
 
       <div style={{position:"sticky",bottom:8,background:PC.bg,paddingTop:8}}>
-        <button className="btn" disabled={saving} onClick={submitPaper}
+        {/* 🐛 ফিক্স (ডুপ্লিকেট Subject বাগ — QB18/QB20/QB22 "বাংলা" একসাথে ৩টা তৈরি হয়ে
+            গিয়েছিল): refData (Subject/Topic/Post/Institution লিস্ট) পেজ-লোডে নেটওয়ার্ক
+            থেকে আসে — স্লো কানেকশনে (স্ক্রিনশটে 6 KB/s, 1.15 KB/s দেখা গেছে) এটা লোড হতে
+            বেশ কয়েক সেকেন্ড লাগতে পারে। তার আগেই Submit চাপলে subjectOptions তখনও খালি
+            থাকে, ফলে app বুঝতেই পারে না "বাংলা" আগে থেকে আছে কিনা — প্রতিবার নতুন বানিয়ে
+            ফেলে। তাই এখন যতক্ষণ refData লোড না হয় Submit বাটন disable + লোডিং হিন্ট। ── */}
+        {refData===null && (
+          <div style={{textAlign:"center",fontSize:11,color:PC.gold,fontWeight:700,marginBottom:6}}>
+            ⏳ রেফারেন্স ডেটা (Subject/Topic লিস্ট) লোড হচ্ছে — একটু অপেক্ষা করো, নাহলে ডুপ্লিকেট Subject তৈরি হয়ে যেতে পারে
+          </div>
+        )}
+        <button className="btn" disabled={saving||refData===null} onClick={submitPaper}
           style={{width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14.5,
-            background:PC.ink,color:"#fff",border:"none"}}>
-          {saving?"⏳ সেভ হচ্ছে...":`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
+            background:(saving||refData===null)?PC.muted:PC.ink,color:"#fff",border:"none"}}>
+          {saving?"⏳ সেভ হচ্ছে...":refData===null?"⏳ রেফারেন্স ডেটা লোড হচ্ছে...":`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
         </button>
         <div style={{textAlign:"center",fontSize:9.5,color:PC.muted,marginTop:6}}>
           ৪টা ট্যাবেই যত প্রশ্ন জমা আছে (এখনো ডাটাবেজে যায়নি), সবগুলো একসাথে একবারে সাবমিট হবে
