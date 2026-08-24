@@ -1,6 +1,6 @@
 /* ── UI: ব্যর্থ হওয়া আইটেমগুলো — cache থেকে retry / clear করার প্যানেল ── */
 import React, { useState } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { loadFailedQueue, removeFailedItems, loadSharedGasSecret } from "../../core/uploaderUtils.js";
 import { saveRowsToSheet, saveRowsToFirebaseBulk } from "../../core/sheetSave.js";
 
@@ -39,7 +39,7 @@ function FailedQueuePanel({push,sourceFilter}){
   const clearGroup=(groupItems)=>{ removeFailedItems(groupItems.map(g=>g._key)); forceRerender(); };
 
   return(
-    <div style={{background:C.card,border:`1px solid ${C.red}55`,borderRadius:14,padding:14,marginBottom:12}}>
+    <div style={{background:C.card,border:`1px solid ${tint(C.red,"55")}`,borderRadius:14,padding:14,marginBottom:12}}>
       <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.red,fontWeight:700,marginBottom:8}}>⚠️ ব্যর্থ হওয়া আইটেম ক্যাশ ({items.length}টা)</div>
       {Object.entries(bySource).map(([src,groupItems])=>{
         const groupKey=src+"|"+groupItems[0].location+"|"+groupItems[0].targetTab;
