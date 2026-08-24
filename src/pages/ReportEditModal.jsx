@@ -1,6 +1,6 @@
 /* ══════════ REPORT EDIT MODAL ══════════ */
 import React, { useState, useEffect } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { loadPath, invalidate } from "../core/dataCache.js";
 import { fbSet, fbDelete } from "../core/firebase.js";
 import { syncFieldsToSheet } from "../core/sheetSave.js";
@@ -206,7 +206,7 @@ function ReportEditModal({report,onClose,onDone,push}){
             <div style={{fontSize:11,color:C.text}}>{report.Issue||report.issue||"—"}</div>
           </div>
           {loadQ&&<><div className="sk" style={{height:52,marginBottom:8}}/><div className="sk" style={{height:36}}/></>}
-          {!loadQ&&!qdata&&question&&<div style={{background:`${C.yellow}11`,border:`1px solid ${C.yellow}44`,borderRadius:8,padding:"10px 12px",marginBottom:8,fontSize:11,color:C.yellow}}>⚠️ Firebase এ fbKey match হয়নি — question text দিয়ে fill করা হয়েছে। Save করলে Firebase আপডেট হবে না।</div>}
+          {!loadQ&&!qdata&&question&&<div style={{background:`${tint(C.yellow,"11")}`,border:`1px solid ${tint(C.yellow,"44")}`,borderRadius:8,padding:"10px 12px",marginBottom:8,fontSize:11,color:C.yellow}}>⚠️ Firebase এ fbKey match হয়নি — question text দিয়ে fill করা হয়েছে। Save করলে Firebase আপডেট হবে না।</div>}
           {!loadQ&&!qdata&&!question&&<div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12}}>প্রশ্ন পাওয়া যায়নি।</div>}
           {!loadQ&&qdata&&qtype==="mcq"&&<>
             <div className="fld"><label>❓ প্রশ্ন</label><textarea className="ta" value={question} onChange={e=>setQuestion(e.target.value)} style={{minHeight:60}}/></div>
