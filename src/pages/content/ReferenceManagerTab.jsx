@@ -5,7 +5,7 @@
    প্রশ্নের রো টাচ না করে শুধু ছোট রেফারেন্স-টেবিলে কাজ করে।
    ⚠️ SubTopics তুলে দেওয়া হয়েছে — QBank এখন Quiz/Study-এর মতোই ২-লেভেল (Subject→Topic)। */
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem } from "../../core/sheetSave.js";
 import { RenameModal } from "./RenameModal.jsx";
@@ -31,7 +31,7 @@ function DeleteConfirmModal({name,count,onCancel,onConfirm,deleting}){
       <div className="modal">
         <div className="mh"/>
         <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>🗑️ ডিলিট নিশ্চিত করো</div>
-        <div style={{background:`${C.yellow}12`,border:`1px solid ${C.yellow}30`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
+        <div style={{background:`${tint(C.yellow,"12")}`,border:`1px solid ${tint(C.yellow,"30")}`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
           <b style={{color:C.text}}>"{name}"</b> ডিলিট করলে {count!=null?<>এটা ব্যবহার করা <b style={{color:C.text}}>{count}টি</b> প্রশ্নের</>:"এই এন্ট্রি ব্যবহার করা প্রশ্নগুলোর"} subject_id/topic_id ফাঁকা (orphan) হয়ে যাবে — প্রশ্ন নিজে ডিলিট হবে না, কিন্তু সেগুলো এই ক্যাটাগরিতে আর সঠিকভাবে দেখা যাবে না।
         </div>
         <div style={{display:"flex",gap:7}}>
@@ -180,7 +180,7 @@ function ReferenceManagerTab({push}){
           <div key={id} className="rename-row">
             <div className="rename-name" style={{flex:1}}>{name}<div style={{fontSize:9,color:C.muted}}>{id}</div></div>
             <div className="rename-count">{cnt!=null?`${cnt}টি`:""}</div>
-            <button className="btn" style={{padding:"4px 8px",fontSize:10,background:C.accent+"20",color:C.accent,border:`1px solid ${C.accent}30`,marginRight:4}}
+            <button className="btn" style={{padding:"4px 8px",fontSize:10,background:tint(C.accent,"20"),color:C.accent,border:`1px solid ${tint(C.accent,"30")}`,marginRight:4}}
               onClick={()=>{setRenameTarget({id,name});setNewName(name);}}>✏️</button>
             <button className="btn" style={{padding:"4px 8px",fontSize:10,background:(C.red||"#e5484d")+"20",color:C.red||"#e5484d",border:`1px solid ${C.red||"#e5484d"}30`}}
               onClick={()=>setDeleteTarget({id,name,count:cnt})}>🗑️</button>
