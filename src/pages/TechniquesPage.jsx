@@ -1,6 +1,6 @@
 /* ══════════ TECHNIQUES PAGE ══════════ */
 import React, { useState, useMemo } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { useFB, invalidate } from "../core/dataCache.js";
 import { fbPatch, fbSet, fbDelete } from "../core/firebase.js";
 import { nowTs, phoneKey } from "../core/utils.js";
@@ -132,7 +132,7 @@ function TechniquesPage({push,tick}){
             <div style={{textAlign:"right"}}>
               <span style={{
                 fontSize:9,fontWeight:700,padding:"2px 7px",borderRadius:6,
-                background:t.status==="approved"?`${C.green}20`:t.status==="rejected"?`${C.red}20`:`${C.yellow}20`,
+                background:t.status==="approved"?`${tint(C.green,"20")}`:t.status==="rejected"?`${tint(C.red,"20")}`:`${tint(C.yellow,"20")}`,
                 color:t.status==="approved"?C.green:t.status==="rejected"?C.red:C.yellow,
                 border:`1px solid ${t.status==="approved"?C.green:t.status==="rejected"?C.red:C.yellow}40`
               }}>
@@ -196,7 +196,7 @@ function TechniquesPage({push,tick}){
             )}
             <button
               className="btn"
-              style={{flex:1,justifyContent:"center",background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`,fontSize:11}}
+              style={{flex:1,justifyContent:"center",background:tint(C.red,"22"),color:C.red,border:`1px solid ${tint(C.red,"33")}`,fontSize:11}}
               disabled={!!busy}
               onClick={()=>deleteT(t)}
             >🗑️</button>
