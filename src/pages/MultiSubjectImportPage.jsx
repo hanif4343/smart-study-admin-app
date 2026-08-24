@@ -13,7 +13,7 @@
      আলাদা পেজ
    ══════════════════════════════════════════════════════════════════ */
 import React, { useState, useRef, useEffect } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { _LC } from "../core/logger.js";
 import { nowTs, uploadImageSrcToImgbb } from "../core/utils.js";
 import { _BGM } from "../core/bgTasks.js";
@@ -1115,7 +1115,7 @@ function MultiSubjectImportPage({push}){
                   onClick={()=>setQType(m)}
                   style={{flex:1,fontSize:13,fontWeight:700,padding:"10px 0",borderRadius:8,cursor:(images.length>0)?"not-allowed":"pointer",
                     border:`1.5px solid ${qType===m?C.accent:C.border}`,
-                    background:qType===m?C.accent+"22":"transparent",
+                    background:qType===m?tint(C.accent,"22"):"transparent",
                     color:qType===m?C.accent:C.muted}}>{label}</button>
               ))}
             </div>
@@ -1144,7 +1144,7 @@ function MultiSubjectImportPage({push}){
                 <button key={m} type="button" disabled={phase==="processing"} onClick={()=>setTargetMode(m)}
                   style={{flex:1,fontSize:12,fontWeight:700,padding:"7px 0",borderRadius:8,cursor:"pointer",
                     border:`1px solid ${targetMode===m?C.accent:C.border}`,
-                    background:targetMode===m?C.accent+"22":"transparent",
+                    background:targetMode===m?tint(C.accent,"22"):"transparent",
                     color:targetMode===m?C.accent:C.muted}}>{m}</button>
               ))}
             </div>
