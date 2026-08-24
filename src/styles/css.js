@@ -1,10 +1,12 @@
 /* ══════════ CSS ══════════ */
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
+import { themeCssBlock } from "../core/theme.js";
 
 const css=`
+${themeCssBlock()}
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Bengali:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-html,body,#root{background:${C.bg};color:${C.text};font-family:'Noto Sans Bengali','Space Grotesk',sans-serif;min-height:100dvh;max-width:480px;margin:0 auto;overflow-x:hidden}
+html,body,#root{background:${C.bg};color:${C.text};font-family:'Noto Sans Bengali','Space Grotesk',sans-serif;min-height:100dvh;max-width:480px;margin:0 auto;overflow-x:hidden;transition:background-color .2s,color .2s}
 ::-webkit-scrollbar{width:3px}::-webkit-scrollbar-thumb{background:${C.border};border-radius:10px}
 .bottom-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:480px;background:${C.navBg};border-top:1px solid ${C.border};display:flex;z-index:100;padding-bottom:env(safe-area-inset-bottom,8px)}
 .nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;padding:8px 2px 6px;cursor:pointer;border:none;background:transparent;color:${C.muted};font-family:inherit;font-size:9px;font-weight:500;transition:color .15s;position:relative}
@@ -41,6 +43,27 @@ html,body,#root{background:${C.bg};color:${C.text};font-family:'Noto Sans Bengal
 .ta{resize:vertical;min-height:75px}.fld{margin-bottom:10px}
 .fld label{display:block;font-size:10px;font-weight:700;color:${C.muted};letter-spacing:.8px;margin-bottom:4px;text-transform:uppercase}
 .sw{position:relative;margin-bottom:10px}.sw .si{position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:14px;pointer-events:none}.sw .inp{padding-left:32px}
+/* 🎨 Students List রিডিজাইন — কার্ডের বদলে একরঙা বামবার-সহ সরু সারি, কোনো বাটন নেই,
+   পুরো সারিই ট্যাপযোগ্য (List=শুধু খোঁজা/চোখ বুলানো, Detail=সব অ্যাকশনের একমাত্র জায়গা) */
+.stu-row{width:100%;display:flex;align-items:center;gap:10px;background:${C.card};border:1px solid ${C.border};border-left:3px solid;border-radius:11px;padding:9px 10px;margin-bottom:7px;text-align:left;cursor:pointer;font-family:inherit;transition:transform .12s;color:inherit}
+.stu-row:active{transform:scale(.98)}
+.stu-row .stu-av{flex-shrink:0}
+.stu-info{flex:1;min-width:0}
+.stu-name{font-size:13px;font-weight:700;color:${C.text};overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stu-phone{font-size:10.5px;color:${C.muted};margin-top:1px}
+.stu-acc{font-size:14px;font-weight:800;flex-shrink:0}
+.stu-chev{color:${C.muted};font-size:14px;flex-shrink:0}
+/* 🎨 StudentDetail অ্যাকশন-বার — Edit/Notify/Activate সমান গুরুত্বে একসাথে */
+.stu-actionbar{display:flex;background:${C.panel};border:1px solid ${C.border};border-radius:12px;padding:4px;margin:12px 0}
+.stu-actionbar button{flex:1;text-align:center;padding:9px 2px;border-radius:9px;font-size:11.5px;font-weight:700;color:${C.text};background:transparent;border:none;cursor:pointer;font-family:inherit}
+.stu-actionbar button:not(:last-child){border-right:1px solid ${C.border}}
+.stu-actionbar button:disabled{opacity:.5}
+.stu-actionbar .ic{display:block;font-size:15px;margin-bottom:2px}
+/* 🎨 Delete — সবার নিচে আলাদা "বিপজ্জনক এলাকা", বাকি সব থেকে দূরে */
+.stu-danger{background:${tint(C.red,"10")};border:1px solid ${tint(C.red,"40")};border-radius:14px;padding:13px;margin-top:18px}
+.stu-danger .t{font-size:11.5px;font-weight:800;color:${C.red};margin-bottom:4px}
+.stu-danger .d{font-size:10px;color:${C.muted};margin-bottom:10px;line-height:1.5}
+.stu-danger button{width:100%;padding:9px;border-radius:9px;background:transparent;border:1.5px solid ${C.red};color:${C.red};font-size:11.5px;font-weight:700;cursor:pointer;font-family:inherit}
 .ftabs{display:flex;gap:5px;margin-bottom:11px;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}.ftabs::-webkit-scrollbar{display:none}
 .ftab{flex-shrink:0;padding:6px 12px;border-radius:20px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${C.border};background:transparent;color:${C.muted};font-family:inherit;transition:all .15s}
 .ftab.on{background:${C.accent};color:#fff;border-color:${C.accent}}
@@ -64,18 +87,24 @@ html,body,#root{background:${C.bg};color:${C.text};font-family:'Noto Sans Bengal
 
 /* ══ launcher grid — শেয়ার্ড কম্পোনেন্ট (components/shared/LauncherGrid.jsx)
    Uploader hub (Phase ৪) ও Content Manager-এর Tools শিট (Phase ৫) দুটোতেই এই একই ক্লাসগুলো ব্যবহার হয় ══ */
-.launch-sec{margin-bottom:20px}
+.launch-search{display:flex;align-items:center;gap:8px;background:${C.panel};border:1px solid ${C.border};border-radius:11px;padding:10px 13px;margin-bottom:14px}
+.launch-search input{flex:1;background:transparent;border:none;outline:none;color:${C.text};font-family:inherit;font-size:12.5px}
+.launch-search input::placeholder{color:${C.muted}}
+.launch-search-clear{cursor:pointer;color:${C.muted};font-size:12px;padding:2px 4px}
+.launch-empty{text-align:center;padding:24px 10px;color:${C.muted};font-size:12.5px}
+.launch-sec{margin-bottom:18px}
 .launch-sec:last-child{margin-bottom:0}
-.launch-sec-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
-.launch-sec-bar{width:3px;height:14px;border-radius:3px;flex-shrink:0}
-.launch-sec-title{font-size:12.5px;font-weight:700;color:${C.text}}
-.launch-sec-sub{font-size:10px;color:${C.muted};margin-left:auto}
-.tile-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
-.tile{background:${C.card};border:1px solid ${C.border};border-radius:12px;padding:12px;display:flex;flex-direction:column;gap:8px;text-align:left;cursor:pointer;font-family:inherit;transition:transform .12s;color:inherit}
-.tile:active{transform:scale(.97)}
-.tile .tico{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px}
-.tile .tname{font-size:12px;font-weight:700;color:${C.text}}
-.tile .tdesc{font-size:9.5px;color:${C.muted};line-height:1.4}
+.launch-sec-head{display:flex;align-items:center;gap:8px;margin-bottom:9px}
+.launch-sec-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.launch-sec-title{font-size:11.5px;font-weight:800;color:${C.text}}
+.launch-sec-sub{font-size:9.5px;color:${C.muted};margin-left:auto;background:${C.panel};padding:1px 8px;border-radius:20px}
+.launch-row{width:100%;display:flex;align-items:center;gap:11px;background:${C.card};border:1px solid ${C.border};border-left:3px solid;border-radius:11px;padding:11px 12px;margin-bottom:7px;text-align:left;cursor:pointer;font-family:inherit;transition:transform .12s;color:inherit}
+.launch-row:active{transform:scale(.98)}
+.launch-row .lr-ic{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}
+.launch-row .lr-txt{flex:1;min-width:0}
+.launch-row .lr-label{font-size:12.5px;font-weight:700;color:${C.text}}
+.launch-row .lr-desc{font-size:10px;color:${C.muted};margin-top:1px}
+.launch-row .lr-chev{color:${C.muted};font-size:15px;flex-shrink:0}
 
 /* ══ ছোট ইউটিলিটি — Content Manager-এর Browse(primary)/Tools(secondary) স্প্লিটে ব্যবহৃত (Phase ৫) ══ */
 .tools-btn{display:inline-flex;align-items:center;gap:6px;background:${C.panel};border:1px solid ${C.border};border-radius:20px;padding:7px 14px;font-size:11.5px;font-weight:700;color:${C.text};cursor:pointer;font-family:inherit}
