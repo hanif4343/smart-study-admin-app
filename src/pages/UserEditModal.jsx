@@ -1,17 +1,15 @@
 /* ══════════ USER EDIT MODAL ══════════ */
 import React, { useState } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { fbPatch } from "../core/firebase.js";
 import { invalidate } from "../core/dataCache.js";
 import { phoneKey } from "../core/utils.js";
 import { useModalBack } from "../hooks/useModalBack.js";
-import { ChangePasswordModal } from "./ChangePasswordModal.jsx";
 
 function UserEditModal({user,onClose,onSaved,push}){
   useModalBack(onClose);
   const ph=(user.Phone||user.phone||"").replace(/^'+/,"");
   const fkey=user._fbKey||phoneKey(ph);
-  const[changePwOpen,setChangePwOpen]=useState(false);
 
   const[name,setName]=useState(user.Name||user.name||"");
   const[email,setEmail]=useState(user.Email||user.email||"");
@@ -119,7 +117,7 @@ function UserEditModal({user,onClose,onSaved,push}){
         <div style={{...F,marginBottom:14}}>
           <label style={L}>🔎 অ্যাপ জুম আউট পারমিশন</label>
           <div onClick={()=>setReducedUi(v=>!v)}
-            style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:C.panel,border:`1px solid ${reducedUi?C.accent+"66":C.border}`,borderRadius:8,padding:"9px 12px",cursor:"pointer"}}>
+            style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:C.panel,border:`1px solid ${reducedUi?tint(C.accent,"66"):C.border}`,borderRadius:8,padding:"9px 12px",cursor:"pointer"}}>
             <span style={{fontSize:12,color:reducedUi?C.text:C.muted}}>
               এই ইউজার নিজের অ্যাপ ছোট (zoom out) করতে পারবে
             </span>
@@ -129,9 +127,9 @@ function UserEditModal({user,onClose,onSaved,push}){
           </div>
         </div>
 
-        <button className="btn" style={{width:"100%",justifyContent:"center",background:C.red+"18",color:C.red,border:`1px solid ${C.red}33`,padding:"9px 0",borderRadius:9,fontWeight:600,marginBottom:8,fontSize:13}} onClick={()=>setChangePwOpen(true)}>
-          🔐 পাসওয়ার্ড পরিবর্তন করুন
-        </button>
+        {/* 🐛 ফিক্স: "🔐 পাসওয়ার্ড পরিবর্তন" বাটন এখান থেকে সরানো হলো — StudentDetail.jsx-এ
+            এই একই অ্যাকশন ইতিমধ্যে আছে, দুই জায়গায় একই কাজ থাকাটাই ছিল মূল clutter।
+            এখন password change শুধু StudentDetail-এই (Edit modal-এর বাইরে)। */}
 
         <div style={{display:"flex",gap:8,marginTop:4}}>
           <button className="btn" style={{flex:1,justifyContent:"center",background:C.border,color:C.muted,padding:"10px 0",borderRadius:9,fontWeight:600}} onClick={onClose}>বাতিল</button>
@@ -141,7 +139,6 @@ function UserEditModal({user,onClose,onSaved,push}){
         </div>
       </div>
     </div>
-    {changePwOpen&&<ChangePasswordModal user={user} onClose={()=>setChangePwOpen(false)} push={push}/>}
     </>
   );
 }
