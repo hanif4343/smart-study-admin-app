@@ -1,6 +1,6 @@
 /* ══════════ AUDIENCE RENAME MODAL ══════════ */
 import React from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { useModalBack } from "../../hooks/useModalBack.js";
 
 function AudienceRenameModal({target,newName,setNewName,onCancel,onRename,renaming}){
@@ -12,7 +12,7 @@ function AudienceRenameModal({target,newName,setNewName,onCancel,onRename,renami
         <div style={{fontSize:14,fontWeight:700,marginBottom:4}}>🎯 Audience Tag Rename</div>
 
         {/* Info */}
-        <div style={{background:`${C.green}12`,border:`1px solid ${C.green}30`,borderRadius:9,padding:"8px 11px",marginBottom:12,fontSize:11}}>
+        <div style={{background:`${tint(C.green,"12")}`,border:`1px solid ${tint(C.green,"30")}`,borderRadius:9,padding:"8px 11px",marginBottom:12,fontSize:11}}>
           <span style={{color:C.green,fontWeight:700}}>✅ </span>
           <span style={{color:C.muted}}>
             শুধু <b style={{color:C.text}}>১টা</b> Tags রেফারেন্স-এন্ট্রি বদলাবে — এটা ব্যবহার করা <b style={{color:C.text}}>{target.count}টি</b> প্রশ্নের কোনো রো টাচ হবে না।
@@ -46,7 +46,7 @@ function AudienceRenameModal({target,newName,setNewName,onCancel,onRename,renami
         </div>
 
         {/* Hint */}
-        <div style={{background:`${C.accent}10`,border:`1px solid ${C.accent}25`,borderRadius:8,padding:"7px 10px",marginBottom:12,fontSize:10,color:C.muted}}>
+        <div style={{background:`${tint(C.accent,"10")}`,border:`1px solid ${tint(C.accent,"25")}`,borderRadius:8,padding:"7px 10px",marginBottom:12,fontSize:10,color:C.muted}}>
           💡 <b style={{color:C.text}}>classLevel মানগুলো:</b> Masters 1, Masters 2, Honours 1, Honours 2, Honours 3, Honours 4, Class 12, Job
         </div>
 
