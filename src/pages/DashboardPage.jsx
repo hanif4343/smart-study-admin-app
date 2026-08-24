@@ -1,6 +1,6 @@
 /* ══════════ DASHBOARD ══════════ */
 import React, { useState, useEffect, useMemo } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { useFB, loadPath } from "../core/dataCache.js";
 import { fmt, toArr, buildSubjectMap, pct, loadSharedGasSecret } from "../core/utils.js";
 import { fetchDirtyTopicsCount, fetchOrphanStats } from "../core/sheetSave.js";
@@ -95,7 +95,7 @@ function DashboardPage({push,tick}){
       {/* ── রিপোর্ট: একমাত্র "action needed" ডেটা, তাই আলাদা হাইলাইট কার্ডে —
           বাকি রুটিন স্ট্যাটের সাথে সমান ওজনে গুঁজে রাখা হয়নি ── */}
       {rptT>0 ? (
-        <div className="card" style={{borderColor:`${C.danger}40`,background:`linear-gradient(180deg,${C.danger}0d,${C.card})`,marginBottom:20}}>
+        <div className="card" style={{borderColor:`${tint(C.danger,"40")}`,background:`linear-gradient(180deg,${tint(C.danger,"0d")},${C.card})`,marginBottom:20}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
             <div>
               <div className="sl" style={{color:C.danger,marginBottom:5}}>🚨 নতুন রিপোর্ট — মনোযোগ প্রয়োজন</div>
@@ -117,7 +117,7 @@ function DashboardPage({push,tick}){
           দেখাবে না (এরর দেখাবে না, শুধু dashboard-এর বাকি অংশ যেমন ছিল
           তেমনই কাজ করবে)। ── */}
       {gasSecret && ((dirtyCount??0)>0 || (orphanTotal??0)>0) && (
-        <div className="card" style={{borderColor:`${C.warning}40`,background:`linear-gradient(180deg,${C.warning}0d,${C.card})`,marginBottom:20}}>
+        <div className="card" style={{borderColor:`${tint(C.warning,"40")}`,background:`linear-gradient(180deg,${tint(C.warning,"0d")},${C.card})`,marginBottom:20}}>
           <div className="sl" style={{color:C.warning,marginBottom:8}}>🩺 ডেটা হেলথ</div>
           <div style={{display:"flex",gap:16}}>
             {dirtyCount>0 && (
