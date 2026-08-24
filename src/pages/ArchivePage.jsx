@@ -9,7 +9,7 @@
      (limit বাঁচিয়ে) এখান থেকে ফিরে পাওয়া যায়
    ══════════════════════════════════════════════════════════════════ */
 import React, { useState, useMemo, useEffect } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { nowTs } from "../core/utils.js";
 import {
   getBulkEntries, parseBulkEntry, buildBulkRecord, buildSheetRow,
@@ -170,7 +170,7 @@ function ArchivePage({push,onSendToBulk}){
             <button key={m} type="button" onClick={()=>setTargetMode(m)}
               style={{flex:1,fontSize:12,fontWeight:700,padding:"7px 0",borderRadius:8,cursor:"pointer",
                 border:`1px solid ${targetMode===m?C.accent:C.border}`,
-                background:targetMode===m?C.accent+"22":"transparent",
+                background:targetMode===m?tint(C.accent,"22"):"transparent",
                 color:targetMode===m?C.accent:C.muted}}>{m}</button>
           ))}
         </div>
@@ -269,7 +269,7 @@ function ArchivePage({push,onSendToBulk}){
                     <button key={t} type="button" onClick={()=>setEditBuf(p=>({...p,qtype:t}))}
                       style={{flex:1,fontSize:11,fontWeight:700,padding:"5px 0",borderRadius:8,cursor:"pointer",
                         border:`1px solid ${editBuf.qtype===t?C.accent:C.border}`,
-                        background:editBuf.qtype===t?C.accent+"22":"transparent",
+                        background:editBuf.qtype===t?tint(C.accent,"22"):"transparent",
                         color:editBuf.qtype===t?C.accent:C.muted}}>{t}</button>
                   ))}
                 </div>
