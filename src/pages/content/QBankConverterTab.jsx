@@ -2,7 +2,7 @@
    QBANK → QUIZ CONVERTER
    ══════════════════════════════════════════════════════════════════ */
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { useFB, invalidate, loadPath } from "../../core/dataCache.js";
 import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { callAiProviderRotatingRaw } from "../../core/ocrProviders.js";
@@ -454,7 +454,7 @@ ${JSON.stringify(batch.map(b=>({question:b.question,opt1:b.opt1,opt2:b.opt2,opt3
             <textarea className="inp" style={{minHeight:220,fontFamily:"monospace",fontSize:12}} value={taxonomyText} onChange={e=>setTaxonomyText(e.target.value)}/>
             <div style={{display:"flex",gap:8,marginTop:8}}>
               <button className="btn" style={{flex:1,justifyContent:"center",background:C.accent,color:"#fff",padding:10,fontSize:13}} onClick={saveTaxonomy}>💾 কাস্টম হিসেবে সেভ করো</button>
-              <button className="btn" style={{flex:1,justifyContent:"center",background:"transparent",color:C.green,border:`1px solid ${C.green}44`,padding:10,fontSize:13}} onClick={syncTaxonomyFromReference}>🔄 Reference থেকে Sync করো</button>
+              <button className="btn" style={{flex:1,justifyContent:"center",background:"transparent",color:C.green,border:`1px solid ${tint(C.green,"44")}`,padding:10,fontSize:13}} onClick={syncTaxonomyFromReference}>🔄 Reference থেকে Sync করো</button>
             </div>
             <div style={{fontSize:11,color:C.muted,marginTop:8,lineHeight:1.6}}>AI এই তালিকা থেকেই subject/sub_topic বেছে নেবে — নতুন নাম নিজে বানাবে না। JSON ফরম্যাট: {"{"}"subject": ["subtopic1","subtopic2"...]{"}"}</div>
           </div>
