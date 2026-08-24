@@ -1,6 +1,6 @@
 /* ══════════ CHANGE PASSWORD MODAL ══════════ */
 import React, { useState } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { fbPatch, fbSet } from "../core/firebase.js";
 import { fcmNotifyPhone } from "../core/fcm.js";
 import { phoneKey, nowTs } from "../core/utils.js";
@@ -70,7 +70,7 @@ function ChangePasswordModal({user,onClose,push}){
           {confirmPass&&newPass===confirmPass&&newPass.length>=6&&<div style={{fontSize:11,color:C.green,marginTop:3}}>✅ মিলেছে</div>}
         </div>
 
-        <div style={{background:C.accent+"11",border:`1px solid ${C.accent}33`,borderRadius:8,padding:"8px 10px",marginBottom:14,fontSize:11,color:C.muted}}>
+        <div style={{background:tint(C.accent,"11"),border:`1px solid ${tint(C.accent,"33")}`,borderRadius:8,padding:"8px 10px",marginBottom:14,fontSize:11,color:C.muted}}>
           📲 পাসওয়ার্ড পরিবর্তনের পর ইউজার <b style={{color:C.text}}>স্বয়ংক্রিয়ভাবে নোটিফিকেশন</b> পাবেন।
         </div>
 
