@@ -1,6 +1,6 @@
 /* ══════════ MODEL TEST TAB ══════════ */
 import React, { useState, useEffect, useMemo } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { useFB, invalidate } from "../../core/dataCache.js";
 import { fbSet, fbDelete } from "../../core/firebase.js";
 import { toArr } from "../../core/utils.js";
@@ -210,7 +210,7 @@ function ModelTestTab({push,tick}){
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
             <div style={{fontWeight:700,fontSize:13}}>📋 "{subject}"-এর বিদ্যমান Model Test</div>
             {existingTests.length>0&&
-              <button className="btn" style={{fontSize:11,background:"#ef444422",color:C.red,border:`1px solid ${C.red}44`}} onClick={()=>setDelTarget(subject)}>🗑️ সব ডিলিট</button>}
+              <button className="btn" style={{fontSize:11,background:"#ef444422",color:C.red,border:`1px solid ${tint(C.red,"44")}`}} onClick={()=>setDelTarget(subject)}>🗑️ সব ডিলিট</button>}
           </div>
           {mtLoading?<div className="sk"/>:
            existingTests.length===0?<div style={{fontSize:12,color:C.muted,textAlign:"center",padding:"10px 0"}}>কোনো Model Test নেই</div>:
@@ -220,7 +220,7 @@ function ModelTestTab({push,tick}){
                 <div style={{fontSize:12,fontWeight:600}}>{t.title||`মডেল টেস্ট ${t.num}`}</div>
                 <div style={{fontSize:10,color:C.muted,marginTop:2}}>🏷️ {t.type||"—"} &nbsp; 📄 {t.qCount||t.totalMarks||0}টি প্রশ্ন</div>
               </div>
-              <span className="pill" style={{background:C.purple+"22",color:C.purple}}>#{t.num}</span>
+              <span className="pill" style={{background:tint(C.purple,"22"),color:C.purple}}>#{t.num}</span>
             </div>
            ))
           }
