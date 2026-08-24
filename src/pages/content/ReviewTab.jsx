@@ -13,7 +13,7 @@
    reference-id রিইউজ বা প্রয়োজনে নতুন তৈরি — ঠিক MultiSubjectImportPage/
    BrowseTab যেভাবে করে, সেই একই প্যাটার্ন। ── */
 import React, { useState, useEffect, useMemo } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { useSheetRows, invalidate } from "../../core/dataCache.js";
 import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, fetchAllExamAppearances, syncFieldsToSheet } from "../../core/sheetSave.js";
@@ -237,7 +237,7 @@ function ReviewTab({push,tick}){
       </div>
 
       {Object.keys(pending).length>0&&(
-        <div style={{position:"sticky",top:0,zIndex:30,display:"flex",gap:8,alignItems:"center",padding:"9px 11px",marginBottom:12,background:C.green+"18",border:`1.5px solid ${C.green}55`,borderRadius:10}}>
+        <div style={{position:"sticky",top:0,zIndex:30,display:"flex",gap:8,alignItems:"center",padding:"9px 11px",marginBottom:12,background:tint(C.green,"18"),border:`1.5px solid ${tint(C.green,"55")}`,borderRadius:10}}>
           <span style={{fontSize:12,fontWeight:700,color:C.green,flex:1}}>
             {batchSaving?`⏳ সেভ হচ্ছে... ${batchProgress.done}/${batchProgress.total}`:`✅ ${Object.keys(pending).length}টা ভরা আছে, সেভের অপেক্ষায়`}
           </span>
@@ -298,7 +298,7 @@ function ReviewTab({push,tick}){
               <span style={{fontSize:9,color:C.muted,marginTop:1}}>#{r.qid}</span>
               <div style={{flex:1}}/>
               {paperUrls.length>0?(
-                <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.green+"22",color:C.green,border:`1px solid ${C.green}44`}}
+                <button className="btn" style={{padding:"3px 9px",fontSize:10,background:tint(C.green,"22"),color:C.green,border:`1px solid ${tint(C.green,"44")}`}}
                   onClick={()=>setPaperTarget({urls:paperUrls})} title="আসল প্রশ্নপত্রের পাতা বড় করে দেখো">
                   📄{paperUrls.length>1?` ${paperUrls.length}`:""}
                 </button>
@@ -312,14 +312,14 @@ function ReviewTab({push,tick}){
             </div>
             <div className="qcard-q">{qtext.slice(0,90)}{qtext.length>90?"…":""}</div>
             <div className="qcard-meta">
-              <span className="qtag qtag-sub" style={r.missingSubject?{background:C.warning+"22",color:C.warning,border:`1px solid ${C.warning}44`}:{}}>
+              <span className="qtag qtag-sub" style={r.missingSubject?{background:tint(C.warning,"22"),color:C.warning,border:`1px solid ${tint(C.warning,"44")}`}:{}}>
                 📚 {r.subj||"❌ Subject খালি"}
               </span>
-              <span className="qtag qtag-tp" style={r.missingTopic?{background:C.warning+"22",color:C.warning,border:`1px solid ${C.warning}44`}:{}}>
+              <span className="qtag qtag-tp" style={r.missingTopic?{background:tint(C.warning,"22"),color:C.warning,border:`1px solid ${tint(C.warning,"44")}`}:{}}>
                 📌 {r.topic||"❌ Topic খালি"}
               </span>
               {r.missingAppearance&&(
-                <span style={{fontSize:9,padding:"2px 7px",borderRadius:10,background:C.purple+"18",color:C.purple,border:`1px solid ${C.purple}33`,fontWeight:700}}>
+                <span style={{fontSize:9,padding:"2px 7px",borderRadius:10,background:tint(C.purple,"18"),color:C.purple,border:`1px solid ${tint(C.purple,"33")}`,fontWeight:700}}>
                   ❌ পদ/প্রতিষ্ঠান/সাল নেই
                 </span>
               )}
@@ -348,7 +348,7 @@ function ReviewTab({push,tick}){
                   </div>
                 </div>
               ):pending[r.qid]?(
-                <div style={{marginTop:7,padding:"7px 10px",background:C.green+"14",border:`1px solid ${C.green}44`,borderRadius:8,display:"flex",alignItems:"center",gap:8}}>
+                <div style={{marginTop:7,padding:"7px 10px",background:tint(C.green,"14"),border:`1px solid ${tint(C.green,"44")}`,borderRadius:8,display:"flex",alignItems:"center",gap:8}}>
                   <span style={{fontSize:10,color:C.green,fontWeight:700,flex:1}}>
                     ✅ queue-তে: 📚 {pending[r.qid].subj} · 📌 {pending[r.qid].topic}
                   </span>
@@ -358,7 +358,7 @@ function ReviewTab({push,tick}){
               ):(
                 <button onClick={()=>openFix(r)}
                   style={{width:"100%",marginTop:7,padding:"6px 0",fontSize:10,fontWeight:700,color:C.warning,
-                    background:C.warning+"12",border:`1px solid ${C.warning}33`,borderRadius:8,cursor:"pointer"}}>
+                    background:tint(C.warning,"12"),border:`1px solid ${tint(C.warning,"33")}`,borderRadius:8,cursor:"pointer"}}>
                   ✏️ Subject/Topic ঠিক করো
                 </button>
               )
