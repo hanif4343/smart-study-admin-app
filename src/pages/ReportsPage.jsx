@@ -1,6 +1,6 @@
 /* ══════════ REPORTS — hard delete ══════════ */
 import React, { useState, useMemo, useEffect } from "react";
-import { C, GAS } from "../core/config.js";
+import { C, tint, GAS } from "../core/config.js";
 import { useFB, invalidate } from "../core/dataCache.js";
 import { toArr, loadSharedGasSecret } from "../core/utils.js";
 import { ReportEditModal } from "./ReportEditModal.jsx";
@@ -67,7 +67,7 @@ function ReportsPage({push,tick,deepLinkKey,onDeepLinkHandled}){
         return(
          <div key={r._fbKey||i} className="rc" style={{borderLeft:`3px solid ${isMCQ?C.accent:C.purple}`}}>
            <div style={{display:"flex",alignItems:"center",gap:7,marginBottom:6}}>
-             <span style={{background:isMCQ?`${C.accent}22`:`${C.purple}22`,color:isMCQ?C.accent:C.purple,border:`1px solid ${isMCQ?C.accent:C.purple}44`,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700}}>{isMCQ?"❓ MCQ":"✍️ Written"}</span>
+             <span style={{background:isMCQ?`${tint(C.accent,"22")}`:`${tint(C.purple,"22")}`,color:isMCQ?C.accent:C.purple,border:`1px solid ${isMCQ?C.accent:C.purple}44`,borderRadius:6,padding:"2px 8px",fontSize:10,fontWeight:700}}>{isMCQ?"❓ MCQ":"✍️ Written"}</span>
              <div style={{fontWeight:700,fontSize:13,flex:1}}>{r.Subject||r.subject||"অজানা"}</div>
            </div>
            <div className="rm">
