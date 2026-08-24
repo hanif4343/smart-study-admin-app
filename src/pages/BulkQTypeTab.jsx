@@ -1,6 +1,6 @@
 /* ══════════ BULK QUESTION TYPE UPDATE TAB ══════════ */
 import React, { useState, useEffect, useMemo } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { useFB, invalidate } from "../core/dataCache.js";
 import { syncFieldsToSheet } from "../core/sheetSave.js";
 import { loadSharedGasSecret, toArr } from "../core/utils.js";
@@ -126,7 +126,7 @@ function BulkQTypeTab({push,tick}){
         <div style={{display:"flex",gap:6,marginBottom:10}}>
           {["MCQ","Written","Study"].map(t=>(
             <button key={t} type="button"
-              style={{flex:1,padding:"8px 4px",borderRadius:8,border:`1.5px solid ${targetType===t?C.accent:C.border}`,background:targetType===t?`${C.accent}22`:C.bg,color:targetType===t?C.accent:C.muted,fontWeight:700,fontSize:12,cursor:"pointer"}}
+              style={{flex:1,padding:"8px 4px",borderRadius:8,border:`1.5px solid ${targetType===t?C.accent:C.border}`,background:targetType===t?`${tint(C.accent,"22")}`:C.bg,color:targetType===t?C.accent:C.muted,fontWeight:700,fontSize:12,cursor:"pointer"}}
               onClick={()=>setTargetType(t)}>{t==="MCQ"?"❓ MCQ":t==="Written"?"✍️ Written":"📖 Study"}</button>
           ))}
         </div>
@@ -157,7 +157,7 @@ function BulkQTypeTab({push,tick}){
           const qtColor=getQtColor(qt);
           return(
             <div key={k} onClick={()=>toggleOne(q)}
-              style={{background:isSel?`${C.accent}18`:C.card,border:`1.5px solid ${isSel?C.accent:C.border}`,borderRadius:10,padding:"10px 12px",marginBottom:7,cursor:"pointer",transition:"all .15s"}}>
+              style={{background:isSel?`${tint(C.accent,"18")}`:C.card,border:`1.5px solid ${isSel?C.accent:C.border}`,borderRadius:10,padding:"10px 12px",marginBottom:7,cursor:"pointer",transition:"all .15s"}}>
               <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
                 <div style={{width:18,height:18,borderRadius:4,border:`2px solid ${isSel?C.accent:C.muted}`,background:isSel?C.accent:"transparent",flexShrink:0,marginTop:2,display:"flex",alignItems:"center",justifyContent:"center"}}>
                   {isSel&&<span style={{color:"#fff",fontSize:11,fontWeight:700}}>✓</span>}
