@@ -5,7 +5,7 @@
    হয়নি, তাই সরাসরি "এই প্রশ্নে appearance যোগ করো" বাটন এখনো নেই — future task,
    master plan-এ নোট করা আছে)। */
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, getExamAppearances, addExamAppearance } from "../../core/sheetSave.js";
 import { resolveOrCreateReference } from "../../core/referenceHelpers.js";
@@ -71,7 +71,7 @@ function ExamAppearancesTab({push}){
         <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}/>
       </div>
 
-      <div style={{background:`${C.accent}12`,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted,lineHeight:1.6}}>
+      <div style={{background:`${tint(C.accent,"12")}`,border:`1px solid ${tint(C.accent,"30")}`,borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted,lineHeight:1.6}}>
         একই প্রশ্ন একাধিক পরীক্ষায় (ভিন্ন পদ/প্রতিষ্ঠান/সাল) এলে — নতুন করে প্রশ্ন না বসিয়ে এখানে শুধু appearance যোগ করো। প্রশ্নের মূল রো কখনো টাচ হয় না।
       </div>
 
