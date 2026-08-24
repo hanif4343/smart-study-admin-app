@@ -4,7 +4,7 @@
    questionId পাস হয়ে আসে)। বিদ্যমান appearance দেখায় + নতুন যোগ করার ফর্ম দেখায়,
    পদ/প্রতিষ্ঠান টাইপ-করে-মেলানো-বা-নতুন-তৈরি (resolveOrCreateReference) সহ। */
 import React, { useState, useEffect, useMemo } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { getExamAppearances, addExamAppearance, deleteExamAppearance } from "../../core/sheetSave.js";
 import { resolveOrCreateReference } from "../../core/referenceHelpers.js";
 import { TypeaheadCombo } from "../../components/shared/TypeaheadCombo.jsx";
@@ -81,7 +81,7 @@ function AppearanceQuickModal({question,questionText,refData,gasSecret,onRefresh
                     {postMap[a.post_id]||a.post_id} → {instMap[a.institution_id]||a.institution_id}
                     <div style={{fontSize:9,color:C.muted}}>{a.year}</div>
                   </div>
-                  <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`}}
+                  <button className="btn" style={{padding:"3px 9px",fontSize:10,background:tint(C.red,"22"),color:C.red,border:`1px solid ${tint(C.red,"33")}`}}
                     onClick={()=>doDelete(a.appearance_id)} disabled={deletingId===a.appearance_id}>
                     {deletingId===a.appearance_id?"⏳":"🗑️"}
                   </button>
