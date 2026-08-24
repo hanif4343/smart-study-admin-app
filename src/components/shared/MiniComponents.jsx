@@ -1,6 +1,6 @@
 /* ══════════ MINI COMPONENTS ══════════ */
 import React, { useState, useCallback } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { pct } from "../../core/utils.js";
 
 function Ring({val,max,color}){
@@ -42,7 +42,7 @@ const Tree = React.memo(function Tree({entries,total,color}){
         const tops=Object.entries(v.topics||{});
         return(
           <div key={sub} style={{marginBottom:7}}>
-            <div style={{display:"flex",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${C.border}40`,cursor:tops.length?"pointer":"default"}} onClick={()=>tops.length&&tog(sub)}>
+            <div style={{display:"flex",alignItems:"center",padding:"8px 0",borderBottom:`1px solid ${tint(C.border,"40")}`,cursor:tops.length?"pointer":"default"}} onClick={()=>tops.length&&tog(sub)}>
               <div style={{flex:1}}>
                 <div style={{fontWeight:700,fontSize:12,display:"flex",alignItems:"center",gap:4}}>
                   {tops.length>0&&<span style={{fontSize:9,color:C.muted,display:"inline-block",transform:open[sub]?"rotate(90deg)":"none",transition:"transform .2s"}}>▶</span>}
