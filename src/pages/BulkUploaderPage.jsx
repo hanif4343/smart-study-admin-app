@@ -1,6 +1,6 @@
 /* ══════════ BULK UPLOADER PAGE ══════════ */
 import React, { useState, useEffect, useCallback, useRef } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { invalidate } from "../core/dataCache.js";
 import { nowTs } from "../core/utils.js";
 import { Bar } from "../components/shared/MiniComponents.jsx";
@@ -468,7 +468,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
             <div style={{fontSize:11,color:C.muted}}>{!gasSecret?"⚠️ GAS Secret Key বসাও":refLoading?"⏳":"কোনো Tag নেই — 🗂️ Reference ট্যাব থেকে যোগ করো"}</div>:
             tagOptions.map(t=>(
               <button key={t.tag_id} onClick={()=>toggleTag(t.tag_id)}
-                style={{fontSize:10,padding:"3px 9px",borderRadius:20,border:`1px solid ${tagIds.includes(t.tag_id)?C.accent:C.border}`,background:tagIds.includes(t.tag_id)?C.accent+"22":"transparent",color:tagIds.includes(t.tag_id)?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>{t.tag_name}</button>
+                style={{fontSize:10,padding:"3px 9px",borderRadius:20,border:`1px solid ${tagIds.includes(t.tag_id)?C.accent:C.border}`,background:tagIds.includes(t.tag_id)?tint(C.accent,"22"):"transparent",color:tagIds.includes(t.tag_id)?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>{t.tag_name}</button>
             ))
           }
         </div>
