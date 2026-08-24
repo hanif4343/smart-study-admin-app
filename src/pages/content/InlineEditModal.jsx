@@ -1,6 +1,6 @@
 /* ══════════ INLINE EDIT MODAL ══════════ */
 import React, { useState } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { syncFieldsToSheet } from "../../core/sheetSave.js";
 import { loadSharedGasSecret } from "../../core/utils.js";
 import { useModalBack } from "../../hooks/useModalBack.js";
@@ -76,7 +76,7 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
           <div style={{display:"flex",gap:6}}>
             {["MCQ","Written","Study"].map(t=>(
               <button key={t} type="button"
-                style={{flex:1,padding:"7px 4px",borderRadius:8,border:`1.5px solid ${questionType===t?C.accent:C.border}`,background:questionType===t?`${C.accent}22`:C.panel,color:questionType===t?C.accent:C.muted,fontWeight:700,fontSize:12,cursor:"pointer"}}
+                style={{flex:1,padding:"7px 4px",borderRadius:8,border:`1.5px solid ${questionType===t?C.accent:C.border}`,background:questionType===t?`${tint(C.accent,"22")}`:C.panel,color:questionType===t?C.accent:C.muted,fontWeight:700,fontSize:12,cursor:"pointer"}}
                 onClick={()=>setQuestionType(t)}>{t==="MCQ"?"❓ MCQ":t==="Written"?"✍️ Written":"📖 Study"}</button>
             ))}
           </div>
