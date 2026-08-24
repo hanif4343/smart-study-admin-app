@@ -9,7 +9,7 @@
    dirty মার্ক করে) — এই পেজ শুধু trigger + status দেখায়, কোনো নতুন write
    লজিক এখানে নেই। */
 import React, { useState, useEffect, useCallback } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest } from "../../core/sheetSave.js";
 
@@ -232,7 +232,7 @@ function PublishTab({push}){
       </div>
 
       {/* ── Orphan Questions — যেসব প্রশ্নের topic_id Topics শিটে অস্তিত্বই নেই ── */}
-      <div className="card" style={{marginBottom:12,border:totalOrphan>0?`1px solid ${C.warning}40`:undefined}}>
+      <div className="card" style={{marginBottom:12,border:totalOrphan>0?`1px solid ${tint(C.warning,"40")}`:undefined}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
           <div style={{fontSize:13,fontWeight:700}}>🧟 Orphan প্রশ্ন</div>
           <button className="btn bg" style={{fontSize:11,padding:"4px 9px"}} onClick={refreshOrphan} disabled={loadingOrphan}>
@@ -254,7 +254,7 @@ function PublishTab({push}){
               return(
                 <div key={sheetName} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderTop:`1px solid ${C.border}`}}>
                   <span style={{fontSize:12,color:C.text}}>{sheetName}: <b style={{color:C.warning}}>{s.orphan}</b>টি</span>
-                  <button className="btn" style={{fontSize:10,padding:"4px 8px",background:`${C.warning}18`,color:C.warning}}
+                  <button className="btn" style={{fontSize:10,padding:"4px 8px",background:`${tint(C.warning,"18")}`,color:C.warning}}
                     disabled={deletingOrphan} onClick={()=>setDeleteOrphanTarget(sheetName)}>🗑️ মুছো</button>
                 </div>
               );
@@ -275,7 +275,7 @@ function PublishTab({push}){
           <div className="modal">
             <div className="mh"/>
             <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>🗑️ Orphan প্রশ্ন মুছবে?</div>
-            <div style={{background:`${C.warning}12`,border:`1px solid ${C.warning}30`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
+            <div style={{background:`${tint(C.warning,"12")}`,border:`1px solid ${tint(C.warning,"30")}`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
               {deleteOrphanTarget==="all"
                 ? <>Quiz/QBank/Study — তিনটা শিটের সব orphan প্রশ্ন (মোট <b style={{color:C.text}}>{totalOrphan}টি</b>) মুছে যাবে।</>
                 : <><b style={{color:C.text}}>{deleteOrphanTarget}</b> শিটের <b style={{color:C.text}}>{orphanStats?.[deleteOrphanTarget]?.orphan||0}টি</b> orphan প্রশ্ন মুছে যাবে।</>
@@ -291,7 +291,7 @@ function PublishTab({push}){
 
       {/* ── Pre-publish safety checklist ── */}
       {dirtyCount>0 && (
-        <div className="card" style={{marginBottom:12,border:`1px solid ${C.warning}40`}}>
+        <div className="card" style={{marginBottom:12,border:`1px solid ${tint(C.warning,"40")}`}}>
           <div style={{fontSize:13,fontWeight:700,marginBottom:8,color:C.warning}}>⚠️ Publish করার আগে চেক করো</div>
           {CHECKLIST_ITEMS.map((item,i)=>(
             <label key={i} style={{display:"flex",gap:8,alignItems:"flex-start",fontSize:12,color:C.text,marginBottom:8,cursor:"pointer"}}>
@@ -386,7 +386,7 @@ function PublishTab({push}){
           <div className="modal">
             <div className="mh"/>
             <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>↩️ এই ভার্সনে ফিরে যাবে?</div>
-            <div style={{background:`${C.warning}12`,border:`1px solid ${C.warning}30`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
+            <div style={{background:`${tint(C.warning,"12")}`,border:`1px solid ${tint(C.warning,"30")}`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
               manifest.json <b style={{color:C.text}}>{rollbackTarget.version?`v${rollbackTarget.version}`:rollbackTarget.sha.substring(0,7)}</b>-এ ফিরে যাবে ({rollbackTarget.date?new Date(rollbackTarget.date).toLocaleString("bn-BD"):""})। এর মাঝের সব Publish-এর পরিবর্তন CDN থেকে সাময়িকভাবে সরে যাবে (পরে আবার নতুন করে Publish করলে ফিরে আসবে)। Topic ফাইলগুলো নিজে মুছে যায় না, শুধু manifest.json বদলায়।
             </div>
             <div style={{display:"flex",gap:7}}>
@@ -403,7 +403,7 @@ function PublishTab({push}){
           <div className="modal">
             <div className="mh"/>
             <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>🔄 সব Topic Dirty মার্ক করবে?</div>
-            <div style={{background:`${C.warning}12`,border:`1px solid ${C.warning}30`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
+            <div style={{background:`${tint(C.warning,"12")}`,border:`1px solid ${tint(C.warning,"30")}`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
               এতে <b style={{color:C.text}}>প্রতিটা</b> Topic dirty মার্ক হয়ে যাবে (নতুন বা পুরনো, সব)। এটা এক-কালীন কাজ, শুধু প্রথমবার পুরো ডেটাবেজ CDN-এ তোলার জন্য। এরপর ৪০০-এর cap থাকায় একাধিকবার Publish Now চাপতে হবে সব শেষ হতে।
             </div>
             <div style={{display:"flex",gap:7}}>
@@ -420,7 +420,7 @@ function PublishTab({push}){
           <div className="modal">
             <div className="mh"/>
             <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>🚀 Publish নিশ্চিত করো</div>
-            <div style={{background:`${C.info}12`,border:`1px solid ${C.info}30`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
+            <div style={{background:`${tint(C.info,"12")}`,border:`1px solid ${tint(C.info,"30")}`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
               <b style={{color:C.text}}>{dirtyCount}টি Topic</b> এখন GitHub-এ commit হবে, manifest.json আপডেট হবে। কিছু সময় (কয়েক সেকেন্ড থেকে ১-২ মিনিট) লাগতে পারে।
             </div>
             <div style={{display:"flex",gap:7}}>
