@@ -7,7 +7,8 @@
    ══════════════════════════════════════════════════════════════════ */
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
-import { C } from "./core/config.js";
+import { C, tint } from "./core/config.js";
+import { getSavedTheme, applyTheme, toggleTheme } from "./core/theme.js";
 import { _LC } from "./core/logger.js";
 import { refreshTokenIfNeeded, clearIdToken } from "./core/auth.js";
 import { ErrorBoundary } from "./core/ErrorBoundary.jsx";
@@ -36,9 +37,11 @@ import { BulkUploaderPage } from "./pages/BulkUploaderPage.jsx";
 import { JobLauncherTab } from "./pages/content/JobLauncherTab.jsx";
 import { QBankConverterTab } from "./pages/content/QBankConverterTab.jsx";
 import { QuestionGenTab } from "./pages/content/QuestionGenTab.jsx";
+import { ModelTestTab } from "./pages/content/ModelTestTab.jsx";
 import { AIImportPage } from "./pages/AIImportPage.jsx";
 import { MultiSubjectImportPage } from "./pages/MultiSubjectImportPage.jsx";
-import { ArchivePage } from "./pages/ArchivePage.jsx";
+/* ArchivePage import সরানো হলো — এখন এটা ContentManagerPage.jsx-এর ভেতরে নেস্টেড
+   (Archive সরে গেছে "তৈরি করুন" থেকে "ম্যানেজ করুন"-এ, IA পুনর্গঠন) */
 import { TypingUploaderPage } from "./pages/TypingUploaderPage.jsx";
 import { SingleQuestionEntryPage } from "./pages/SingleQuestionEntryPage.jsx";
 
@@ -46,27 +49,39 @@ import { SingleQuestionEntryPage } from "./pages/SingleQuestionEntryPage.jsx";
    তৈরি না হয়। প্রতিটা সেকশনের রঙ Phase ১-এর সিমান্টিক টোকেন থেকে (C.info=টেক্সট, C.ai=AI
    জেনারেশন, C.ocr=স্ক্যান) — এলোমেলো ইনডেক্স-ভিত্তিক রঙ না। */
 const UPLOADER_SECTIONS=[
-  {key:"text",title:"📝 টেক্সট আপলোড",color:C.info,items:[
+  {key:"text",title:"📝 টেক্সট থেকে এন্ট্রি",color:C.info,items:[
     {page:"bulkupload",  icon:"📝",label:"Bulk Upload",   desc:"একসাথে অনেক প্রশ্ন পেস্ট করে আপলোড"},
-    {page:"singleentry", icon:"✍️",label:"Single প্রশ্ন",  desc:"একটি একটি করে সরাসরি এন্ট্রি"},
+    {page:"singleentry", icon:"✍️",label:"Single Entry",  desc:"একটি একটি করে সরাসরি এন্ট্রি"},
     {page:"typing",      icon:"⌨️",label:"Typing মোড",    desc:"টাইপ করে দ্রুত এন্ট্রি"},
   ]},
-  {key:"aijob",title:"🚀 AI জব",color:C.ai,items:[
-    {page:"joblauncher", icon:"🚀",label:"Exp Gen",       desc:"ব্যাখ্যা তৈরির জব চালু করুন"},
-    {page:"qbankconv",   icon:"🔁",label:"QBank→Quiz",    desc:"প্রশ্ন ব্যাংক থেকে কুইজ বানান"},
+  {key:"aijob",title:"🚀 AI-সহায়তায়",color:C.ai,items:[
     {page:"questiongen", icon:"🧬",label:"AI প্রশ্ন",      desc:"টপিক দিয়ে প্রশ্ন জেনারেট"},
+    {page:"joblauncher", icon:"🚀",label:"ব্যাখ্যা জেনারেট", desc:"Explanation তৈরির জব চালু করুন"},
+    {page:"qbankconv",   icon:"🔁",label:"QBank → Quiz",  desc:"প্রশ্ন ব্যাংক থেকে MCQ বানান"},
+    {page:"modeltest",   icon:"🧪",label:"Model Test",    desc:"মডেল টেস্ট জেনারেট করুন"},
   ]},
-  {key:"ocr",title:"📸 OCR আপলোড",color:C.ocr,items:[
-    {page:"aiimport",    icon:"📸",label:"Single Subject", desc:"এক বিষয়ের ছবি স্ক্যান"},
-    {page:"multiimport", icon:"🗂️",label:"Multi-Subject",  desc:"একসাথে একাধিক বিষয় স্ক্যান"},
-  ]},
-  {key:"archive",title:"🗄️ আর্কাইভ",color:"#a78bfa",items:[
-    {page:"archive", icon:"🗄️",label:"Archive", desc:"সংরক্ষিত পুরনো কন্টেন্ট দেখুন"},
+  {key:"ocr",title:"📸 ছবি থেকে (OCR)",color:C.ocr,items:[
+    {page:"aiimport",    icon:"📸",label:"এক বিষয়ের স্ক্যান", desc:"এক বিষয়ের ছবি স্ক্যান"},
+    {page:"multiimport", icon:"🗂️",label:"একাধিক বিষয়ের স্ক্যান",  desc:"একসাথে একাধিক বিষয় স্ক্যান"},
   ]},
 ];
 const UPLOADER_LEAF_PAGES=UPLOADER_SECTIONS.flatMap(s=>s.items.map(it=>it.page));
 
 export default function App(){
+  // 🎨 থিম (Light/Dark) — প্রথম পেইন্টের আগেই (useLayoutEffect না লাগিয়ে সরাসরি
+  // lazy-init স্টেটে) সেভ করা থিম প্রয়োগ করে দেওয়া হচ্ছে, যাতে flash-of-wrong-theme
+  // না হয়। core/theme.js-এর getSavedTheme/applyTheme/toggleTheme — এই তিনটাই
+  // localStorage + document.documentElement[data-theme] সামলায়; config.js-এর C
+  // অবজেক্টের সব মান এখন "var(--x)" রেফারেন্স, তাই থিম বদলালে পুরো অ্যাপ (একটা ফাইলও
+  // আলাদা করে না ছুঁয়ে) স্বয়ংক্রিয়ভাবে রঙ বদলে ফেলে।
+  const[theme,setThemeState]=useState(()=>{
+    const t=getSavedTheme();
+    applyTheme(t);
+    return t;
+  });
+  const handleToggleTheme=useCallback(()=>{
+    setThemeState(toggleTheme());
+  },[]);
   /* ⚠️ ব্যাক-বাটন আর্কিটেকচার নোট (এখানে আগে যা ছিল):
      আগে এখানে একটা আলাদা effect ছিল যেটা নিজের মতো "modal-open"/"modal-close" গুনে
      (_depth কাউন্টার) androidBackButton ইভেন্টে "back-press" ডিসপ্যাচ করত — ঠিক নিচের
@@ -392,6 +407,7 @@ export default function App(){
           </div>
         </div>
         <div style={{display:"flex",gap:6}}>
+          <button className="icon-btn" title={theme==="dark"?"Light mode-এ যান":"Dark mode-এ যান"} onClick={handleToggleTheme}>{theme==="dark"?"☀️":"🌙"}</button>
           <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
           <button className="icon-btn" title="Logout" onClick={()=>{ _LC.auth("logout","Admin logged out manually"); localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");localStorage.removeItem("fb_refresh_token");window.__adminIdToken=null;clearIdToken();setLoggedIn(false); }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
         </div>
@@ -399,7 +415,10 @@ export default function App(){
 
       <div style={{display:page==="dashboard"?"block":"none"}}><DashboardPage push={push} tick={tick}/></div>
       <div style={{display:page==="students" ?"block":"none"}}><StudentsPage  push={push} tick={tick} pushLayer={pushLayer}/></div>
-      <div style={{display:page==="content"  ?"block":"none"}}><ContentManagerPage push={push} tick={tick} pushLayer={pushLayer}/></div>
+      <div style={{display:page==="content"  ?"block":"none"}}>
+        <ContentManagerPage push={push} tick={tick} pushLayer={pushLayer}
+          onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/>
+      </div>
       <div style={{display:page==="notify"   ?"block":"none"}}><NotifyPage    push={push} tick={tick}/></div>
 
       {/* Approval hub — Reports / Techniques / Review, একটার আন্ডারে, ট্যাব দিয়ে সুইচ (structure
@@ -442,9 +461,12 @@ export default function App(){
       <div style={{display:page==="joblauncher"?"block":"none"}}><div className="page"><JobLauncherTab push={push} tick={tick}/></div></div>
       <div style={{display:page==="qbankconv"  ?"block":"none"}}><div className="page"><QBankConverterTab push={push} tick={tick}/></div></div>
       <div style={{display:page==="questiongen"?"block":"none"}}><div className="page"><QuestionGenTab push={push} tick={tick}/></div></div>
+      {/* 🐛 IA পুনর্গঠন: Model Test এখানে যোগ হলো (আগে "ম্যানেজ করুন"-এর ভেতরে নেস্টেড ছিল,
+          generative টুল বলে "তৈরি করুন"-এ সরানো হলো) — ModelTestTab ফ্র্যাগমেন্ট-অনলি, তাই
+          joblauncher/qbankconv/questiongen-এর মতোই নিজের একটা ".page" wrapper দেওয়া হলো। */}
+      <div style={{display:page==="modeltest"  ?"block":"none"}}><div className="page"><ModelTestTab push={push} tick={tick}/></div></div>
       <div style={{display:page==="aiimport"   ?"block":"none"}}><AIImportPage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
       <div style={{display:page==="multiimport"?"block":"none"}}><MultiSubjectImportPage push={push}/></div>
-      <div style={{display:page==="archive"    ?"block":"none"}}><ArchivePage push={push} onSendToBulk={payload=>{setBulkPrefill(payload);goPage("bulkupload");}}/></div>
 
       <nav className="bottom-nav">
         {NAV.map(n=>{
@@ -499,7 +521,7 @@ export default function App(){
                 goPage("reports");
                 setReportAlert(p=>p?{items:p.items.filter(x=>x.key!==it.key)}:null);
               }}
-              style={{background:C.card,border:`1px solid ${C.red}66`,borderRadius:11,padding:"10px 12px",
+              style={{background:C.card,border:`1px solid ${tint(C.red,"66")}`,borderRadius:11,padding:"10px 12px",
                 display:"flex",gap:8,alignItems:"flex-start",cursor:"pointer",
                 boxShadow:"0 8px 28px #00000080",animation:"ti .25s ease"}}>
               <div style={{fontSize:18,lineHeight:1}}>🚨</div>
