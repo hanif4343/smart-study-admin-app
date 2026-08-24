@@ -7,7 +7,7 @@
    row_start/row_count ইনডেক্স ব্যবহার করে একটা মাত্র contiguous-range delete,
    অনেক দ্রুত এবং নিরাপদ। */
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, deleteByReferenceId } from "../../core/sheetSave.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
@@ -90,7 +90,7 @@ function DeleteTab({push}){
         <div key={item.id} className="rename-row">
           <div className="rename-name">{item.name}</div>
           <div className="rename-count">{item.count}টি</div>
-          <button className="btn" style={{padding:"4px 10px",fontSize:10,background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`}} onClick={()=>setDelTarget(item)}>🗑️</button>
+          <button className="btn" style={{padding:"4px 10px",fontSize:10,background:tint(C.red,"22"),color:C.red,border:`1px solid ${tint(C.red,"33")}`}} onClick={()=>setDelTarget(item)}>🗑️</button>
         </div>
        ))
       }
