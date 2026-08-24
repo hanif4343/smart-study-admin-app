@@ -7,7 +7,7 @@
    কখনো টাচ হয় না, প্রশ্ন যতই থাকুক (৭৭৬১টা হোক বা ২ লাখ)।
    ⚠️ SubTopic তুলে দেওয়া হয়েছে — QBank এখন Quiz/Study-এর মতোই ২-লেভেল। */
 import React, { useState, useEffect, useMemo, useCallback } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, renameReferenceItem } from "../../core/sheetSave.js";
 import { RenameModal } from "./RenameModal.jsx";
@@ -115,7 +115,7 @@ function RenameTab({push}){
         <div key={item.id} className="rename-row" onClick={()=>{setRenameTarget(item);setNewName(item.rawName??item.name);}}>
           <div className="rename-name">{item.name}</div>
           <div className="rename-count">{item.count===null?"":`${item.count}টি`}</div>
-          <button className="btn" style={{padding:"4px 10px",fontSize:10,background:C.accent+"20",color:C.accent,border:`1px solid ${C.accent}30`}}>✏️</button>
+          <button className="btn" style={{padding:"4px 10px",fontSize:10,background:tint(C.accent,"20"),color:C.accent,border:`1px solid ${tint(C.accent,"30")}`}}>✏️</button>
         </div>
        ))
       }
