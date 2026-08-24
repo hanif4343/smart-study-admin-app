@@ -1,6 +1,6 @@
 /* ══════════ AI IMPORT PAGE (ML Kit OCR) ══════════ */
 import React, { useState, useEffect, useRef } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { _LC } from "../core/logger.js";
 import { loadPath, invalidate } from "../core/dataCache.js";
 import { toArr, nowTs } from "../core/utils.js";
@@ -597,7 +597,7 @@ function AIImportPage({push,onSendToBulk}){
                   <button key={m} type="button" onClick={()=>setTargetMode(m)}
                     style={{flex:1,fontSize:11,fontWeight:700,padding:"5px 0",borderRadius:8,cursor:"pointer",
                       border:`1px solid ${targetMode===m?C.accent:C.border}`,
-                      background:targetMode===m?C.accent+"22":"transparent",
+                      background:targetMode===m?tint(C.accent,"22"):"transparent",
                       color:targetMode===m?C.accent:C.muted}}>{m}</button>
                 ))}
               </div>
@@ -664,7 +664,7 @@ function AIImportPage({push,onSendToBulk}){
               <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:6}}>
                 {QUICK_TAGS.map(t=>(
                   <button key={t} onClick={()=>{if(!audienceTags.includes(t))setAudienceTags(p=>[...p,t]);}}
-                    style={{fontSize:10,padding:"3px 9px",borderRadius:20,border:`1px solid ${audienceTags.includes(t)?C.accent:C.border}`,background:audienceTags.includes(t)?C.accent+"22":"transparent",color:audienceTags.includes(t)?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>{t}</button>
+                    style={{fontSize:10,padding:"3px 9px",borderRadius:20,border:`1px solid ${audienceTags.includes(t)?C.accent:C.border}`,background:audienceTags.includes(t)?tint(C.accent,"22"):"transparent",color:audienceTags.includes(t)?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>{t}</button>
                 ))}
               </div>
               {audienceTags.length>0&&(
