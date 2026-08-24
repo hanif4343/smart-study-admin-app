@@ -15,7 +15,7 @@
    সদস্য থাকলে), ডিলিট বাটনে চাপ দিলে সরাসরি ডিলিট না হয়ে একটা choice modal
    আসে — "শুধু এইটা" (group ভাঙার ঝুঁকি নিয়ে) বা "পুরো group একসাথে"। ── */
 import React, { useState, useEffect, useMemo } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { useSheetRows, invalidate } from "../../core/dataCache.js";
 import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { deleteIdsInSheet, saveRowsToSheet, fetchReferenceData, fetchAllExamAppearances } from "../../core/sheetSave.js";
@@ -442,7 +442,7 @@ function BrowseTab({push,tick}){
         ))}
         <button
           onClick={()=>setViewMode(v=>v==="duplicates"?"all":"duplicates")}
-          style={{marginLeft:"auto",fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="duplicates"?C.red:C.border}`,background:viewMode==="duplicates"?C.red+"22":"transparent",color:viewMode==="duplicates"?C.red:C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+          style={{marginLeft:"auto",fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="duplicates"?C.red:C.border}`,background:viewMode==="duplicates"?tint(C.red,"22"):"transparent",color:viewMode==="duplicates"?C.red:C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
           🔁 Duplicate {duplicateQs.length>0&&<span style={{fontSize:9,background:C.red,color:"#fff",borderRadius:10,padding:"1px 5px"}}>{duplicateQs.length}</span>}
         </button>
         <button
@@ -493,7 +493,7 @@ function BrowseTab({push,tick}){
       )}
       {/* Duplicate mode header */}
       {viewMode==="duplicates"&&(
-        <div style={{background:C.red+"15",border:`1px solid ${C.red}33`,borderRadius:10,padding:"8px 12px",marginBottom:8}}>
+        <div style={{background:tint(C.red,"15"),border:`1px solid ${tint(C.red,"33")}`,borderRadius:10,padding:"8px 12px",marginBottom:8}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:6}}>
             <div>
               <div style={{fontSize:12,fontWeight:700,color:C.red}}>🔁 Duplicate প্রশ্ন</div>
@@ -508,7 +508,7 @@ function BrowseTab({push,tick}){
                   setBulkDelKind("duplicate");
                   setBulkDelTargets(toDelete);
                 }}
-                style={{fontSize:11,padding:"5px 12px",borderRadius:8,background:C.red+"22",color:C.red,border:`1px solid ${C.red}44`,fontWeight:700,cursor:"pointer"}}>
+                style={{fontSize:11,padding:"5px 12px",borderRadius:8,background:tint(C.red,"22"),color:C.red,border:`1px solid ${tint(C.red,"44")}`,fontWeight:700,cursor:"pointer"}}>
                 🗑️ সব duplicate ডিলিট ({duplicateGroups.reduce((a,g)=>a+g.length-1,0)}টি)
               </button>
             )}
@@ -521,13 +521,13 @@ function BrowseTab({push,tick}){
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           <button
             onClick={()=>setFilterAudience("all")}
-            style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterAudience==="all"?C.accent:C.border}`,background:filterAudience==="all"?C.accent+"22":"transparent",color:filterAudience==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+            style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterAudience==="all"?C.accent:C.border}`,background:filterAudience==="all"?tint(C.accent,"22"):"transparent",color:filterAudience==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
             🌐 All {filterAudience==="all"&&allQ.length>0&&<span style={{fontSize:9,opacity:.7}}>({allQ.length})</span>}
           </button>
           {audienceTags.map(({tag,count})=>(
             <button key={tag}
               onClick={()=>setFilterAudience(filterAudience===tag?"all":tag)}
-              style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterAudience===tag?C.accent:C.border}`,background:filterAudience===tag?C.accent+"22":"transparent",color:filterAudience===tag?C.accent:C.muted,cursor:"pointer",fontWeight:filterAudience===tag?700:500}}>
+              style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterAudience===tag?C.accent:C.border}`,background:filterAudience===tag?tint(C.accent,"22"):"transparent",color:filterAudience===tag?C.accent:C.muted,cursor:"pointer",fontWeight:filterAudience===tag?700:500}}>
               {tag} <span style={{fontSize:9,opacity:.6}}>({count})</span>
             </button>
           ))}
@@ -541,13 +541,13 @@ function BrowseTab({push,tick}){
             <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>📚 SUBJECT</div>
             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
               <button onClick={()=>setFilterSubjectId("all")}
-                style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterSubjectId==="all"?C.accent:C.border}`,background:filterSubjectId==="all"?C.accent+"22":"transparent",color:filterSubjectId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+                style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterSubjectId==="all"?C.accent:C.border}`,background:filterSubjectId==="all"?tint(C.accent,"22"):"transparent",color:filterSubjectId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
                 🌐 সব
               </button>
               {subjectOptions.map(s=>(
                 <button key={s.subject_id}
                   onClick={()=>setFilterSubjectId(filterSubjectId===s.subject_id?"all":s.subject_id)}
-                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterSubjectId===s.subject_id?C.accent:C.border}`,background:filterSubjectId===s.subject_id?C.accent+"22":"transparent",color:filterSubjectId===s.subject_id?C.accent:C.muted,cursor:"pointer",fontWeight:filterSubjectId===s.subject_id?700:500}}>
+                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterSubjectId===s.subject_id?C.accent:C.border}`,background:filterSubjectId===s.subject_id?tint(C.accent,"22"):"transparent",color:filterSubjectId===s.subject_id?C.accent:C.muted,cursor:"pointer",fontWeight:filterSubjectId===s.subject_id?700:500}}>
                   {s.subject_name}
                 </button>
               ))}
@@ -559,13 +559,13 @@ function BrowseTab({push,tick}){
               <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>📌 TOPIC</div>
               <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                 <button onClick={()=>setFilterTopicId("all")}
-                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterTopicId==="all"?C.accent:C.border}`,background:filterTopicId==="all"?C.accent+"22":"transparent",color:filterTopicId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterTopicId==="all"?C.accent:C.border}`,background:filterTopicId==="all"?tint(C.accent,"22"):"transparent",color:filterTopicId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
                   🌐 সব
                 </button>
                 {topicOptions.map(t=>(
                   <button key={t.topic_id}
                     onClick={()=>setFilterTopicId(filterTopicId===t.topic_id?"all":t.topic_id)}
-                    style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterTopicId===t.topic_id?C.accent:C.border}`,background:filterTopicId===t.topic_id?C.accent+"22":"transparent",color:filterTopicId===t.topic_id?C.accent:C.muted,cursor:"pointer",fontWeight:filterTopicId===t.topic_id?700:500}}>
+                    style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterTopicId===t.topic_id?C.accent:C.border}`,background:filterTopicId===t.topic_id?tint(C.accent,"22"):"transparent",color:filterTopicId===t.topic_id?C.accent:C.muted,cursor:"pointer",fontWeight:filterTopicId===t.topic_id?700:500}}>
                     {t.topic_name}
                   </button>
                 ))}
@@ -582,13 +582,13 @@ function BrowseTab({push,tick}){
             <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>🧑‍💼 পদ (POST)</div>
             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
               <button onClick={()=>setFilterPostId("all")}
-                style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterPostId==="all"?C.accent:C.border}`,background:filterPostId==="all"?C.accent+"22":"transparent",color:filterPostId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+                style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterPostId==="all"?C.accent:C.border}`,background:filterPostId==="all"?tint(C.accent,"22"):"transparent",color:filterPostId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
                 🌐 সব
               </button>
               {postOptions.map(p=>(
                 <button key={p.id}
                   onClick={()=>setFilterPostId(filterPostId===p.id?"all":p.id)}
-                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterPostId===p.id?C.accent:C.border}`,background:filterPostId===p.id?C.accent+"22":"transparent",color:filterPostId===p.id?C.accent:C.muted,cursor:"pointer",fontWeight:filterPostId===p.id?700:500}}>
+                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterPostId===p.id?C.accent:C.border}`,background:filterPostId===p.id?tint(C.accent,"22"):"transparent",color:filterPostId===p.id?C.accent:C.muted,cursor:"pointer",fontWeight:filterPostId===p.id?700:500}}>
                   {p.name} <span style={{fontSize:9,opacity:.6}}>({p.count})</span>
                 </button>
               ))}
@@ -600,13 +600,13 @@ function BrowseTab({push,tick}){
               <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>🏢 প্রতিষ্ঠান (INSTITUTION)</div>
               <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                 <button onClick={()=>setFilterInstId("all")}
-                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterInstId==="all"?C.accent:C.border}`,background:filterInstId==="all"?C.accent+"22":"transparent",color:filterInstId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterInstId==="all"?C.accent:C.border}`,background:filterInstId==="all"?tint(C.accent,"22"):"transparent",color:filterInstId==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
                   🌐 সব
                 </button>
                 {instOptions.map(ins=>(
                   <button key={ins.id}
                     onClick={()=>setFilterInstId(filterInstId===ins.id?"all":ins.id)}
-                    style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterInstId===ins.id?C.accent:C.border}`,background:filterInstId===ins.id?C.accent+"22":"transparent",color:filterInstId===ins.id?C.accent:C.muted,cursor:"pointer",fontWeight:filterInstId===ins.id?700:500}}>
+                    style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterInstId===ins.id?C.accent:C.border}`,background:filterInstId===ins.id?tint(C.accent,"22"):"transparent",color:filterInstId===ins.id?C.accent:C.muted,cursor:"pointer",fontWeight:filterInstId===ins.id?700:500}}>
                     {ins.name} <span style={{fontSize:9,opacity:.6}}>({ins.count})</span>
                   </button>
                 ))}
@@ -618,13 +618,13 @@ function BrowseTab({push,tick}){
               <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:5,letterSpacing:".5px"}}>📅 সাল (YEAR)</div>
               <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                 <button onClick={()=>setFilterYear("all")}
-                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterYear==="all"?C.accent:C.border}`,background:filterYear==="all"?C.accent+"22":"transparent",color:filterYear==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
+                  style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterYear==="all"?C.accent:C.border}`,background:filterYear==="all"?tint(C.accent,"22"):"transparent",color:filterYear==="all"?C.accent:C.muted,cursor:"pointer",fontWeight:700}}>
                   🌐 সব
                 </button>
                 {yearOptions.map(y=>(
                   <button key={y.year}
                     onClick={()=>setFilterYear(filterYear===y.year?"all":y.year)}
-                    style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterYear===y.year?C.accent:C.border}`,background:filterYear===y.year?C.accent+"22":"transparent",color:filterYear===y.year?C.accent:C.muted,cursor:"pointer",fontWeight:filterYear===y.year?700:500}}>
+                    style={{fontSize:11,padding:"4px 12px",borderRadius:20,border:`1px solid ${filterYear===y.year?C.accent:C.border}`,background:filterYear===y.year?tint(C.accent,"22"):"transparent",color:filterYear===y.year?C.accent:C.muted,cursor:"pointer",fontWeight:filterYear===y.year?700:500}}>
                     {y.year} <span style={{fontSize:9,opacity:.6}}>({y.count})</span>
                   </button>
                 ))}
@@ -666,7 +666,7 @@ function BrowseTab({push,tick}){
         const technique=q.Technique||q.technique||"";
         const fullQ=q.Question||q.question||"(নোট)";
         return(
-          <div key={cardKey} className="qcard" style={{...(isDup?{border:`1.5px solid ${isOriginal?C.green:C.red}44`,background:isOriginal?C.green+"08":C.red+"08"}:{}),...(selectMode&&selectedKeys.has(cardKey)?{border:"1.5px solid #6366f1aa",background:"#6366f10c"}:{})}}>
+          <div key={cardKey} className="qcard" style={{...(isDup?{border:`1.5px solid ${isOriginal?C.green:C.red}44`,background:isOriginal?tint(C.green,"08"):tint(C.red,"08")}:{}),...(selectMode&&selectedKeys.has(cardKey)?{border:"1.5px solid #6366f1aa",background:"#6366f10c"}:{})}}>
             <div style={{display:"flex",gap:6,marginBottom:5,alignItems:"flex-start"}}>
               {selectMode&&(
                 <input type="checkbox" checked={selectedKeys.has(cardKey)}
@@ -681,7 +681,7 @@ function BrowseTab({push,tick}){
                 </span>
               )}
               {isDup&&(
-                <span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:isOriginal?C.green+"22":C.red+"22",color:isOriginal?C.green:C.red,fontWeight:700,border:`1px solid ${isOriginal?C.green:C.red}44`}}>
+                <span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:isOriginal?tint(C.green,"22"):tint(C.red,"22"),color:isOriginal?C.green:C.red,fontWeight:700,border:`1px solid ${isOriginal?C.green:C.red}44`}}>
                   {isOriginal?`✅ Original (${q._dupGroup}টি)`:"🔁 Duplicate"}
                 </span>
               )}
@@ -691,8 +691,8 @@ function BrowseTab({push,tick}){
                   🧾{appearanceCountOf[String(q.id||q.ID||"")]>0&&<span style={{marginLeft:3,fontWeight:700}}>{appearanceCountOf[String(q.id||q.ID||"")]}</span>}
                 </button>
               )}
-              <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}33`}} onClick={()=>setEditing(q)}>✏️</button>
-              <button className="btn" style={{padding:"3px 9px",fontSize:10,background:C.red+"22",color:C.red,border:`1px solid ${C.red}33`}} onClick={()=>onDeleteClick(q)}>🗑️</button>
+              <button className="btn" style={{padding:"3px 9px",fontSize:10,background:tint(C.accent,"22"),color:C.accent,border:`1px solid ${tint(C.accent,"33")}`}} onClick={()=>setEditing(q)}>✏️</button>
+              <button className="btn" style={{padding:"3px 9px",fontSize:10,background:tint(C.red,"22"),color:C.red,border:`1px solid ${tint(C.red,"33")}`}} onClick={()=>onDeleteClick(q)}>🗑️</button>
             </div>
             <div className="qcard-q">
               {isSuspicious&&<span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:"#f59e0b22",color:"#f59e0b",fontWeight:800,border:"1px solid #f59e0b44",marginRight:6}}>⚠️ সন্দেহজনক/ভাঙা এন্ট্রি</span>}
@@ -702,7 +702,7 @@ function BrowseTab({push,tick}){
               <span className="qtag qtag-sub">📚 {sub}</span>
               {tp&&<span className="qtag qtag-tp">📌 {tp.slice(0,25)}</span>}
               {(q.AudienceTags||q.audienceTags||q.audience_tags)&&(
-                <span style={{fontSize:9,padding:"2px 7px",borderRadius:10,background:C.accent+"18",color:C.accent,border:`1px solid ${C.accent}33`,fontWeight:700}}>
+                <span style={{fontSize:9,padding:"2px 7px",borderRadius:10,background:tint(C.accent,"18"),color:C.accent,border:`1px solid ${tint(C.accent,"33")}`,fontWeight:700}}>
                   🎯 {(q.AudienceTags||q.audienceTags||q.audience_tags).toString().slice(0,30)}
                 </span>
               )}
