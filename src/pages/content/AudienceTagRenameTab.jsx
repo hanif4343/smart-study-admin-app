@@ -7,7 +7,7 @@
    loadPath (Quiz/QBank/Study-এর জন্য primary GAS getSheetRows) দিয়ে Sheet থেকেই পড়ে,
    আর লেখাও GAS "updateField" (syncFieldsToSheet) দিয়ে হয় — Firebase পুরোপুরি বাইপাস। ── */
 import React, { useState, useEffect, useCallback, useMemo } from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { useFB, invalidate } from "../../core/dataCache.js";
 import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, renameReferenceItem, syncFieldsToSheet } from "../../core/sheetSave.js";
@@ -146,7 +146,7 @@ function AudienceTagRenameTab({push,tick}){
   return(
     <>
       {/* ══ BULK ADD AUDIENCE TAG ══ */}
-      <div style={{background:`${C.green}10`,border:`1px solid ${C.green}30`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+      <div style={{background:`${tint(C.green,"10")}`,border:`1px solid ${tint(C.green,"30")}`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
         <div style={{fontWeight:700,color:C.green,marginBottom:10,fontSize:13}}>➕ Bulk Audience Tag সেট করুন</div>
 
         {/* Sheet selector */}
@@ -207,7 +207,7 @@ function AudienceTagRenameTab({push,tick}){
             return(
               <div key={key} onClick={()=>toggleBulkSelect(key)}
                 style={{display:"flex",alignItems:"center",gap:8,padding:"7px 10px",borderRadius:8,cursor:"pointer",
-                  background:sel?`${C.accent}22`:C.panel,
+                  background:sel?`${tint(C.accent,"22")}`:C.panel,
                   border:`1px solid ${sel?C.accent:C.border}`,
                   transition:"all .15s"}}>
                 <div style={{width:16,height:16,borderRadius:4,flexShrink:0,
@@ -251,7 +251,7 @@ function AudienceTagRenameTab({push,tick}){
       </div>
 
       {/* ══ RENAME SECTION ══ */}
-      <div style={{background:`${C.accent}12`,border:`1px solid ${C.accent}30`,borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11}}>
+      <div style={{background:`${tint(C.accent,"12")}`,border:`1px solid ${tint(C.accent,"30")}`,borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11}}>
         <div style={{fontWeight:700,color:C.accent,marginBottom:3}}>✏️ Audience Tag Rename</div>
         <div style={{color:C.muted,lineHeight:1.6}}>
           শুধু Tags রেফারেন্স-টেবিলের ১টা রো বদলাবে — Quiz/QBank/Study-এর প্রশ্নের রো টাচ হবে না।
@@ -285,7 +285,7 @@ function AudienceTagRenameTab({push,tick}){
             </div>
             <button
               className="btn"
-              style={{padding:"5px 11px",fontSize:11,background:C.accent+"22",color:C.accent,border:`1px solid ${C.accent}33`,flexShrink:0}}
+              style={{padding:"5px 11px",fontSize:11,background:tint(C.accent,"22"),color:C.accent,border:`1px solid ${tint(C.accent,"33")}`,flexShrink:0}}
               onClick={()=>{setRenameTarget({tag,id:info.id,count:"?"});setNewName(tag);}}
             >✏️ Rename</button>
           </div>
