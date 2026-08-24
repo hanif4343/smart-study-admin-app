@@ -1,6 +1,6 @@
 /* ══════════ RENAME MODAL ══════════ */
 import React from "react";
-import { C } from "../../core/config.js";
+import { C, tint } from "../../core/config.js";
 import { useModalBack } from "../../hooks/useModalBack.js";
 
 function RenameModal({type,target,newName,setNewName,onCancel,onRename,renaming}){
@@ -10,7 +10,7 @@ function RenameModal({type,target,newName,setNewName,onCancel,onRename,renaming}
       <div className="modal">
         <div className="mh"/>
         <div style={{fontSize:13,fontWeight:700,marginBottom:4}}>✏️ Rename {type}</div>
-        <div style={{background:`${C.green}12`,border:`1px solid ${C.green}30`,borderRadius:9,padding:"8px 11px",marginBottom:12,fontSize:11}}>
+        <div style={{background:`${tint(C.green,"12")}`,border:`1px solid ${tint(C.green,"30")}`,borderRadius:9,padding:"8px 11px",marginBottom:12,fontSize:11}}>
           <span style={{color:C.green,fontWeight:700}}>✅ </span>
           <span style={{color:C.muted}}>শুধু <b style={{color:C.text}}>১টা</b> রেফারেন্স-এন্ট্রি বদলাবে — এটা ব্যবহার করা <b style={{color:C.text}}>{target.count}টি</b> প্রশ্নের কোনো রো টাচ হবে না, নাম অটোমেটিক আপডেট দেখাবে।</span>
         </div>
