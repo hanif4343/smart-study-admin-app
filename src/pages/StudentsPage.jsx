@@ -1,25 +1,22 @@
-/* ══════════ STUDENTS (signup tab সহ) ══════════ */
+/* ══════════ STUDENTS (signup tab সহ) ══════════
+   🎨 রিডিজাইন: Edit/Notify/Delete/Password — এই সবকটা অ্যাকশন এখন StudentDetail.jsx-এ
+   একমাত্র জায়গা হিসেবে সরানো হয়েছে (তাই এখানে NotifyModal/UserEditModal/DeleteWarningModal
+   আমদানি ও তাদের state আর দরকার নেই — শুধু Signups ট্যাবের rejectTarget-এর জন্য
+   DeleteWarningModal থেকেই যাচ্ছে, ওটা আলাদা ওয়ার্কফ্লো)। */
 import React, { useState, useMemo, useCallback } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { useFB, invalidate } from "../core/dataCache.js";
 import { fbPatch, fbSet, fbDelete } from "../core/firebase.js";
 import { toArr, phoneKey, nowTs, initials, timeAgo } from "../core/utils.js";
 import { DeleteWarningModal } from "../components/shared/DeleteWarningModal.jsx";
-import { NotifyModal } from "./NotifyModal.jsx";
 import { StudentDetail } from "./StudentDetail.jsx";
-import { UserEditModal } from "./UserEditModal.jsx";
 
 function StudentsPage({push,tick,pushLayer}){
   const{data:usersRaw,loading}=useFB("Users",tick);
   const[search,setSrc]=useState("");
   const[tab,setTab]=useState("active"); // default: running students
   const[detail,setDetail]=useState(null);
-  const[notify,setNotify]=useState(null);
-  const[editUser,setEditUser]=useState(null);
-  const[busy,setBusy]=useState(null);
   const[activating,setActivating]=useState(null);
-  const[deleteTarget,setDeleteTarget]=useState(null);
-  const[deleting,setDeleting]=useState(false);
   const[signupDone,setSignupDone]=useState(new Set());
   const[rejectTarget,setRejectTarget]=useState(null); // pending signup user to reject/delete
   const[rejecting,setRejecting]=useState(false);
@@ -75,32 +72,7 @@ function StudentsPage({push,tick,pushLayer}){
     setRejecting(false);
   };
 
-  const activateStudent=async u=>{
-    const phone=u.Phone||u.phone||"";
-    const fkey=u._fbKey||phoneKey(phone);
-    setBusy(fkey);
-    try{
-      await fbPatch(`Users/${fkey}`,{Status:"Active"});
-      invalidate("Users");
-            push("success","✅ অ্যাক্টিভ!",u.Name||u.name);
-    }catch(e){push("error","ব্যর্থ",e.message);}
-    setBusy(null);
-  };
 
-  const confirmDelete=async()=>{
-    if(!deleteTarget)return;
-    const u=deleteTarget;
-    const phone=u.Phone||u.phone||"";
-    const fkey=u._fbKey||phoneKey(phone);
-    setDeleting(true);
-    try{
-      await fbDelete(`Users/${fkey}`);
-      push("success","🗑️ ডিলিট হয়েছে",(u.Name||u.name||phone));
-      invalidate("Users");
-      setDeleteTarget(null);
-    }catch(e){push("error","ব্যর্থ",e.message);}
-    setDeleting(false);
-  };
 
   // StudentDetail খুললে layer push
   const openDetail=useCallback((u)=>{
@@ -150,7 +122,7 @@ function StudentsPage({push,tick,pushLayer}){
                   <button className="btn bs bb" style={{flex:2,justifyContent:"center"}} disabled={!!activating||rejecting} onClick={()=>activate(u)}>
                     {activating===fkey?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
                   </button>
-                  <button className="btn bg" style={{flex:1,justifyContent:"center",color:C.red,borderColor:`${C.red}40`}} disabled={!!activating||rejecting} onClick={()=>setRejectTarget(u)}>
+                  <button className="btn bg" style={{flex:1,justifyContent:"center",color:C.red,borderColor:`${tint(C.red,"40")}`}} disabled={!!activating||rejecting} onClick={()=>setRejectTarget(u)}>
                     ❌ রিজেক্ট
                   </button>
                 </div>
@@ -170,7 +142,12 @@ function StudentsPage({push,tick,pushLayer}){
         </>
       )}
 
-      {/* ── Students Tabs ── */}
+      {/* ── Students Tabs ──
+          🎨 রিডিজাইন: আগে প্রতি কার্ডে ৩টা স্ট্যাট-বক্স + ৫টা বাটন থাকত (List আসলে
+          Detail-এর মিনি-ভার্সন হয়ে গিয়েছিল — ডেটা আর অ্যাকশন দুটোই দুই জায়গায়
+          ডুপ্লিকেট)। এখন নীতি: List = শুধু খোঁজা আর চোখ বুলানো, Detail = সব কাজ করার
+          একমাত্র জায়গা। তাই এখানে এখন শুধু অ্যাভাটার+নাম+ফোন+accuracy% + বাম পাশে
+          স্ট্যাটাস রঙের বার — কোনো বাটন নেই, পুরো রো-ই ট্যাপ করলে Detail খোলে। */}
       {tab!=="signups"&&(
         <>
           <div className="sw"><span className="si">🔍</span><input className="inp" placeholder="নাম বা ফোন..." value={search} onChange={e=>setSrc(e.target.value)}/></div>
@@ -183,52 +160,23 @@ function StudentsPage({push,tick,pushLayer}){
             const fkey=u._fbKey||phoneKey(ph);
             const c=parseInt(u.totalCorrect)||0,w=parseInt(u.totalWrong)||0,tot=c+w;
             const acc=tot?Math.round(c/tot*100):0;
-            const mins=parseInt(u.totalMinutes||u.studyMinutes||u.totalTime||0);
             return(
-              <div key={fkey||i} className="card">
-                <div style={{cursor:"pointer",display:"flex",alignItems:"center",gap:9,marginBottom:8}} onClick={()=>openDetail(u)}>
-                  <div className="av">{initials(nm)}</div>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontWeight:700,fontSize:13}}>{nm}</div>
-                    <div style={{fontSize:10,color:C.muted}}>📱 {ph}</div>
-                  </div>
-                  <div style={{textAlign:"right"}}>
-                    <span className={`pill ${st==="active"?"pa":"pi"}`}>{st==="active"?"✅":"🔴"} {st==="active"?"অ্যাক্টিভ":"ইনঅ্যাক্টিভ"}</span>
-                    {tot>0&&<div style={{fontSize:9,color:acc>=70?C.green:acc>=40?C.yellow:C.red,marginTop:2,fontWeight:700}}>{acc}%</div>}
-                  </div>
+              <button key={fkey||i} className="stu-row" style={{borderLeftColor:st==="active"?C.green:C.muted}} onClick={()=>openDetail(u)}>
+                <div className="av stu-av">{initials(nm)}</div>
+                <div className="stu-info">
+                  <div className="stu-name">{nm}</div>
+                  <div className="stu-phone">📱 {ph}</div>
                 </div>
-            <div style={{display:"flex",gap:6,marginBottom:8}}>
-              {[[C.green,c,"✅"],[C.red,w,"❌"],[C.accent,mins,"⏱"]].map(([cl,val,ic])=>(
-                <div key={ic} style={{textAlign:"center",flex:1,background:C.panel,borderRadius:7,padding:"5px 2px"}}>
-                  <div style={{color:cl,fontWeight:700,fontSize:13}}>{val}</div>
-                  <div style={{color:C.muted,fontSize:9}}>{ic}</div>
+                <div className="stu-acc" style={{color:tot===0?C.muted:acc>=70?C.green:acc>=40?C.yellow:C.red}}>
+                  {tot===0?"নতুন":`${acc}%`}
                 </div>
-              ))}
-            </div>
-            <div style={{display:"flex",gap:6}}>
-              {st!=="active"&&<button className="btn bs" style={{flex:1,justifyContent:"center",fontSize:11}} disabled={!!busy} onClick={()=>activateStudent(u)}>{busy===fkey?"⏳":"✅ অ্যাক্টিভ"}</button>}
-              <button className="btn bg" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>setNotify(u)}>📣</button>
-              <button className="btn" style={{flex:1,justifyContent:"center",fontSize:11,background:"#f59e0b22",color:C.yellow,border:"1px solid #f59e0b44"}} onClick={()=>setEditUser(u)}>✏️</button>
-              <button className="btn bp" style={{flex:1,justifyContent:"center",fontSize:11}} onClick={()=>openDetail(u)}>👁</button>
-              <button className="btn" style={{flex:1,justifyContent:"center",fontSize:11,background:"#ef444422",color:C.red,border:`1px solid ${C.red}44`}} onClick={()=>setDeleteTarget(u)}>🗑️</button>
-            </div>
-          </div>
-        );
-       })
-      }
+                <div className="stu-chev">›</div>
+              </button>
+            );
+           })
+          }
         </>
       )}
-      {notify&&<NotifyModal user={notify} onClose={()=>setNotify(null)} push={push}/>}
-      {deleteTarget&&(
-        <DeleteWarningModal
-          title="Student ডিলিট করবেন?"
-          description={`"${deleteTarget.Name||deleteTarget.name||deleteTarget.Phone||deleteTarget.phone||"এই student"}" কে Firebase থেকে সম্পূর্ণভাবে ডিলিট করা হবে। এটি পূর্বাবস্থায় ফেরানো যাবে না।`}
-          onConfirm={confirmDelete}
-          onCancel={()=>!deleting&&setDeleteTarget(null)}
-          loading={deleting}
-        />
-      )}
-      {editUser&&<UserEditModal user={editUser} onClose={()=>setEditUser(null)} onSaved={updated=>{setEditUser(null);invalidate("Users");}} push={push}/>}
     </div>
   );
 }
