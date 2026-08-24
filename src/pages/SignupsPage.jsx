@@ -1,6 +1,6 @@
 /* ══════════ SIGNUPS ══════════ */
 import React, { useState, useMemo } from "react";
-import { C } from "../core/config.js";
+import { C, tint } from "../core/config.js";
 import { useFB, invalidate } from "../core/dataCache.js";
 import { fbPatch, fbSet, fbDelete } from "../core/firebase.js";
 import { toArr, phoneKey, nowTs, initials, timeAgo } from "../core/utils.js";
@@ -76,7 +76,7 @@ function SignupsPage({push,tick}){
               <button className="btn bs bb" style={{flex:2,justifyContent:"center"}} disabled={!!activating||rejecting} onClick={()=>activate(u)}>
                 {activating===fkey?"⏳ হচ্ছে...":"✅ অ্যাক্টিভ করুন"}
               </button>
-              <button className="btn bg" style={{flex:1,justifyContent:"center",color:C.red,borderColor:`${C.red}40`}} disabled={!!activating||rejecting} onClick={()=>setRejectTarget(u)}>
+              <button className="btn bg" style={{flex:1,justifyContent:"center",color:C.red,borderColor:`${tint(C.red,"40")}`}} disabled={!!activating||rejecting} onClick={()=>setRejectTarget(u)}>
                 ❌ রিজেক্ট
               </button>
             </div>
