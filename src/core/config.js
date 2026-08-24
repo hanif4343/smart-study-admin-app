@@ -30,17 +30,25 @@ const FCM_PRIVATE_KEY = (() => {
    নিয়ম: নতুন কোনো UI-তে C.red/C.green/C.purple সরাসরি "সাজানোর জন্য" বসানো যাবে
    না — সবসময় এই সিমান্টিক নামগুলোর একটা ব্যবহার করতে হবে, যাতে রঙের অর্থ সবসময়
    ট্রেসেবল থাকে (দেখুন REDESIGN_PLAN.md § ০.২)। */
+/* ══════ কালার টোকেন ══════
+   🎨 ফিক্স (Light/Dark mode): আগে এই মানগুলো হার্ডকোড হেক্স ছিল (যেমন
+   accent:"#3b82f6") — অ্যাপজুড়ে ৪৮টা ফাইলে সরাসরি C.accent/C.text ইত্যাদি
+   ব্যবহার হয়, তাই সেগুলো না ছুঁয়েই থিম বদলাতে হলে এই মানগুলোকে CSS custom
+   property রেফারেন্সে বদলে দেওয়া হলো — আসল হেক্স ভ্যালু এখন core/theme.js-এর
+   DARK/LIGHT অবজেক্টে, আর সেখান থেকেই html[data-theme]-এ বসে (css.js দেখো)।
+   ব্রাউজার রানটাইমে var(--accent) resolve করে, তাই App.jsx-এ থিম টগল করলেই
+   পুরো অ্যাপ (এই ফাইল স্পর্শ না করেই) রঙ বদলে যায়। */
 const C={
-  bg:"#06080f",card:"#0c1220",border:"#16253d",
-  accent:"#3b82f6",green:"#22c55e",red:"#ef4444",yellow:"#f59e0b",purple:"#8b5cf6",
-  text:"#e2e8f0",muted:"#4b5e7a",panel:"#0e1a2e",navBg:"#080f1c",
+  bg:"var(--bg)",card:"var(--card)",border:"var(--border)",
+  accent:"var(--accent)",green:"var(--green)",red:"var(--red)",yellow:"var(--yellow)",purple:"var(--purple)",
+  text:"var(--text)",muted:"var(--muted)",panel:"var(--panel)",navBg:"var(--navBg)",
   // ── সিমান্টিক এলিয়াস (Phase ১) ──
-  info:"#3b82f6",       // = accent
-  success:"#22c55e",    // = green
-  danger:"#ef4444",     // = red
-  warning:"#f59e0b",    // = yellow
-  ai:"#8b5cf6",         // = purple
-  ocr:"#22d3ee",        // নতুন — শুধু OCR/স্ক্যান ফিচার ট্যাগে ব্যবহার হবে
+  info:"var(--accent)",       // = accent
+  success:"var(--green)",     // = green
+  danger:"var(--red)",        // = red
+  warning:"var(--yellow)",    // = yellow
+  ai:"var(--purple)",         // = purple
+  ocr:"var(--ocr)",           // শুধু OCR/স্ক্যান ফিচার ট্যাগে ব্যবহার হবে
 };
 
 /* ══════ স্পেসিং ও রেডিয়াস স্কেল (Phase ১) ══════
@@ -49,4 +57,16 @@ const C={
 const SPACE={xs:4,sm:8,md:12,lg:16,xl:24,xxl:32};
 const RADIUS={sm:8,md:12,lg:16,xl:20};
 
-export { FB, FB_KEY, FB_PROJ, GAS, IMGBB, SECRET, FCM_CLIENT_EMAIL, FCM_PRIVATE_KEY, C, SPACE, RADIUS };
+/* 🎨 ফিক্স (Light/Dark mode continued): অ্যাপজুড়ে ৩০টা ফাইলে C.accent+"22" স্টাইলের
+   প্যাটার্ন ছিল (hex রঙের পেছনে ২-ডিজিট opacity hex জোড়া দিয়ে হালকা টিন্টেড
+   ব্যাকগ্রাউন্ড/বর্ডার বানাতো) — কিন্তু C.accent এখন "var(--accent)" (একটা keyword),
+   তার পেছনে হেক্স জোড়া দিলে (var(--accent)22) সেটা invalid CSS হয়ে সাইলেন্টলি
+   ignore হয়ে যেত। tint() হেল্পার সেই একই কাজ করে কিন্তু CSS color-mix() দিয়ে, যেটা
+   var() রেফারেন্সের সাথেও কাজ করে — colorVar="var(--accent)", hexAlpha="22"
+   (২-ডিজিট hex, 00-ff) দিলে সমতুল্য opacity রেখে color-mix() স্ট্রিং ফেরত দেয়। */
+function tint(colorVar, hexAlpha){
+  const pct = Math.round((parseInt(hexAlpha,16)/255)*1000)/10;
+  return `color-mix(in srgb, ${colorVar} ${pct}%, transparent)`;
+}
+
+export { FB, FB_KEY, FB_PROJ, GAS, IMGBB, SECRET, FCM_CLIENT_EMAIL, FCM_PRIVATE_KEY, C, SPACE, RADIUS, tint };
