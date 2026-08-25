@@ -258,8 +258,12 @@ function removeFailedItems(keys){
    করে না। ── */
 const LS_DRAFT_BULK   = "ss_draft_bulk_v1";
 const LS_DRAFT_SINGLE = "ss_draft_single_v1";
+// 🆕 PaperComposer (বাংলা/ইংরেজি/গণিত/GK — ৪ ট্যাবের পুরো প্রশ্নপত্র) নিজের আলাদা
+// draft key — বড় প্রশ্নপত্র টাইপ করতে করতে হারিয়ে গেলে/সাবমিট ব্যর্থ হলে যেন পুরোটাই
+// (৪টা ট্যাবের সব কার্ড/সাব-পার্ট + পদ/প্রতিষ্ঠান/সাল) ফিরিয়ে আনা যায়।
+const LS_DRAFT_PAPER  = "ss_draft_paper_v1";
 function loadDraft(key){ try{ const raw=localStorage.getItem(key); return raw?JSON.parse(raw):null; }catch{ return null; } }
 function saveDraft(key,data){ try{ localStorage.setItem(key,JSON.stringify({...data,_savedAt:Date.now()})); }catch{} }
 function clearDraft(key){ try{ localStorage.removeItem(key); }catch{} }
 
-export { getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow, LS_SAVE_LOCATION, LS_FAILED_QUEUE, LS_OCR_CACHE, OCR_CACHE_MAX, loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, loadFailedQueue, saveFailedQueueList, pushFailedItems, removeFailedItems, LS_DRAFT_BULK, LS_DRAFT_SINGLE, loadDraft, saveDraft, clearDraft };
+export { getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow, LS_SAVE_LOCATION, LS_FAILED_QUEUE, LS_OCR_CACHE, OCR_CACHE_MAX, loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, loadFailedQueue, saveFailedQueueList, pushFailedItems, removeFailedItems, LS_DRAFT_BULK, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, loadDraft, saveDraft, clearDraft };
