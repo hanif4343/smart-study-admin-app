@@ -7,7 +7,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
-import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, loadDraft, saveDraft, clearDraft } from "../core/uploaderUtils.js";
+import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, loadDraft, saveDraft, clearDraft } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
@@ -594,17 +594,51 @@ const PAPER_TABS = [
   { key:"gk",      label:"GK",     fixedSubject:null,      grouped:false, gkStyle:true  },
 ];
 
-const FORMAT_STYLES = [
-  { v:"plain",     label:"Plain — সাধারণ প্রশ্ন-উত্তর" },
-  { v:"table",     label:"Table — শব্দ | ব্যাখ্যা (যেমন সন্ধি বিচ্ছেদ)" },
-  { v:"highlight", label:"Highlight — নির্দিষ্ট শব্দ মার্ক করা (যেমন কারক নির্ণয়)" },
-  { v:"fillblank", label:"Fill-blank — বাক্যের ফাঁকে উত্তর (ইংরেজি)" },
+// 🐛 ফিক্স (হিজিবিজি/ভুল-ভাষার হিন্টস): আগে একটাই বাংলা-ভাষার FORMAT_STYLES লিস্ট
+// সবগুলো ট্যাবে (ইংরেজি ট্যাবেও) দেখাতো, আর লেবেলে লম্বা বন্ধনী-উদাহরণ থাকায়
+// ড্রপডাউন এলোমেলো দেখাতো। এখন ট্যাব অনুযায়ী ভাষা বেছে নেওয়া হয় (ইংরেজি ট্যাবে
+// ইংরেজি লেবেল) আর লেবেল ছোট রাখা হয়েছে — পুরো বর্ণনা title (hover/long-press)-এ। ──
+const FORMAT_STYLES_BN = [
+  { v:"plain",     label:"Plain — সাধারণ প্রশ্ন-উত্তর",      title:"সাধারণ প্রশ্ন ও উত্তর" },
+  { v:"table",     label:"Table — শব্দ | অর্থ",              title:"যেমন: সন্ধি বিচ্ছেদ — শব্দ ও তার ব্যাখ্যা দুই কলামে" },
+  { v:"highlight", label:"Highlight — শব্দ মার্ক",           title:"যেমন: কারক নির্ণয় — বাক্যের নির্দিষ্ট অংশ বোল্ড/মার্ক করা" },
+  { v:"fillblank", label:"Fill-blank — শূন্যস্থান",          title:"বাক্যের মাঝে ফাঁকা জায়গায় উত্তর বসে" },
 ];
+const FORMAT_STYLES_EN = [
+  { v:"plain",     label:"Plain — simple Q & A",     title:"Simple question and answer" },
+  { v:"table",     label:"Table — word | meaning",   title:"e.g. word list — word and meaning in two columns" },
+  { v:"highlight", label:"Highlight — mark a word",  title:"Mark/bold a specific part of the sentence" },
+  { v:"fillblank", label:"Fill-blank — blank in sentence", title:"A blank inside the sentence takes the answer" },
+];
+const formatStylesFor=tabKey=>tabKey==="english"?FORMAT_STYLES_EN:FORMAT_STYLES_BN;
+
+// 🆕 সরাসরি টাইপ করেই মার্ক করার শর্টকাট — 🖍 বাটনে চাপা বা আগে থেকে "ফরম্যাট"
+// ড্রপডাউনে Highlight/Fill-blank বেছে নেওয়া বাধ্যতামূলক নয় আর। প্রশ্নের ভিতরে
+// সরাসরি টাইপ করলেই ধরা পড়ে যাবে:
+//   __শব্দ__   (দুই পাশে ডাবল আন্ডারস্কোর) → Fill-blank, ভেতরের অংশটাই Answer হয়ে সেভ হয়
+//   *শব্দ*     (দুই পাশে একটা করে স্টার)     → Highlight/বোল্ড মার্ক (আলাদা Answer লাগবে)
+// এই একই নিয়ম বাংলা ও ইংরেজি — দুই ক্ষেত্রেই। 🖍 বাটনটা এখনো আছে (টাচ-স্ক্রিনে
+// সিলেক্ট-করে-মার্ক করা সহজ করার জন্য), কিন্তু এখন বাটনটাও ঠিক এই একই সিনট্যাক্স-ই বসায়
+// (formatStyle অনুযায়ী __..__ বা *..*), তাই ম্যানুয়াল-টাইপ আর বাটন — দুই পথেই ফলাফল একই।
+function detectAutoMarkup(text){
+  const t=text||"";
+  const blank=/__([^_]+)__/.exec(t);
+  if(blank) return {style:"fillblank",answer:blank[1].trim()};
+  const hl=/\*([^*]+)\*/.exec(t);
+  if(hl) return {style:"highlight",answer:""};
+  return {style:null,answer:""};
+}
 
 let _paperIdCounter=0;
 const newPaperId=()=>"it_"+(++_paperIdCounter)+"_"+Date.now().toString(36);
 const newPaperItem=()=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:""});
-const newGroupCard=()=>({id:newPaperId(),formatStyle:"plain",heading:"",topicSel:{id:"",name:""},items:[newPaperItem()]});
+// 🐛 ফিক্স: আগে প্রতিটা নতুন গ্রুপ-কার্ডে ১টা মাত্র সাব-পার্ট (ক) নিয়ে শুরু হতো —
+// সন্ধি/কারক/Idioms-এর মতো টপিকে প্রায় সবসময়ই ৫টা সাব-পার্ট (ক-ঙ) থাকে, তাই প্রতিবার
+// "+ আরেকটা সাব-পার্ট" চাপা লাগতো। এখন ডিফল্টভাবে ৫টা খালি বক্স নিয়েই শুরু হয় —
+// কম লাগলে পাশের ✕ বাটনে চেপে বাদ দেওয়া যায় (আগে থেকেই ছিল)।
+const DEFAULT_SUBPARTS=5;
+const newGroupCard=()=>({id:newPaperId(),formatStyle:"plain",heading:"",topicSel:{id:"",name:""},
+  items:Array.from({length:DEFAULT_SUBPARTS},()=>newPaperItem())});
 const newFlatCard=(isGk)=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:"",topicSel:{id:"",name:""},...(isGk?{subjectSel:{id:"",name:""}}:{})});
 const makeInitialPaper=()=>({bangla:[newGroupCard()],english:[newGroupCard()],math:[newFlatCard(false)],gk:[newFlatCard(true)]});
 const SUBLABELS=["ক","খ","গ","ঘ","ঙ","চ","ছ","জ","ঝ","ঞ","ট","ঠ","ড","ঢ"];
@@ -624,7 +658,14 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
   const[paper,setPaper]=useState(makeInitialPaper);
   const[activeTab,setActiveTab]=useState("bangla");
   const[saving,setSaving]=useState(false);
-  const textareaRefs=useRef({});
+  const[saveProgress,setSaveProgress]=useState(null); // {done,total} — সাবমিট চলাকালীন প্রোগ্রেস বার/শতকরা দেখানোর জন্য
+  const textareaRefs=useRef({}); // প্রশ্ন-বক্স refs (itemId কী দিয়ে)
+  const answerRefs=useRef({});   // উত্তর-বক্স refs (itemId কী দিয়ে) — Tab-ফ্লো-এর জন্য
+  const flatQRefs=useRef({});    // math/GK ফ্ল্যাট-কার্ডের প্রশ্ন-বক্স refs (cardId কী দিয়ে)
+  const flatARefs=useRef({});    // math/GK ফ্ল্যাট-কার্ডের উত্তর-বক্স refs (cardId কী দিয়ে)
+  const pendingFocusRef=useRef(null); // {tab,cardId,flat?} — নতুন সাব-পার্ট/কার্ড যোগ হওয়ার পর অটো-ফোকাসের জন্য
+  const[expandedItems,setExpandedItems]=useState(()=>new Set()); // কোন সাব-পার্টে ব্যাখ্যা/টেকনিক এক্সপ্যান্ড করা আছে
+  const toggleExpand=id=>setExpandedItems(s=>{const n=new Set(s); n.has(id)?n.delete(id):n.add(id); return n;});
 
   const tabDef=PAPER_TABS.find(t=>t.key===activeTab);
   const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet==="QBank").map(s=>({id:s.subject_id,name:s.subject_name})):[];
@@ -643,6 +684,42 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
   const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
   const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
 
+  // ── ড্রাফট অটোসেভ — বড় প্রশ্নপত্র টাইপ করতে করতে (৪টা ট্যাব জুড়ে) হারিয়ে গেলে/
+  // ব্যাক চাপা হলে/সাবমিট ব্যর্থ হলেও যেন আবার ঠিক যেখানে ছিল সেখান থেকেই এগিয়ে যাওয়া
+  // যায় — এটাই ছিল সবচেয়ে জরুরি ফিডব্যাক ("এত কষ্ট করে লেখা হারালে খুব খারাপ লাগে")। ──
+  const draftCheckedRef=useRef(false);
+  const[draftBanner,setDraftBanner]=useState(null);
+  const paperHasContent=p=>PAPER_TABS.some(t=>(p[t.key]||[]).some(c=>
+    t.grouped?(c.items||[]).some(it=>it.question.trim()||it.answer.trim())
+             :((c.question||"").trim()||(c.answer||"").trim()||(c.subjectSel&&c.subjectSel.name&&c.subjectSel.name.trim()))
+  ));
+  useEffect(()=>{
+    if(draftCheckedRef.current)return;
+    draftCheckedRef.current=true;
+    const d=loadDraft(LS_DRAFT_PAPER);
+    if(d&&d.paper&&paperHasContent(d.paper)) setDraftBanner(d);
+  },[]);
+  const restorePaperDraft=()=>{
+    const d=draftBanner; if(!d)return;
+    if(d.paper)setPaper(d.paper);
+    if(d.activeTab)setActiveTab(d.activeTab);
+    if(d.postSel)setPostSel(d.postSel);
+    if(d.instSel)setInstSel(d.instSel);
+    if(d.examYear!==undefined)setExamYear(d.examYear);
+    setDraftBanner(null);
+    push("success","♻️ আগের প্রশ্নপত্রের ড্রাফট ফিরিয়ে আনা হলো","");
+  };
+  const discardPaperDraft=()=>{ clearDraft(LS_DRAFT_PAPER); setDraftBanner(null); };
+  useEffect(()=>{
+    if(!draftCheckedRef.current || draftBanner) return;
+    if(saving) return;
+    const t=setTimeout(()=>{
+      if(paperHasContent(paper)) saveDraft(LS_DRAFT_PAPER,{paper,activeTab,postSel,instSel,examYear});
+      else clearDraft(LS_DRAFT_PAPER);
+    },800);
+    return ()=>clearTimeout(t);
+  },[paper,activeTab,postSel,instSel,examYear,saving,draftBanner]);
+
   const setCards=(tab,updater)=>setPaper(p=>({...p,[tab]:updater(p[tab])}));
   const updateCard=(tab,cardId,patch)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,...patch}:c));
   const removeCard=(tab,cardId)=>setCards(tab,cards=>cards.length>1?cards.filter(c=>c.id!==cardId):cards);
@@ -651,18 +728,72 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
   const addSubItem=(tab,cardId)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:[...c.items,newPaperItem()]}:c));
   const removeSubItem=(tab,cardId,itemId)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:c.items.length>1?c.items.filter(it=>it.id!==itemId):c.items}:c));
 
-  /* ── 🖍 হাইলাইট — টেক্সট সিলেক্ট করে এই বাটন চাপলে সিলেকশনটা __..__ দিয়ে মার্ক হয়ে
-     যায় (User App এই মার্কআপ দেখে সেই অংশটুকু bold/underline করে দেখাবে) ── */
-  const wrapHighlight=(tab,cardId,itemId)=>{
+  /* ── 🖍 মার্ক — টেক্সট সিলেক্ট করে এই বাটন চাপলে সিলেকশনটা মার্ক হয়ে যায়।
+     🆕 এখন formatStyle অনুযায়ী দুই রকম মার্কার — fillblank হলে __..__ (ভেতরের
+     অংশটাই Answer হিসেবে অটো সেভ হয়), আর highlight হলে *..* (শুধু bold/মার্ক,
+     Answer আলাদা বক্সে লিখতে হয়)। এই একই সিনট্যাক্স সরাসরি টাইপ করলেও (বাটন না
+     চেপে) সাবমিটের সময় অটো-ধরা পড়ে যায় — দেখো detectAutoMarkup(), submitPaper()। ── */
+  const wrapHighlight=(tab,cardId,itemId,formatStyle)=>{
     const el=textareaRefs.current[itemId];
     if(!el)return;
     const start=el.selectionStart, end=el.selectionEnd;
-    if(start===end){ push("warn","আগে যে শব্দ/অংশ হাইলাইট করবে সেটা সিলেক্ট করো",""); return; }
+    if(start===end){ push("warn","আগে যে শব্দ/অংশ মার্ক করবে সেটা সিলেক্ট করো",""); return; }
     const val=el.value;
-    const newVal=val.slice(0,start)+"__"+val.slice(start,end)+"__"+val.slice(end);
+    const marker=formatStyle==="fillblank"?"__":"*";
+    const newVal=val.slice(0,start)+marker+val.slice(start,end)+marker+val.slice(end);
     updateItem(tab,cardId,itemId,{question:newVal});
-    requestAnimationFrame(()=>{ el.focus(); const p=end+4; el.setSelectionRange(p,p); });
+    requestAnimationFrame(()=>{ el.focus(); const p=end+marker.length*2; el.setSelectionRange(p,p); });
   };
+
+  /* ── Tab-ফ্লো: প্রশ্ন-বক্সে Tab → সাথে সাথে উত্তর-বক্সে; উত্তর-বক্সে Tab → পরের
+     সাব-পার্টের প্রশ্ন-বক্সে (শেষ সাব-পার্ট হলে নতুন একটা যোগ করে সেখানেই ফোকাস) —
+     মাঝে ব্যাখ্যা/টেকনিক (ঐচ্ছিক, এখন ডিফল্টভাবে hidden/collapsed) বাদ পড়ে যায়,
+     তাই বাধ্যতামূলক নয় এমন বক্সে বারবার Tab চেপে যেতে হয় না। ── */
+  const handleGroupQKeyDown=(e,itemId)=>{
+    if(e.key==="Tab"&&!e.shiftKey){ e.preventDefault(); answerRefs.current[itemId]?.focus(); }
+  };
+  const handleGroupAKeyDown=(e,tab,cardId,items,idx)=>{
+    if(e.key==="Tab"&&!e.shiftKey){
+      e.preventDefault();
+      if(idx<items.length-1){
+        textareaRefs.current[items[idx+1].id]?.focus();
+      } else {
+        pendingFocusRef.current={tab,cardId,flat:false};
+        addSubItem(tab,cardId);
+      }
+    }
+  };
+  const handleFlatQKeyDown=(e,cardId)=>{
+    if(e.key==="Tab"&&!e.shiftKey){ e.preventDefault(); flatARefs.current[cardId]?.focus(); }
+  };
+  const handleFlatAKeyDown=(e,tab,cardId,cards,idx)=>{
+    if(e.key==="Tab"&&!e.shiftKey){
+      e.preventDefault();
+      if(idx<cards.length-1){
+        flatQRefs.current[cards[idx+1].id]?.focus();
+      } else {
+        pendingFocusRef.current={tab,cardId,flat:true};
+        addCard(tab);
+      }
+    }
+  };
+  // নতুন সাব-পার্ট/কার্ড যোগ হওয়ার পর (উপরের Tab-ফ্লো থেকে) সেখানেই কার্সর নিয়ে যাওয়া
+  useEffect(()=>{
+    const req=pendingFocusRef.current;
+    if(!req)return;
+    const cards=paper[req.tab]||[];
+    const card=cards.find(c=>c.id===req.cardId);
+    if(!card){ pendingFocusRef.current=null; return; }
+    if(req.flat){
+      // addCard-এ নতুন কার্ড এই কার্ডের পরে যোগ হয় — শেষ কার্ডটাই নতুন কার্ড
+      const lastCard=cards[cards.length-1];
+      requestAnimationFrame(()=>flatQRefs.current[lastCard.id]?.focus());
+    } else if(card.items&&card.items.length){
+      const lastItem=card.items[card.items.length-1];
+      requestAnimationFrame(()=>textareaRefs.current[lastItem.id]?.focus());
+    }
+    pendingFocusRef.current=null;
+  },[paper]);
 
   const tabCount=key=>{
     const def=PAPER_TABS.find(t=>t.key===key);
@@ -688,6 +819,11 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
       }
     }
     setSaving(true);
+    setSaveProgress(null);
+    // 🐛 ফিক্স: সাবমিট শুরুর সাথে সাথেই ড্রাফট (debounce ছাড়া, তৎক্ষণাৎ) সেভ করে রাখা
+    // হচ্ছে — নেটওয়ার্ক স্লো হয়ে সাবমিট আটকে থাকলে বা মাঝপথে ব্যর্থ হলেও পুরো
+    // প্রশ্নপত্র (paper) ইতিমধ্যে localStorage-এ নিরাপদ থাকবে, অ্যাপ বন্ধ করে দিলেও হারাবে না।
+    saveDraft(LS_DRAFT_PAPER,{paper,activeTab,postSel,instSel,examYear});
     try{
       // পদ/প্রতিষ্ঠান দেওয়া থাকলে সবার আগে resolve/create করা হচ্ছে — ঠিক Subject/Topic-এর
       // মতোই resolveOrCreateReference দিয়ে (ExamAppearancesTab/BulkUploaderPage-এ যেভাবে
@@ -746,15 +882,23 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
             if(!topicId)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
             const heading=card.heading.trim();
             const groupId=heading?("GRP_"+Date.now().toString(36).toUpperCase()+Math.random().toString(36).slice(2,6).toUpperCase()):"";
-            // 🐛 ফিক্স (Fill-blank): প্ল্যান অনুযায়ী এই স্টাইলে আলাদা raw answer লাগবে না —
-            // প্রশ্নের ভিতরে 🖍 বাটন দিয়ে __..__ মার্ক করা অংশটাই সরাসরি sheet-এর Ans
-            // কলামে বসবে। আগে এই এক্সট্রাকশনটা কোথাও হতোই না, fillblank কার্ডও প্লেইনের
-            // মতোই answer বক্সের ভ্যালু (প্রায়ই ফাঁকা) নিয়ে সেভ হয়ে যেত। ──
+            // 🐛 ফিক্স (Fill-blank/Highlight): এখন formatStyle ড্রপডাউন থেকে বেছে নেওয়া বা
+            // 🖍 বাটনে চাপা — কোনোটাই বাধ্যতামূলক না। প্রশ্নের টেক্সটে সরাসরি টাইপ করা
+            // __শব্দ__ (blank) বা *শব্দ* (highlight) থাকলেই detectAutoMarkup() সেটা ধরে
+            // ফেলে আর card.formatStyle-কে override করে — টাইপ করেই সহজ এপের ডাটাবেজ-নিয়ম
+            // অনুযায়ী সেভ হয়ে যায়, আলাদা করে বাটনে ক্লিক/ড্রপডাউন বদলানো লাগে না। ──
             validItems.forEach((it,idx)=>{
               let ansText=it.answer.trim();
-              if(card.formatStyle==="fillblank"){
+              let effFormat=card.formatStyle;
+              const auto=detectAutoMarkup(it.question);
+              if(auto.style==="fillblank"){
+                ansText=auto.answer;
+                effFormat="fillblank";
+              } else if(auto.style==="highlight"){
+                effFormat=effFormat==="table"?effFormat:"highlight";
+              } else if(card.formatStyle==="fillblank"){
                 const m=/__([^_]+)__/.exec(it.question);
-                if(!m)throw new Error(`"${t.label}" ট্যাবে Fill-blank ফরম্যাটে একটা প্রশ্নে 🖍 মার্ক করা হয়নি — যে শব্দ/অংশ blank হবে সেটা সিলেক্ট করে 🖍 হাইলাইট করো বাটনে চাপো`);
+                if(!m)throw new Error(`"${t.label}" ট্যাবে Fill-blank ফরম্যাটে একটা প্রশ্নে 🖍 মার্ক করা হয়নি — যে শব্দ/অংশ blank হবে সেটা সিলেক্ট করো, অথবা সরাসরি __শব্দ__ লিখো`);
                 ansText=m[1].trim();
               }
               allRows.push(buildSheetRow({
@@ -762,7 +906,7 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                 subject:t.fixedSubject,subtopic:topicName,qtype:"Written",
                 audienceTags:[],mainQpaper:"",subjectId:subjId,topicId,
                 groupId,subIndex:groupId?(idx+1):null,groupHeading:groupId?heading:"",
-                formatStyle:card.formatStyle!=="plain"?card.formatStyle:"",
+                formatStyle:effFormat!=="plain"?effFormat:"",
               }));
             });
           } else {
@@ -791,26 +935,44 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
 
       if(!allRows.length){ push("warn","কোনো সম্পূর্ণ প্রশ্ন পাওয়া যায়নি","Topic ফাঁকা রাখলে সেই প্রশ্ন বাদ পড়ে যায়"); setSaving(false); return; }
 
-      const res=await saveRowsToSheet({rows:allRows,targetTab:"QBank",gasSecret,push,examAppearance,source:"Single_Text_Paper"});
+      // 🐛 ফিক্স (কোনো progress bar না থাকা): ছোট চাংক (১৫টা করে) + onProgress দিয়ে
+      // সাবমিট বাটনে লাইভ "X/Y (NN%)" আর একটা ভিজুয়াল প্রোগ্রেস বার দেখানো হয় —
+      // "সেভ হচ্ছে..." লেখা একনাগাড়ে দেখে ধৈর্য হারিয়ে অ্যাপ বন্ধ করে দেওয়ার সমস্যা
+      // এখন থেকে কমবে (নিচে UI-তে দেখো)।
+      const res=await saveRowsToSheet({
+        rows:allRows,targetTab:"QBank",gasSecret,push,examAppearance,source:"Single_Text_Paper",
+        chunkSize:15,onProgress:p=>setSaveProgress(p),
+      });
+      const failedCount=(res.failedRows||[]).length;
       if(res.added>0){
-        push("success",`✅ পুরো প্রশ্নপত্র সাবমিট হয়েছে! (${res.added}টা প্রশ্ন)`,`এই সেশনে মোট ${sessionCount+res.added}টি`);
+        push("success",`✅ ${failedCount>0?`আংশিক সাবমিট হয়েছে (${res.added}টা)`:"পুরো প্রশ্নপত্র সাবমিট হয়েছে!"} (${res.added}টা প্রশ্ন)`,`এই সেশনে মোট ${sessionCount+res.added}টি`);
         setSessionCount(c=>c+res.added);
-        setPaper(makeInitialPaper());
-        setActiveTab("bangla");
         fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
       }
       if(res.examAppearancesLinkedToExisting>0) push("success","🔗 কিছু প্রশ্ন আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
       if(examAppearance && !res.examAppearancesAdded && !res.examAppearancesLinkedToExisting) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
-      if(res.added===0 && res.skipped>0){
+      if(res.added===0 && res.skipped>0 && failedCount===0){
         push("warn","⚠️ সবগুলোই ইতিমধ্যে Sheet-এ আছে (duplicate)","");
-      } else if(res.added===0 && res.skipped===0){
+      } else if(res.added===0 && res.skipped===0 && failedCount===0){
         push("error","সেভ ব্যর্থ","নেটওয়ার্ক সমস্যা হতে পারে, একটু পর আবার চেষ্টা করো");
       }
+      // 🐛 ফিক্স (নেটওয়ার্ক-ব্যর্থতায় নীরবে প্রশ্ন হারিয়ে যাওয়া): আগে failedRows চেক-ই
+      // হতো না — কোনো চাংক ব্যর্থ হলেও পুরো paper রিসেট (makeInitialPaper) হয়ে যেত, ফলে
+      // ব্যর্থ হওয়া প্রশ্নগুলো চিরতরে হারিয়ে যেত। এখন কিছু চাংক ব্যর্থ হলে paper রিসেট হয়
+      // না (ড্রাফটও থেকে যায়) — শুধু সফলভাবে সেভ হলেই (কোনো ব্যর্থ চাংক ছাড়া) খাতা খালি হয়। ──
+      if(failedCount>0){
+        push("error",`⚠️ ${failedCount}টা প্রশ্ন সেভ হয়নি (নেটওয়ার্ক সমস্যা)`,"খাতা খালি করা হয়নি — আবার 🚀 সাবমিট চাপলে শুধু বাকিগুলোই যাবে (আগেরগুলো ডুপ্লিকেট হবে না)");
+      } else if(res.added>0 || res.skipped>0){
+        setPaper(makeInitialPaper());
+        setActiveTab("bangla");
+        clearDraft(LS_DRAFT_PAPER);
+      }
     }catch(e){
-      push("error","সাবমিট ব্যর্থ",e.message);
+      push("error","সাবমিট ব্যর্থ",e.message+" — খাতা খালি হয়নি, ড্রাফট থেকে গেছে");
     }
     setSaving(false);
-  },[saving,gasSecret,paper,subjectOptions,refData,sessionCount,push,setRefData,setSessionCount,postSel,instSel,examYear,postOptions,instOptions]);
+    setSaveProgress(null);
+  },[saving,gasSecret,paper,subjectOptions,refData,sessionCount,push,setRefData,setSessionCount,postSel,instSel,examYear,postOptions,instOptions,activeTab]);
 
   useEffect(()=>{
     const onKey=e=>{ if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==="s"){ e.preventDefault(); submitPaper(); } };
@@ -820,6 +982,18 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
 
   return(
     <div style={{background:PC.bg,margin:"0 -16px",padding:"14px 14px 4px",borderRadius:0}}>
+      {draftBanner&&(
+        <div style={{background:"#EAF1E4",border:"1px solid #2C472855",borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+          <div style={{fontSize:12,fontWeight:800,color:"#2C4728",marginBottom:4}}>♻️ আগের অসম্পূর্ণ প্রশ্নপত্র পাওয়া গেছে</div>
+          <div style={{fontSize:11,color:"#3d5a37",marginBottom:10,lineHeight:1.5}}>
+            বাংলা/ইংরেজি/গণিত/GK — এই ৪টা ট্যাবে আগে টাইপ করা প্রশ্ন এখনো সাবমিট করা হয়নি।
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button className="btn" style={{flex:1,justifyContent:"center",background:"transparent",border:`1px solid ${PC.border}`,color:PC.ink}} onClick={discardPaperDraft}>🗑 বাদ দাও</button>
+            <button className="btn" style={{flex:2,justifyContent:"center",background:PC.ink,color:"#fff",border:"none"}} onClick={restorePaperDraft}>♻️ ফিরিয়ে আনো</button>
+          </div>
+        </div>
+      )}
       {/* ── পদ/প্রতিষ্ঠান/সাল — একদম শুরুতে, ৪টা ট্যাবের সবার উপরে (session-wide,
           একবার দিলে বাংলা/English/Math/GK — এই সেশনের সব প্রশ্নেই একই Exam Appearance
           যাবে, কারণ QBank মানেই বিগত পরীক্ষা, এই ৩টা ছাড়া entry অসম্পূর্ণ) ── */}
@@ -884,15 +1058,15 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                   <input className="inp" style={pcField} placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"' value={card.heading}
                     onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}/>
                 </div>
-                <div className="fld" style={{marginBottom:0,width:120,flexShrink:0}}>
-                  <label>ফরম্যাট</label>
+                <div className="fld" style={{marginBottom:0,width:130,flexShrink:0}}>
+                  <label>{activeTab==="english"?"Format":"ফরম্যাট"}</label>
                   <select className="inp" value={card.formatStyle} onChange={e=>updateCard(activeTab,card.id,{formatStyle:e.target.value})}
-                    style={{...pcField,fontSize:11}}>
-                    {FORMAT_STYLES.map(f=>(<option key={f.v} value={f.v}>{f.label}</option>))}
+                    style={{...pcField,fontSize:11}} title={formatStylesFor(activeTab).find(f=>f.v===card.formatStyle)?.title}>
+                    {formatStylesFor(activeTab).map(f=>(<option key={f.v} value={f.v} title={f.title}>{f.label}</option>))}
                   </select>
                 </div>
               </div>
-              <div className="fld" style={{marginBottom:10}}>
+              <div className="fld" style={{marginBottom:6}}>
                 <label>📌 Topic (এই পুরো গ্রুপের জন্য একবারই)</label>
                 <TypeaheadCombo
                   options={topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
@@ -903,16 +1077,26 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                   inputStyle={pcField} lightTheme
                 />
               </div>
+              {/* 🆕 সরাসরি টাইপ করে মার্ক করার শর্টকাট — ফরম্যাট বদলানো/বাটনে চাপা কোনোটাই
+                  বাধ্যতামূলক না, টাইপ করলেই ধরা পড়ে যায় (দেখো detectAutoMarkup, submitPaper)। */}
+              <div style={{fontSize:9.5,color:PC.muted,marginBottom:8,lineHeight:1.5}}>
+                {activeTab==="english"
+                  ? <>💡 Type <code>__word__</code> for a blank, <code>*word*</code> to highlight — no button needed</>
+                  : <>💡 <code>__শব্দ__</code> লিখলে শূন্যস্থান, <code>*শব্দ*</code> লিখলে হাইলাইট — বাটনে চাপা লাগবে না</>}
+              </div>
 
-              {card.items.map((it,idx)=>(
+              {card.items.map((it,idx)=>{
+                const isExpanded=expandedItems.has(it.id);
+                const hasExplTech=it.explanation.trim()||it.technique.trim();
+                return (
                 <div key={it.id} style={{display:"flex",gap:8,padding:"8px 0",borderTop:idx>0?`1px dashed ${PC.border}`:"none"}}>
                   <div style={{width:22,flexShrink:0,fontWeight:800,color:PC.ink,fontSize:12,paddingTop:8}}>{SUBLABELS[idx]||idx+1}.</div>
                   <div style={{flex:1}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                      <label style={{margin:0,fontSize:10.5,color:PC.muted,fontWeight:700}}>প্রশ্ন</label>
+                      <label style={{margin:0,fontSize:10.5,color:PC.muted,fontWeight:700}}>{activeTab==="english"?"Question":"প্রশ্ন"}</label>
                       {(card.formatStyle==="highlight"||card.formatStyle==="fillblank")&&(
-                        <button onClick={()=>wrapHighlight(activeTab,card.id,it.id)}
-                          title={card.formatStyle==="fillblank"?"যে শব্দ blank হবে সেটা সিলেক্ট করে মার্ক করো — এটাই Answer হয়ে সেভ হবে":"সিলেক্ট করা অংশ হাইলাইট/আন্ডারলাইন করো"}
+                        <button onClick={()=>wrapHighlight(activeTab,card.id,it.id,card.formatStyle)}
+                          title={card.formatStyle==="fillblank"?"যে শব্দ blank হবে সেটা সিলেক্ট করে মার্ক করো — এটাই Answer হয়ে সেভ হবে":"সিলেক্ট করা অংশ হাইলাইট/মার্ক করো"}
                           style={{background:"#facc1522",color:"#facc15",border:"1px solid #facc1544",borderRadius:6,
                             fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>🖍 {card.formatStyle==="fillblank"?"Blank মার্ক করো":"হাইলাইট করো"}</button>
                       )}
@@ -921,35 +1105,48 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                       ref={el=>{textareaRefs.current[it.id]=el;}}
                       className="ta" style={{...pcField,minHeight:44,fontSize:12.5}}
                       value={it.question} onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}
-                      placeholder={card.formatStyle==="table"?"শব্দ (যেমন: অহর্নিশ)":card.formatStyle==="fillblank"?"পুরো বাক্য লিখো, তারপর যে শব্দ blank হবে সেটা সিলেক্ট করে 🖍 বাটনে চাপো...":"প্রশ্ন লিখো..."}/>
-                    {/* 🐛 ফিক্স: Fill-blank ফরম্যাটে আলাদা raw answer বক্সের দরকার নেই — প্রশ্নের
-                        ভিতরে __..__ দিয়ে মার্ক করা অংশটাই সাবমিটের সময় Answer হিসেবে auto বসে
-                        যায় (দেখো submitPaper)। আগে এই বক্সটা fillblank-এও দেখাতো, যেটা টাইপ করা
-                        না হলে Answer ফাঁকা থেকে যেত — এখন hide করে বদলে হিন্ট দেখানো হচ্ছে। */}
-                    {card.formatStyle==="fillblank" ? (
+                      onKeyDown={e=>handleGroupQKeyDown(e,it.id)}
+                      placeholder={card.formatStyle==="table"?(activeTab==="english"?"word":"শব্দ (যেমন: অহর্নিশ)"):card.formatStyle==="fillblank"?"__..__ বা 🖍 দিয়ে blank মার্ক করো...":activeTab==="english"?"Type the question...":"প্রশ্ন লিখো..."}/>
+                    {/* 🐛 ফিক্স: Fill-blank সনাক্ত হলে (formatStyle থেকে বা সরাসরি __..__ টাইপ
+                        করা থেকে) আলাদা raw answer বক্সের দরকার নেই — প্রশ্নের ভিতরের মার্ক করা
+                        অংশটাই সাবমিটের সময় Answer হিসেবে auto বসে যায় (দেখো submitPaper)। ── */}
+                    {(card.formatStyle==="fillblank"||detectAutoMarkup(it.question).style==="fillblank") ? (
                       <div style={{fontSize:10,color:PC.gold,fontWeight:700,marginTop:4}}>
                         🖍 প্রশ্নে মার্ক করা শব্দই Answer হিসেবে অটো সেভ হবে — আলাদা করে টাইপ করা লাগবে না
                       </div>
                     ) : (
                       <>
-                        <label style={{fontSize:10.5,color:PC.muted,fontWeight:700,marginTop:4}}>উত্তর</label>
-                        <input className="inp" style={{...pcField,fontSize:12.5,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}}
+                        <label style={{fontSize:10.5,color:PC.muted,fontWeight:700,marginTop:4}}>{activeTab==="english"?"Answer":"উত্তর"}</label>
+                        <input
+                          ref={el=>{answerRefs.current[it.id]=el;}}
+                          className="inp" style={{...pcField,fontSize:12.5,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}}
                           value={it.answer} onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}
-                          placeholder={card.formatStyle==="table"?"বিচ্ছেদ/ব্যাখ্যা":"উত্তর লিখো..."}/>
+                          onKeyDown={e=>handleGroupAKeyDown(e,activeTab,card.id,card.items,idx)}
+                          placeholder={card.formatStyle==="table"?(activeTab==="english"?"meaning":"বিচ্ছেদ/ব্যাখ্যা"):activeTab==="english"?"Type the answer...":"উত্তর লিখো..."}/>
                       </>
                     )}
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:4}}>
-                      <input className="inp" style={{...pcField,fontSize:11}} placeholder="ব্যাখ্যা (ঐচ্ছিক)"
-                        value={it.explanation} onChange={e=>updateItem(activeTab,card.id,it.id,{explanation:e.target.value})}/>
-                      <input className="inp" style={{...pcField,fontSize:11}} placeholder="টেকনিক (ঐচ্ছিক)"
-                        value={it.technique} onChange={e=>updateItem(activeTab,card.id,it.id,{technique:e.target.value})}/>
-                    </div>
+                    {/* 🐛 ফিক্স (Tab-এ বাধ্যতামূলক নয় এমন বক্সে আটকে যাওয়া): ব্যাখ্যা/টেকনিক
+                        ডিফল্টভাবে লুকানো — একটা ছোট বাটনে চাপলেই এক্সপ্যান্ড হয়ে টাইপ-বক্স
+                        দেখা যায়, তাই সাধারণ Tab-ফ্লো (প্রশ্ন→উত্তর→পরের প্রশ্ন)-এ এসে বাধা দেয় না। */}
+                    <button type="button" onClick={()=>toggleExpand(it.id)}
+                      style={{background:"transparent",border:"none",color:PC.gold,cursor:"pointer",
+                        fontSize:9.5,fontWeight:700,padding:"4px 0 0",display:"flex",alignItems:"center",gap:3}}>
+                      {isExpanded?"▲":"▼"} {activeTab==="english"?"Explanation / Technique":"ব্যাখ্যা / টেকনিক"}{!isExpanded&&hasExplTech?" •":""}
+                    </button>
+                    {isExpanded&&(
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:4}}>
+                        <input className="inp" style={{...pcField,fontSize:11}} placeholder={activeTab==="english"?"Explanation (optional)":"ব্যাখ্যা (ঐচ্ছিক)"}
+                          value={it.explanation} onChange={e=>updateItem(activeTab,card.id,it.id,{explanation:e.target.value})}/>
+                        <input className="inp" style={{...pcField,fontSize:11}} placeholder={activeTab==="english"?"Technique (optional)":"টেকনিক (ঐচ্ছিক)"}
+                          value={it.technique} onChange={e=>updateItem(activeTab,card.id,it.id,{technique:e.target.value})}/>
+                      </div>
+                    )}
                   </div>
                   {card.items.length>1&&(
                     <button onClick={()=>removeSubItem(activeTab,card.id,it.id)} style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:12,flexShrink:0,paddingTop:8}}>✕</button>
                   )}
                 </div>
-              ))}
+              );})}
               <button onClick={()=>addSubItem(activeTab,card.id)}
                 style={{width:"100%",marginTop:6,background:"transparent",border:`1px dashed ${PC.border}`,borderRadius:8,
                   color:PC.muted,fontSize:11,fontWeight:700,padding:8,cursor:"pointer"}}>
@@ -992,14 +1189,20 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
               </div>
               <div className="fld" style={{marginBottom:8}}>
                 <label>❓ প্রশ্ন</label>
-                <textarea className="ta" style={{...pcField,minHeight:70}} value={card.question}
+                <textarea
+                  ref={el=>{flatQRefs.current[card.id]=el;}}
+                  className="ta" style={{...pcField,minHeight:70}} value={card.question}
                   onChange={e=>updateCard(activeTab,card.id,{question:e.target.value})}
+                  onKeyDown={e=>handleFlatQKeyDown(e,card.id)}
                   placeholder="প্রশ্ন লিখো..."/>
               </div>
               <div className="fld" style={{marginBottom:8}}>
                 <label>✅ উত্তর</label>
-                <textarea className="ta" style={{...pcField,minHeight:50,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}} value={card.answer}
+                <textarea
+                  ref={el=>{flatARefs.current[card.id]=el;}}
+                  className="ta" style={{...pcField,minHeight:50,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}} value={card.answer}
                   onChange={e=>updateCard(activeTab,card.id,{answer:e.target.value})}
+                  onKeyDown={e=>handleFlatAKeyDown(e,activeTab,card.id,paper[activeTab]||[],ci)}
                   placeholder={activeTab==="math"?"চূড়ান্ত উত্তর (ধাপে-ধাপে সমাধান নিচে ব্যাখ্যায়)...":"উত্তর লিখো..."}/>
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
@@ -1039,13 +1242,30 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
             ⏳ রেফারেন্স ডেটা (Subject/Topic লিস্ট) লোড হচ্ছে — একটু অপেক্ষা করো, নাহলে ডুপ্লিকেট Subject তৈরি হয়ে যেতে পারে
           </div>
         )}
+        {/* 🐛 ফিক্স (প্রোগ্রেস বার না থাকা — "20 min ধরে সেভ হচ্ছে... দেখে ধৈর্য হারানো"):
+            সাবমিটের সময় এখন বাটনের ভিতরেই লাইভ "X/Y (NN%)" আর একটা পাতলা প্রোগ্রেস বার
+            দেখা যায় (saveProgress, submitPaper-এর onProgress থেকে আসে) — কতদূর এগোলো
+            বোঝা যায়, একদম হ্যাং হয়ে গেছে মনে হয় না। ── */}
         <button className="btn" disabled={saving||refData===null} onClick={submitPaper}
-          style={{width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14.5,
+          style={{width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14.5,position:"relative",overflow:"hidden",
             background:(saving||refData===null)?PC.muted:PC.ink,color:"#fff",border:"none"}}>
-          {saving?"⏳ সেভ হচ্ছে...":refData===null?"⏳ রেফারেন্স ডেটা লোড হচ্ছে...":`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
+          {saving&&saveProgress&&(
+            <span style={{position:"absolute",left:0,top:0,bottom:0,
+              width:`${Math.round((saveProgress.done/Math.max(1,saveProgress.total))*100)}%`,
+              background:"#ffffff26",transition:"width .25s ease"}}/>
+          )}
+          <span style={{position:"relative"}}>
+            {saving
+              ? (saveProgress
+                  ? `⏳ সেভ হচ্ছে... ${saveProgress.done}/${saveProgress.total} (${Math.round((saveProgress.done/Math.max(1,saveProgress.total))*100)}%)`
+                  : "⏳ সেভ হচ্ছে...")
+              : refData===null?"⏳ রেফারেন্স ডেটা লোড হচ্ছে...":`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
+          </span>
         </button>
         <div style={{textAlign:"center",fontSize:9.5,color:PC.muted,marginTop:6}}>
-          ৪টা ট্যাবেই যত প্রশ্ন জমা আছে (এখনো ডাটাবেজে যায়নি), সবগুলো একসাথে একবারে সাবমিট হবে
+          {saving
+            ? "চলছে... মাঝপথে অ্যাপ বন্ধ হয়ে গেলেও কাজ ড্রাফটে সেভ আছে, আবার খুললে ফিরে পাবে"
+            : "৪টা ট্যাবেই যত প্রশ্ন জমা আছে (এখনো ডাটাবেজে যায়নি), সবগুলো একসাথে একবারে সাবমিট হবে · প্রতি কয়েক সেকেন্ডে অটো-ড্রাফট সেভ হয়"}
         </div>
       </div>
     </div>
