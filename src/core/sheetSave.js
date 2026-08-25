@@ -3,6 +3,19 @@ import { GAS } from "./config.js";
 import { fbPush, fbSet } from "./firebase.js";
 import { invalidate } from "./dataCache.js";
 
+// 🐛 ফিক্স (২০+ মিনিট ধরে "সেভ হচ্ছে..." আটকে থাকা): আগে plain fetch()-এর কোনো
+// timeout ছিল না — ধীরগতির/অস্থির নেটওয়ার্কে (LTE-তে কয়েক KB/s দেখা গেছে
+// স্ক্রিনশটে) রিকোয়েস্ট চিরকাল ঝুলে থাকতে পারতো, ইউজারকে বাধ্য করে অ্যাপ বন্ধ করে
+// দিতে — প্রশ্ন সেভ হলো কিনা কিছুই বোঝা যেত না। এখন প্রতিটা চাংক-রিকোয়েস্ট একটা
+// সময়সীমার মধ্যে বাঁধা (AbortController) — সময় ফুরালেই ব্যর্থ ধরে নিয়ে একবার
+// (বড় timeout দিয়ে) রিট্রাই করে, তারপরও ব্যর্থ হলে সেই চাংকটাকে failedRows-এ
+// রেখে পরের চাংকে এগিয়ে যায় (পুরো সাবমিট আটকে থাকে না)।
+function fetchWithTimeout(url,opts,timeoutMs){
+  const ctrl=new AbortController();
+  const timer=setTimeout(()=>ctrl.abort(),timeoutMs);
+  return fetch(url,{...opts,signal:ctrl.signal}).finally(()=>clearTimeout(timer));
+}
+
 async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSize,examAppearance,source}){
   if(!rows.length)return{added:0,skipped:0,failedRows:[]};
   if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{added:0,skipped:0,failedRows:rows}; }
@@ -13,28 +26,36 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   for(let i=0;i<rows.length;i+=CHUNK){
     const chunk=rows.slice(i,i+CHUNK);
     const isLast=(i+CHUNK>=rows.length);
-    try{
-      // examAppearance (ঐচ্ছিক, শুধু QBank বাল্ক-আপলোডে পদ/প্রতিষ্ঠান/সাল দেওয়া থাকলে) —
-      // GAS bulk_save_rows-কে জানায় যাতে এই চাংকে যে নতুন question_id-গুলো তৈরি হচ্ছে,
-      // প্রতিটার জন্য একই ব্যাচে Exam_Appearances-এ একটা করে appearance-রো যোগ হয়ে যায়
-      // (আলাদা করে প্রতিটা প্রশ্নের id জেনে পরে addExamAppearance কল করার দরকার পড়ে না)।
-      // 🐛 ফিক্স: এখন এটা duplicate-detection-এর সাথেও যুক্ত — যদি পেস্ট করা কোনো প্রশ্ন
-      // ইতিমধ্যে QBank-এ থাকে (স্রেফ duplicate হিসেবে বাদ যেত আগে), GAS সেটাকে নতুন রো
-      // না বানিয়ে বিদ্যমান প্রশ্নের সাথে এই appearance জুড়ে দেয় — অ্যাডমিনকে মনে রাখতে হয়
-      // না প্রশ্নটা আগে কোথাও যোগ করা ছিল কিনা।
-      const body={secret:gasSecret,type:"bulk_save_rows",targetTab,rows:chunk,sync:isLast};
-      if(examAppearance) body.examAppearance=examAppearance;
-      // 🆕 কোন ফিচার এই প্রশ্নগুলো যোগ করছে (Bulk_Text/Bulk_OCR/Single_OCR/Single_Text
-      // ইত্যাদি) — GAS "added_by" কলামে বসাবে (কলাম না থাকলে চুপচাপ ignore হবে)।
-      if(source) body.source=source;
-      const resp=await fetch(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)});
-      const data=await resp.json().catch(()=>({}));
-      if(data.result==="error"){ failedRows.push(...chunk); continue; }
-      added+=(data.added||0); skipped+=(data.skipped||0);
-      examAppearancesAdded+=(data.examAppearancesAdded||0);
-      examAppearancesLinkedToExisting+=(data.examAppearancesLinkedToExisting||0);
-      if(isLast && data.firebaseSynced===false) firebaseSyncFailed=true;
-    }catch(e){ failedRows.push(...chunk); }
+    // examAppearance (ঐচ্ছিক, শুধু QBank বাল্ক-আপলোডে পদ/প্রতিষ্ঠান/সাল দেওয়া থাকলে) —
+    // GAS bulk_save_rows-কে জানায় যাতে এই চাংকে যে নতুন question_id-গুলো তৈরি হচ্ছে,
+    // প্রতিটার জন্য একই ব্যাচে Exam_Appearances-এ একটা করে appearance-রো যোগ হয়ে যায়
+    // (আলাদা করে প্রতিটা প্রশ্নের id জেনে পরে addExamAppearance কল করার দরকার পড়ে না)।
+    // 🐛 ফিক্স: এখন এটা duplicate-detection-এর সাথেও যুক্ত — যদি পেস্ট করা কোনো প্রশ্ন
+    // ইতিমধ্যে QBank-এ থাকে (স্রেফ duplicate হিসেবে বাদ যেত আগে), GAS সেটাকে নতুন রো
+    // না বানিয়ে বিদ্যমান প্রশ্নের সাথে এই appearance জুড়ে দেয় — অ্যাডমিনকে মনে রাখতে হয়
+    // না প্রশ্নটা আগে কোথাও যোগ করা ছিল কিনা।
+    const body={secret:gasSecret,type:"bulk_save_rows",targetTab,rows:chunk,sync:isLast};
+    if(examAppearance) body.examAppearance=examAppearance;
+    // 🆕 কোন ফিচার এই প্রশ্নগুলো যোগ করছে (Bulk_Text/Bulk_OCR/Single_OCR/Single_Text
+    // ইত্যাদি) — GAS "added_by" কলামে বসাবে (কলাম না থাকলে চুপচাপ ignore হবে)।
+    if(source) body.source=source;
+    let ok=false;
+    for(let attempt=1;attempt<=2 && !ok;attempt++){
+      const timeoutMs=attempt===1?25000:45000;
+      try{
+        if(attempt===2) push?.("warn","⏳ ধীর নেটওয়ার্ক, আবার চেষ্টা করা হচ্ছে...",`চাংক ${Math.floor(i/CHUNK)+1}/${totalChunks}`);
+        const resp=await fetchWithTimeout(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)},timeoutMs);
+        const data=await resp.json().catch(()=>({}));
+        if(data.result==="error"){ failedRows.push(...chunk); ok=true; break; } // সার্ভার-সাইড error — রিট্রাই করে লাভ নেই
+        added+=(data.added||0); skipped+=(data.skipped||0);
+        examAppearancesAdded+=(data.examAppearancesAdded||0);
+        examAppearancesLinkedToExisting+=(data.examAppearancesLinkedToExisting||0);
+        if(isLast && data.firebaseSynced===false) firebaseSyncFailed=true;
+        ok=true;
+      }catch(e){
+        if(attempt===2) failedRows.push(...chunk); // দুইবার চেষ্টার পরও ব্যর্থ — এই চাংক বাদ, বাকিগুলো চলতে থাকবে
+      }
+    }
     onProgress?.({done:Math.min(i+CHUNK,rows.length),total:rows.length,chunkIndex:Math.floor(i/CHUNK)+1,totalChunks});
   }
   // ⚡ Sheet-এ সেভ ঠিকই হয়ে গেছে, কিন্তু GAS-এর Firebase mirror-sync ব্যর্থ হলে dedupe-এর
