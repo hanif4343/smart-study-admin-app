@@ -138,15 +138,39 @@ async function updateFieldInSheet({sheet,id,field,value,gasSecret,editSource}){
   }catch(e){ return{ok:false,error:e?.message||String(e)}; }
 }
 
-/* ── InlineEditModal-এর জন্য: একসাথে একাধিক field Sheet-এ sync (প্রতিটা field আলাদা
-   updateField কল, সবগুলো parallel-এ চলে)। Firebase patch ইতিমধ্যে হয়ে গেছে ধরে নেওয়া হয় —
-   এটা শুধু Sheet mirror-কে একই অবস্থায় আনার জন্য (best-effort, silent-fail per field)। ── */
+/* ── InlineEditModal-এর জন্য: একসাথে একাধিক field Sheet-এ sync।
+   🐛 ফিক্স ("Edit ব্যর্থ, ফিল্ড: opt1, opt3" — এলোমেলো ২-১টা ফিল্ড ব্যর্থ হওয়া):
+   আগে এটা প্রতিটা field-এর জন্য আলাদা updateFieldInSheet() (GET, action=updateField)
+   parallel-এ (Promise.all) পাঠাতো — প্রতিটা কল GAS-এ নিজে থেকে script-wide লক নিতো,
+   পুরো শিট আলাদাভাবে পড়তো, আর নিজে থেকে একটা করে পুরো-শিট syncToFirebase() চালাতো।
+   Quiz-এর মতো বড় শিটে ৮টা ফিল্ড (Question/Opt1-4/Correct/Explanation/Technique)
+   একসাথে এডিট করলে এই ৮টা কল একই লকের জন্য সিরিয়ালি লাইন ধরতো — মোট সময় GAS-এর
+   ৩০সে lock-wait ছাড়িয়ে গেলে যেই কলগুলো তখনো সারিতে ছিল সেগুলো lock timeout খেয়ে
+   ব্যর্থ হতো (কোন ২টা ফিল্ড ব্যর্থ হবে সেটা নিছক টাইমিং-নির্ভর/এলোমেলো — ফিল্ডের
+   মানের সাথে কোনো সম্পর্ক নেই)। এখন সব field একটা মাত্র POST (type=update_fields)-এ
+   পাঠানো হয় — GAS-সাইডে একবারই লক নেওয়া হয়, একবারই শিট পড়া হয়, একবারই sync হয়,
+   তাই লক-কনটেনশনই তৈরি হয় না। ── */
+async function updateFieldsInSheet({sheet,id,fields,gasSecret,editSource}){
+  if(!GAS)return{ok:false,failed:Object.keys(fields||{}),error:"GAS URL নেই"};
+  if(!gasSecret)return{ok:false,failed:Object.keys(fields||{}),error:"GAS Secret নেই"};
+  if(!id)return{ok:false,failed:Object.keys(fields||{}),error:"id নেই"};
+  try{
+    const resp=await fetch(GAS,{
+      method:"POST",headers:{"Content-Type":"text/plain"},
+      body:JSON.stringify({secret:gasSecret,type:"update_fields",sheet,id,fields:fields||{},editSource:editSource||"Admin App"}),
+    });
+    const data=await resp.json().catch(()=>({}));
+    if(data.result!=="success")return{ok:false,failed:Object.keys(fields||{}),error:data.error||"unknown GAS error"};
+    const failed=data.failed||[]; // শুধু column-not-found জাতীয় ফিল্ড এখানে আসবে, timeout-জনিত না
+    return{ok:failed.length===0,failed};
+  }catch(e){ return{ok:false,failed:Object.keys(fields||{}),error:e?.message||String(e)}; }
+}
+
 async function syncFieldsToSheet({sheet,id,fields,gasSecret,editSource}){
   const entries=Object.entries(fields||{});
   if(!GAS||!gasSecret||!id)return{ok:false,failed:entries.map(([f])=>f)};
-  const results=await Promise.all(entries.map(([field,value])=>updateFieldInSheet({sheet,id,field,value,gasSecret,editSource})));
-  const failed=entries.filter((_,i)=>!results[i].ok).map(([f])=>f);
-  return{ok:failed.length===0,failed};
+  const res=await updateFieldsInSheet({sheet,id,fields,gasSecret,editSource});
+  return{ok:res.ok,failed:res.failed||[]};
 }
 
 /* ── DeleteTab-এর জন্য: Google Sheet থেকে একাধিক ID একসাথে ডিলিট — GAS-এর existing
@@ -426,4 +450,4 @@ async function rollbackManifest({gasSecret,push,sha}){
   }catch(e){ push?.("error","❌ ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest };
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, updateFieldsInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest };
