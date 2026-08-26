@@ -12,6 +12,15 @@
 ══════════════════════════════════════════════════════════
 */
 
+// 🆕 ডিপ্লয়মেন্ট-ভেরিফিকেশন মার্কার — নিচে doGet()-এ ?action=version হ্যান্ডলার
+// এই ভ্যারিয়েবলটা রিটার্ন করে। কোড আপডেট করার পর "Deploy → Manage deployments →
+// Edit (পেন্সিল আইকন) → Version: New version → Deploy" ঠিকভাবে করা হয়েছে কিনা
+// নিশ্চিত হতে চাইলে GAS_URL-এর শেষে ?action=version জুড়ে ব্রাউজারে খুললেই এই
+// build-নামটা দেখা যাবে (secret লাগবে না) — যদি পুরনো মান দেখা যায় বা এরর আসে,
+// তার মানে নতুন কোড এখনো লাইভ হয়নি (নতুন "deployment" বানানো হয়ে থাকলে সেটার
+// আলাদা URL হয়, পুরনো URL-এই পুরনো কোড থেকে যায় — এই কারণেই এই মার্কার)।
+var GAS_BUILD_VERSION = "2026-08-26-examDiag-v1";
+
 function getProps() {
   var p = PropertiesService.getScriptProperties();
   return {
@@ -354,12 +363,59 @@ function doPublish_() {
     notifyAdminPublishFailure_(results.failed + "টা Topic publish হতে ব্যর্থ হয়েছে (মোট " + results.published + "টা সফল)। বিস্তারিত _SystemLogs শিটে।");
   }
 
-  // ── Reference ডেটা (Subjects/Topics তালিকা) — প্রতিবার publish-এ রিফ্রেশ,
-  // এটা ছোট ডেটা বলে আলাদা dirty-tracking না করে সবসময় আপডেট করাই সহজ ──
+  // ── Reference ডেটা — প্রতিবার publish-এ রিফ্রেশ, এটা ছোট ডেটা বলে আলাদা
+  // dirty-tracking না করে সবসময় আপডেট করাই সহজ।
+  // FIX (Speed Plan Task 2): আগে শুধু subjects.json/topics.json publish হতো।
+  // App-এর read path পুরোপুরি CDN-only করার প্ল্যানে QBank-এর পদবী/প্রতিষ্ঠান/
+  // সাল-ভিত্তিক ব্রাউজ ফিচারও (এখন পর্যন্ত partial-Room-sync-নির্ভর) CDN থেকে
+  // চলার কথা — তাই Tags/Posts/Institutions/Exam_Appearances ও এখন publish হচ্ছে।
+  // (Headings শিট শুধু admin-এর নিজের documentation, CDN-এ দরকার নেই বলে বাদ।) ──
   if (results.published > 0) {
     try {
       ghPutFile_(ghOwner, ghRepo, ghBranch, "reference/subjects.json", JSON.stringify(sheetToJsonArray_(subjectsSh)), ghToken, "Update reference/subjects.json");
       ghPutFile_(ghOwner, ghRepo, ghBranch, "reference/topics.json", JSON.stringify(sheetToJsonArray_(topicsSh)), ghToken, "Update reference/topics.json");
+
+      var tagsSh = ss.getSheetByName("Tags");
+      if (tagsSh) {
+        ghPutFile_(ghOwner, ghRepo, ghBranch, "reference/tags.json", JSON.stringify(sheetToJsonArray_(tagsSh)), ghToken, "Update reference/tags.json");
+      }
+      var postsSh = ss.getSheetByName("Posts");
+      if (postsSh) {
+        ghPutFile_(ghOwner, ghRepo, ghBranch, "reference/posts.json", JSON.stringify(sheetToJsonArray_(postsSh)), ghToken, "Update reference/posts.json");
+      }
+      var institutionsSh = ss.getSheetByName("Institutions");
+      if (institutionsSh) {
+        ghPutFile_(ghOwner, ghRepo, ghBranch, "reference/institutions.json", JSON.stringify(sheetToJsonArray_(institutionsSh)), ghToken, "Update reference/institutions.json");
+      }
+      var examAppearancesSh = ss.getSheetByName("Exam_Appearances");
+      if (examAppearancesSh) {
+        // 🔬 DIAG (exam-appearances.json বার বার GitHub-এ commit না হওয়ার কারণ
+        // খোঁজার জন্য সাময়িক ইনস্ট্রুমেন্টেশন): আগে এই কলের রেজাল্ট কোথাও
+        // দেখা যেত না (ghPutFile_ ব্যর্থ হলেও silently ignore হতো)। এখন রেজাল্ট
+        // (rows/bytes/success/error) একটা Script Property-তে সেভ হয়, যেটা
+        // GAS_URL+"?action=examDiag" খুলে ব্রাউজারেই সরাসরি দেখা যাবে —
+        // Apps Script Executions লগে ঢোকার দরকার নেই। রুট কারণ পাওয়া গেলে
+        // এই ব্লক আর examDiag action দুটোই ফেরত মুছে ফেলা উচিত। ──
+        var eaData = sheetToJsonArray_(examAppearancesSh);
+        var eaJson = JSON.stringify(eaData);
+        var eaResult;
+        try {
+          eaResult = ghPutFile_(ghOwner, ghRepo, ghBranch, "exam-appearances.json", eaJson, ghToken, "Update exam-appearances.json");
+        } catch (eaErr) {
+          eaResult = { success: false, error: "EXCEPTION: " + eaErr };
+        }
+        try {
+          PropertiesService.getScriptProperties().setProperty("LAST_EXAM_APPEARANCES_DIAG", JSON.stringify({
+            rows: eaData.length,
+            bytes: eaJson.length,
+            result: eaResult,
+            at: new Date().toString()
+          }));
+        } catch (propErr) {
+          Logger.log("exam-appearances diag property write failed: " + propErr);
+        }
+        Logger.log("exam-appearances publish: rows=" + eaData.length + " bytes=" + eaJson.length + " result=" + JSON.stringify(eaResult));
+      }
     } catch (refErr) {
       Logger.log("Reference data publish error (non-fatal): " + refErr);
     }
@@ -376,6 +432,21 @@ function doPublish_() {
     sanityWarning = "⚠️ Sheet-এ মোট " + totalInSheets + "টি প্রশ্ন, কিন্তু manifest-এ মোট " + totalInManifest +
       "টি — অমিল থাকতে পারে কোনো টপিক এখনো কখনো publish হয়নি বলে (স্বাভাবিক, প্রথমবার সব dirty মার্ক করলে ঠিক হয়ে যাবে), অথবা কোনো bug-এর ইঙ্গিত।";
   }
+
+  // ── FIX (Speed Plan Task 2): প্রতিটা subject-এর মোট প্রশ্নসংখ্যা manifest-এই
+  // আগে থেকে যোগ করে রাখা হচ্ছে (topicsMap দিয়ে প্রতিটা topic কোন subject-এর,
+  // সেটা রিজলভ করে count যোগ করে) — যাতে App-এ Subject list খোলার সময় প্রতিটা
+  // topic আলাদা করে ডাউনলোড না করেই, শুধু manifest থেকেই সঠিক "মোট প্রশ্ন"
+  // instant দেখানো যায় (আগে এই সংখ্যা locally hardcoded 0 রাখা হতো)। ──
+  var subjectTotals = {};
+  for (var stid in manifest.topics) {
+    if (!manifest.topics.hasOwnProperty(stid)) continue;
+    var stMeta = topicsMap[stid];
+    var stSubjectId = stMeta ? stMeta.subjectId : null;
+    if (!stSubjectId) continue;
+    subjectTotals[stSubjectId] = (subjectTotals[stSubjectId] || 0) + (manifest.topics[stid].count || 0);
+  }
+  manifest.subjectTotals = subjectTotals;
 
   // ── manifest.json commit (অন্তত ১টা সফল হলেই) ──
   if (results.published > 0) {
@@ -421,14 +492,36 @@ function doPublish_() {
   };
 }
 
-/** সময়-ভিত্তিক trigger থেকে কল করার জন্য (Apps Script এডিটর → Triggers →
- *  Add Trigger → publishScheduled → Time-driven → Day timer)। manual
- *  "Publish Now" ছাড়াও safety-net হিসেবে দৈনিক একবার চালানো যায়, যাতে
- *  ভুলে Publish Now চাপতে ভুলে গেলেও দিনে একবার ঠিক হয়ে যায়। */
+/** সময়-ভিত্তিক trigger থেকে কল করার জন্য — publishDirtyTopics() নিজে থেকেই
+ *  কিছুই করে না যদি _DirtyTopics খালি থাকে (সস্তায় সাথে সাথে বেরিয়ে যায়),
+ *  তাই ঘনঘন চালানো নিরাপদ। "Publish Now" বাটন ছাড়াও এটাই মূল mechanism —
+ *  edit করার পর কয়েক মিনিটের মধ্যেই CDN আপডেট হয়ে যায়, ম্যানুয়ালি Publish Now
+ *  চাপার দরকার পড়ে না। */
 function publishScheduled() {
   var result = publishDirtyTopics();
   Logger.log("publishScheduled result: " + JSON.stringify(result));
   return result;
+}
+
+// ── FIX (Speed Plan Task 2): আগে এই trigger বসাতে Apps Script এডিটরে গিয়ে
+// Triggers ট্যাব থেকে ম্যানুয়ালি "Add Trigger → publishScheduled → Day timer"
+// (দিনে ১ বার) সেট করতে হতো — GAS/CDN read-only আর্কিটেকচারে এত বড় গ্যাপ
+// (edit করার পর সারাদিন CDN স্টেল থাকতে পারে) মেনে নেওয়া যায় না। এখন
+// installAutoReindexTrigger()-এর মতোই একটা self-installing trigger — একবার
+// রান করলেই প্রতি ১০ মিনিটে (দিনে ~১৪৪ বার, dirty না থাকলে প্রতিটা রান প্রায়
+// বিনামূল্যে/সস্তা) নিজে থেকে চেক করে publish করবে।
+//
+// ⚠️ ONE-TIME SETUP: Apps Script এডিটরে এই ফাইল খুলে, ফাংশন ড্রপডাউন থেকে
+// "installAutoPublishTrigger" বেছে নিয়ে ▶ Run বাটনে একবার ক্লিক করো (প্রথমবার
+// authorization চাইতে পারে, allow করে দিও)। দ্বিতীয়বার রান করলে আগের trigger
+// মুছে নতুন বসায় — ডুপ্লিকেট জমবে না। ──
+function installAutoPublishTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "publishScheduled") ScriptApp.deleteTrigger(triggers[i]);
+  }
+  ScriptApp.newTrigger("publishScheduled").timeBased().everyMinutes(10).create();
+  Logger.log("✅ Auto-publish trigger installed — প্রতি ১০ মিনিটে চেক করবে, dirty topic থাকলেই CDN-এ publish হবে।");
 }
 
 /* ── GitHub Contents API helpers (write path, GAS UrlFetchApp দিয়ে) ── */
@@ -1161,6 +1254,21 @@ function autoRebuildIndexTriggered() {
 function doGet(e) {
  try {
   var action = e.parameter.action;
+
+  // ── version — secret ছাড়াই, ব্রাউজারে সরাসরি GAS_URL+"?action=version" খুলে
+  // ডিপ্লয়মেন্ট আপডেট হয়েছে কিনা যাচাই। দেখো ওপরের GAS_BUILD_VERSION কমেন্ট। ──
+  if (action==="version") {
+    return json({ build: GAS_BUILD_VERSION, now: new Date().toString() });
+  }
+
+  // ── examDiag — secret ছাড়াই, ব্রাউজারে সরাসরি GAS_URL+"?action=examDiag"
+  // খুলে সবশেষ exam-appearances.json publish attempt-এর ফলাফল (rows/bytes/
+  // success-error) দেখা যায়। দেখো doPublish_()-এর ভেতরের DIAG কমেন্ট। ──
+  if (action==="examDiag") {
+    var eaDiagRaw = PropertiesService.getScriptProperties().getProperty("LAST_EXAM_APPEARANCES_DIAG");
+    return json(eaDiagRaw ? JSON.parse(eaDiagRaw) : { message: "এখনো কোনো publish attempt রেকর্ড হয়নি" });
+  }
+
   var cfg    = getProps();
 
   // ── SECRET_KEY VALIDATION ──
@@ -3179,6 +3287,84 @@ function doPost(e) {
       var searchPhone=params.phone.toString().trim().replace(/^'+/,'');
       for(var pr=1;pr<pRows.length;pr++){var rowPhone=pRows[pr][pPhCol].toString().trim().replace(/^'+/,'');if(rowPhone.replace(/^0+/,'')===searchPhone.replace(/^0+/,'')){pSh.getRange(pr+1,pPicCol+1).setValue(params.picture_url);syncToFirebase("Users","Users");return txt("Picture Updated");}}
       return txt("User not found");
+    }
+
+    // ── update_fields — একসাথে একাধিক কলাম (Question/Opt1-4/Correct/Explanation/
+    //    Technique ইত্যাদি) এক id-এর জন্য এক কলে আপডেট। 🐛 ফিক্স (Admin App-এর
+    //    InlineEditModal-এ "Edit ব্যর্থ, ফিল্ড: opt1, opt3" জাতীয় random ফিল্ড
+    //    ব্যর্থ হওয়া): আগে ক্লায়েন্ট প্রতিটা ফিল্ডের জন্য আলাদা "updateField" কল
+    //    parallel-এ পাঠাতো (৮টা ফিল্ড = ৮টা আলাদা রিকোয়েস্ট) — প্রতিটা কল নিজে থেকেই
+    //    withWriteLock() (script-wide lock, ৩০সে wait) নিতো, পুরো শিট আবার
+    //    getDataRange().getValues() দিয়ে পড়তো, আর নিজে থেকেই একটা করে syncToFirebase()
+    //    (পুরো শিট আবার Firebase-এ পাঠানো) চালাতো। Quiz-এর মতো বড় শিটে (হাজার হাজার
+    //    রো) একটা syncToFirebase()-ই কয়েক সেকেন্ড লাগতে পারে — ৮টা parallel কল একই
+    //    lock-এর জন্য সিরিয়ালি অপেক্ষা করলে মোট সময় ৩০সে ছাড়িয়ে যেত, তখন যেই
+    //    ২-৩টা কল শেষে ছিল সেগুলো lock timeout খেয়ে ব্যর্থ হতো — এলোমেলো, ভিন্ন
+    //    ভিন্ন ফিল্ড (মান "a"/"the" ইত্যাদির সাথে এর কোনো সম্পর্ক নেই, নিছক টাইমিং)।
+    //    এখন সব ফিল্ড একটা মাত্র POST-এ আসে, একবারই lock নেওয়া হয়, একবারই শিট পড়া
+    //    হয়, প্রতিটা ফিল্ড লেখা হয় লুপে, শেষে একবারই syncToFirebase() — তাই লক
+    //    কনটেনশনই তৈরি হয় না। দেখো src/core/sheetSave.js-এর updateFieldsInSheet(). ──
+    if(params.type==="update_fields"){
+      return withWriteLock(function(){
+      var ufShName=(params.sheet||"").toString();
+      var ufShMap={quiz:"Quiz",qbank:"QBank",study:"Study",users:"Users",typing:"Typing"};
+      ufShName=ufShMap[ufShName.toLowerCase()]||ufShName;
+      var ufSheet=ss.getSheetByName(ufShName);
+      if(!ufSheet)return json({result:"error",error:"Sheet not found: "+ufShName});
+      var ufRows=ufSheet.getDataRange().getValues();
+      var ufHdrRaw=ufRows[0]||[];
+      var ufHdr=ufHdrRaw.map(function(h){return h.toString().toLowerCase().trim();});
+      var ufNorm2=function(s){return (s||"").toString().toLowerCase().replace(/[^a-z0-9]/g,"");};
+      var ufHdrNorm=ufHdrRaw.map(function(h){return ufNorm2(h);});
+      var ufIdC=ufHdr.indexOf("id"); if(ufIdC===-1)ufIdC=ufHdr.indexOf("phone");
+      var ufTopicIdC=ufHdr.indexOf("topic_id");
+      var ufAtC=ufHdrNorm.indexOf("updatedat");
+      var ufEditedByC=ufHdrNorm.indexOf("editedby");
+      var ufReviewC=ufHdrNorm.indexOf("review");
+      var ufTargetId=(params.id||"").toString().trim();
+      var ufFields=params.fields||{};
+      var ufEditSource=(params.editSource||"Admin App").toString().trim();
+      if(ufIdC===-1)return json({result:"error",error:"Column not found: id"});
+      if(!ufTargetId)return json({result:"error",error:"id missing"});
+      var ufAltMap={"opt1":["opt1","option1"],"opt2":["opt2","option2"],"opt3":["opt3","option3"],"opt4":["opt4","option4"]};
+      var ufResolveCol=function(fld){
+        var fldNorm=ufNorm2(fld);
+        var c=ufHdrNorm.indexOf(fldNorm);
+        if(c===-1&&ufAltMap[fld]){for(var ai=0;ai<ufAltMap[fld].length;ai++){c=ufHdrNorm.indexOf(ufNorm2(ufAltMap[fld][ai]));if(c!==-1)break;}}
+        if(c===-1){for(var fc=0;fc<ufHdrNorm.length;fc++){if(ufHdrNorm[fc].indexOf(fldNorm)!==-1){c=fc;break;}}}
+        if(c===-1&&(fld==="sub_topic"||fld==="subtopic"))c=ufHdrNorm.indexOf("topic");
+        return c;
+      };
+      for(var ur=1;ur<ufRows.length;ur++){
+        if(ufRows[ur][ufIdC].toString().trim()===ufTargetId){
+          var ufFailed=[], ufReviewLabels=[], ufNewTopicIdVal=null;
+          for(var fld in ufFields){
+            if(!ufFields.hasOwnProperty(fld))continue;
+            var fldLc=fld.toString().toLowerCase().trim();
+            var col=ufResolveCol(fldLc);
+            if(col===-1){ ufFailed.push(fld); continue; }
+            var content=(ufFields[fld]==null?"":ufFields[fld]);
+            ufSheet.getRange(ur+1,col+1).setValue(content);
+            if(ufTopicIdC>=0&&col===ufTopicIdC) ufNewTopicIdVal=content.toString();
+            var rl=reviewLabelForField(fldLc);
+            if(rl&&ufReviewLabels.indexOf(rl)===-1) ufReviewLabels.push(rl);
+          }
+          if(ufAtC!==-1) ufSheet.getRange(ur+1,ufAtC+1).setValue(Date.now());
+          if(ufEditedByC!==-1) ufSheet.getRange(ur+1,ufEditedByC+1).setValue(ufEditSource+" - "+new Date().toLocaleString('bn-BD'));
+          if(ufReviewC!==-1&&ufReviewLabels.length){
+            var ufPrevReview=(ufRows[ur][ufReviewC]||"").toString().trim();
+            var ufNextReview=ufPrevReview;
+            ufReviewLabels.forEach(function(l){ if(ufNextReview.indexOf(l)===-1) ufNextReview=ufNextReview?(ufNextReview+", "+l):l; });
+            ufSheet.getRange(ur+1,ufReviewC+1).setValue(ufNextReview);
+          }
+          syncToFirebase(ufShName,ufShName);
+          var ufDirtyTopicId=ufNewTopicIdVal!==null?ufNewTopicIdVal:(ufTopicIdC>=0?(ufRows[ur][ufTopicIdC]||"").toString():"");
+          if(ufDirtyTopicId) markTopicDirty(ufDirtyTopicId);
+          return json({result:"success",failed:ufFailed});
+        }
+      }
+      return json({result:"error",error:"ID not found: "+ufTargetId});
+      });
     }
 
     // ── bulk_save_rows — একসাথে অনেক রো Google Sheet-এ সেভ (Save Location = "Google Sheet"
