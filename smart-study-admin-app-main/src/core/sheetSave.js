@@ -198,15 +198,32 @@ async function deleteIdsInSheet({sheet,ids,gasSecret}){
 
 /* ── সব রেফারেন্স-টেবিল (Subjects/Topics/Tags/Posts/Institutions)
    একসাথে fetch — এগুলো ছোট বলে বাল্ক-ফেচ নিরাপদ। ── */
-async function fetchReferenceData({gasSecret}){
-  if(!GAS||!gasSecret) return null;
+/* ── রেফারেন্স ডেটা (Subject/Topic/Tag/Post/Institution লিস্ট) fetch — verbose
+   ভার্সন সফল/ব্যর্থ + ব্যর্থ হলে কেন সেটা আলাদা করে জানায়।
+   🐛 ফিক্স ("Reference Data লোড হচ্ছে..." চিরকাল আটকে থাকা, Subject/Topic কখনো
+   না আসা): আগে fetchReferenceData() যেকোনো ব্যর্থতায় (secret ভুল/মেয়াদোত্তীর্ণ,
+   GAS deploy ভাঙা, নেটওয়ার্ক এরর, HTML error page ফেরত আসা ইত্যাদি) নীরবে শুধু
+   null রিটার্ন করতো — আর null মানেই UI ধরে নিতো "এখনো লোড হয়নি, লোড হতে থাকুক"।
+   ফলে আসল ব্যর্থতা আর "এখনো লোড শুরুই হয়নি" — এই দুটো অবস্থা আলাদা করা যেত না,
+   আর ব্যর্থ হলে কোনো রিট্রাই বাটনও ছিল না — স্পিনার অনন্তকাল ঘুরতেই থাকতো, কোনো
+   এরর মেসেজও দেখা যেত না (তাই ডিবাগ করাও কঠিন ছিল)। এখন ব্যর্থতার আসল কারণ
+   (error string) ফেরত আসে, উপরের কম্পোনেন্ট সেটা দেখিয়ে 🔁 রিট্রাই বাটন দেখাতে
+   পারে। দেখো SingleQuestionEntryPage-এর loadRefData()/refDataError। ── */
+async function fetchReferenceDataVerbose({gasSecret}){
+  if(!GAS) return{ok:false,data:null,error:"GAS URL সেট করা নেই (বিল্ডে VITE_GAS_URL env var চেক করো)"};
+  if(!gasSecret) return{ok:false,data:null,error:"GAS Secret Key দেওয়া নেই — উপরে Save Location প্যানেলে বসাও"};
   try{
     const url=`${GAS}?action=getReferenceData&secret=${encodeURIComponent(gasSecret)}`;
     const resp=await fetch(url);
-    const data=await resp.json();
-    if(data?.status!=="success"||!data.data) return null;
-    return data.data; // {subjects:[],topics:[],tags:[],posts:[],institutions:[]}
-  }catch(_){ return null; }
+    const data=await resp.json().catch(()=>null);
+    if(!data) return{ok:false,data:null,error:"সার্ভার থেকে সঠিক JSON আসেনি (নেটওয়ার্ক সমস্যা বা GAS deploy ভাঙা থাকতে পারে)"};
+    if(data.status!=="success"||!data.data) return{ok:false,data:null,error:data.message||"getReferenceData ব্যর্থ — GAS Secret Key ভুল বা মেয়াদোত্তীর্ণ হতে পারে"};
+    return{ok:true,data:data.data,error:null};
+  }catch(e){ return{ok:false,data:null,error:e?.message||String(e)}; }
+}
+async function fetchReferenceData({gasSecret}){
+  const res=await fetchReferenceDataVerbose({gasSecret});
+  return res.ok?res.data:null;
 }
 
 /* ── refType (subjects/topics/tags/posts/institutions) + id দিয়ে
@@ -450,4 +467,4 @@ async function rollbackManifest({gasSecret,push,sha}){
   }catch(e){ push?.("error","❌ ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, updateFieldsInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest };
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, updateFieldsInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, fetchReferenceDataVerbose, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest };
