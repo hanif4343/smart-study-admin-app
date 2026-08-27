@@ -170,7 +170,7 @@ async function syncFieldsToSheet({sheet,id,fields,gasSecret,editSource}){
   const entries=Object.entries(fields||{});
   if(!GAS||!gasSecret||!id)return{ok:false,failed:entries.map(([f])=>f)};
   const res=await updateFieldsInSheet({sheet,id,fields,gasSecret,editSource});
-  return{ok:res.ok,failed:res.failed||[]};
+  return{ok:res.ok,failed:res.failed||[],error:res.error};
 }
 
 /* ── DeleteTab-এর জন্য: Google Sheet থেকে একাধিক ID একসাথে ডিলিট — GAS-এর existing
