@@ -8,7 +8,7 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
 import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, loadDraft, saveDraft, clearDraft } from "../core/uploaderUtils.js";
-import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
+import { saveRowsToSheet, fetchReferenceData, fetchReferenceDataVerbose } from "../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
@@ -80,8 +80,24 @@ function SingleQuestionEntryPage({push}){
   const[audienceTags,setAudienceTags]=useState("");
 
   // ── Subjects/Topics/Posts/Institutions রেফারেন্স টেবিল ──
+  // 🐛 ফিক্স ("Reference Data লোড হচ্ছে..." চিরকাল আটকে থাকা): আগে refData===null
+  // দিয়েই "এখনো লোড হয়নি" আর "লোড ব্যর্থ হয়েছে" — দুটো একসাথে বোঝানো হতো, তাই
+  // ব্যর্থ হলে চিরকাল "লোড হচ্ছে" স্পিনার দেখাতো, কোনো এরর/রিট্রাই ছাড়াই। এখন
+  // refDataError আলাদাভাবে ট্র্যাক হয় — ব্যর্থ হলে আসল কারণ + 🔁 রিট্রাই বাটন
+  // দেখানো যায় (PaperComposer-এ পাঠানো হয়, নিচে দেখো)। ──
   const[refData,setRefData]=useState(null);
-  useEffect(()=>{ fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); },[gasSecret]);
+  const[refDataError,setRefDataError]=useState(null);
+  const[refDataLoading,setRefDataLoading]=useState(false);
+  const loadRefData=useCallback(()=>{
+    if(!gasSecret)return;
+    setRefDataLoading(true); setRefDataError(null);
+    fetchReferenceDataVerbose({gasSecret}).then(res=>{
+      if(res.ok) setRefData(res.data);
+      else setRefDataError(res.error||"অজানা কারণে রেফারেন্স ডেটা লোড ব্যর্থ হয়েছে");
+      setRefDataLoading(false);
+    });
+  },[gasSecret]);
+  useEffect(()=>{ loadRefData(); },[loadRefData]);
   const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===targetMode).map(s=>({id:s.subject_id,name:s.subject_name})):[];
   const topicOptions=refData&&subjectSel.id?(refData.topics||[]).filter(t=>t.subject_id===subjectSel.id).map(t=>({id:t.topic_id,name:t.topic_name})):[];
 
@@ -403,7 +419,7 @@ function SingleQuestionEntryPage({push}){
       <SaveLocationPicker value="sheet" onChange={()=>{}} gasSecret={gasSecret} onGasSecretChange={setGasSecret} compact/>
 
       {isPaperMode ? (
-        <PaperComposer gasSecret={gasSecret} refData={refData} setRefData={setRefData} push={push} sessionCount={sessionCount} setSessionCount={setSessionCount}/>
+        <PaperComposer gasSecret={gasSecret} refData={refData} setRefData={setRefData} refDataError={refDataError} refDataLoading={refDataLoading} onRetryRefData={loadRefData} push={push} sessionCount={sessionCount} setSessionCount={setSessionCount}/>
       ) : (
       <>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
@@ -587,9 +603,21 @@ function SingleQuestionEntryPage({push}){
    সাবমিট করো" বাটনে একটাই ক্লিকে, একটাই নেটওয়ার্ক কলে, পুরো প্রশ্নপত্র ডাটাবেজে
    জমা হয়ে যায়। ══════════ */
 
+// 🐛 ফিক্স (ভুল/ডুপ্লিকেট Subject তৈরি হওয়া — QB18 "বাংলা"/QB19 "English"):
+// আগে বাংলা ও ইংরেজি ট্যাব সবসময় একটাই fixedSubject ("বাংলা"/"English") ব্যবহার
+// করতো, যেটা আসল QBank শিটের real subject না — real subject হলো "বাংলা ব্যাকরণ"/
+// "বাংলা সাহিত্য" আর "English Grammar"/"English Literature" (৪টা আলাদা, বিদ্যমান
+// subject)। ফলে PaperComposer দিয়ে সাবমিট করা প্রতিটা বাংলা/ইংরেজি প্রশ্নই একটা
+// ভুল/আলাদা "বাংলা"/"English" নামের নতুন Subject-এর নিচে চলে যেত, আসল ২টা subject-এর
+// কোনোটার সাথেই মিলতো না। এখন এই ২টা ট্যাবে fixedSubject-এর বদলে subjectChoices
+// (২টা আসল subject) — নিচে newGroupCard()-এ card.subjectChoice ডিফল্ট প্রথমটা
+// (ব্যাকরণ/Grammar), আর Topic-লিস্ট দুটো subject-এর টপিক একসাথে মার্জ করে দেখায়
+// (দেখো mergedTopicOptionsFor)। ──
 const PAPER_TABS = [
-  { key:"bangla",  label:"বাংলা",  fixedSubject:"বাংলা",   grouped:true,  gkStyle:false },
-  { key:"english", label:"ইংরেজি", fixedSubject:"English", grouped:true,  gkStyle:false },
+  { key:"bangla",  label:"বাংলা",  grouped:true,  gkStyle:false,
+    subjectChoices:[{key:"grammar",name:"বাংলা ব্যাকরণ",short:"ব্যাকরণ"},{key:"literature",name:"বাংলা সাহিত্য",short:"সাহিত্য"}] },
+  { key:"english", label:"ইংরেজি", grouped:true,  gkStyle:false,
+    subjectChoices:[{key:"grammar",name:"English Grammar",short:"Grammar"},{key:"literature",name:"English Literature",short:"Literature"}] },
   { key:"math",    label:"গণিত",   fixedSubject:"গণিত",    grouped:false, gkStyle:false },
   { key:"gk",      label:"GK",     fixedSubject:null,      grouped:false, gkStyle:true  },
 ];
@@ -615,14 +643,16 @@ const formatStylesFor=tabKey=>tabKey==="english"?FORMAT_STYLES_EN:FORMAT_STYLES_
 // 🆕 সরাসরি টাইপ করেই মার্ক করার শর্টকাট — 🖍 বাটনে চাপা বা আগে থেকে "ফরম্যাট"
 // ড্রপডাউনে Highlight/Fill-blank বেছে নেওয়া বাধ্যতামূলক নয় আর। প্রশ্নের ভিতরে
 // সরাসরি টাইপ করলেই ধরা পড়ে যাবে:
-//   __শব্দ__   (দুই পাশে ডাবল আন্ডারস্কোর) → Fill-blank, ভেতরের অংশটাই Answer হয়ে সেভ হয়
+//   _শব্দ_    (একপাশে একটা করে আন্ডারস্কোর) → Fill-blank, ভেতরের অংশটাই Answer হয়ে সেভ হয়
 //   *শব্দ*     (দুই পাশে একটা করে স্টার)     → Highlight/বোল্ড মার্ক (আলাদা Answer লাগবে)
 // এই একই নিয়ম বাংলা ও ইংরেজি — দুই ক্ষেত্রেই। 🖍 বাটনটা এখনো আছে (টাচ-স্ক্রিনে
 // সিলেক্ট-করে-মার্ক করা সহজ করার জন্য), কিন্তু এখন বাটনটাও ঠিক এই একই সিনট্যাক্স-ই বসায়
-// (formatStyle অনুযায়ী __..__ বা *..*), তাই ম্যানুয়াল-টাইপ আর বাটন — দুই পথেই ফলাফল একই।
+// (formatStyle অনুযায়ী _.._ বা *..*), তাই ম্যানুয়াল-টাইপ আর বাটন — দুই পথেই ফলাফল একই।
+// 🐛 ফিক্স: শুরুতে ডাবল আন্ডারস্কোর (__..__) ছিল, কিন্তু ফিডব্যাকে চাওয়া হয়েছিল
+// ঠিক একপাশে একটা করে (_..​_) — তাই মার্কার বদলানো হলো।
 function detectAutoMarkup(text){
   const t=text||"";
-  const blank=/__([^_]+)__/.exec(t);
+  const blank=/_([^_]+)_/.exec(t);
   if(blank) return {style:"fillblank",answer:blank[1].trim()};
   const hl=/\*([^*]+)\*/.exec(t);
   if(hl) return {style:"highlight",answer:""};
@@ -637,11 +667,31 @@ const newPaperItem=()=>({id:newPaperId(),question:"",answer:"",explanation:"",te
 // "+ আরেকটা সাব-পার্ট" চাপা লাগতো। এখন ডিফল্টভাবে ৫টা খালি বক্স নিয়েই শুরু হয় —
 // কম লাগলে পাশের ✕ বাটনে চেপে বাদ দেওয়া যায় (আগে থেকেই ছিল)।
 const DEFAULT_SUBPARTS=5;
-const newGroupCard=()=>({id:newPaperId(),formatStyle:"plain",heading:"",topicSel:{id:"",name:""},
+const newGroupCard=()=>({id:newPaperId(),formatStyle:"plain",heading:"",topicSel:{id:"",name:""},subjectChoice:"grammar",
   items:Array.from({length:DEFAULT_SUBPARTS},()=>newPaperItem())});
 const newFlatCard=(isGk)=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:"",topicSel:{id:"",name:""},...(isGk?{subjectSel:{id:"",name:""}}:{})});
 const makeInitialPaper=()=>({bangla:[newGroupCard()],english:[newGroupCard()],math:[newFlatCard(false)],gk:[newFlatCard(true)]});
 const SUBLABELS=["ক","খ","গ","ঘ","ঙ","চ","ছ","জ","ঝ","ঞ","ট","ঠ","ড","ঢ"];
+
+// 🆕 Topic মার্জ — বাংলা/ইংরেজি ট্যাবে ২টা আসল subject (ব্যাকরণ+সাহিত্য) থাকে, কিন্তু
+// অ্যাডমিন প্রতিবার আলাদা করে subject বেছে টাইপ করতে চান না — Topic ড্রপডাউনে দুটো
+// subject-এর টপিক একসাথে (নাম দিয়ে ডুপ্লিকেট বাদ) দেখানো হয়, সবচেয়ে বেশি ব্যবহৃত
+// (row_count_qbank — GAS rebuildIndex থেকে আসা প্রশ্ন-সংখ্যা) টপিক সবার উপরে।
+// টাইপ করলে TypeaheadCombo নিজেই এই লিস্টের মধ্যে ফিল্টার করে, মিল না পেলে নতুন
+// তৈরি হবে (তখন card.subjectChoice — ডিফল্ট ব্যাকরণ/Grammar — অনুযায়ী subject ঠিক হয়)। ──
+const topicUsage=t=>{ const n=parseInt(t&&t.row_count_qbank,10); return isNaN(n)?0:n; };
+function mergedTopicOptionsFor(refData,subjIds){
+  if(!refData||!subjIds||!subjIds.length) return [];
+  const seen=new Map(); // norm(name) -> {id,name,usage,subject_id}
+  (refData.topics||[]).forEach(t=>{
+    if(!subjIds.includes(t.subject_id)) return;
+    const key=norm(t.topic_name);
+    const usage=topicUsage(t);
+    const cur=seen.get(key);
+    if(!cur||usage>cur.usage) seen.set(key,{id:t.topic_id,name:t.topic_name,usage,subject_id:t.subject_id});
+  });
+  return Array.from(seen.values()).sort((a,b)=>b.usage-a.usage||a.name.localeCompare(b.name,"bn"));
+}
 
 // ── PAPER COMPOSER-এর নিজস্ব হালকা "পরীক্ষার খাতা" থিম ("black a type kora jhamela") —
 // বাকি অ্যাডমিন অ্যাপ ডার্ক-থিমে থাকলেও এই স্ক্রিনটা লেখাপড়ার/প্রুফ-রিডিং-এর জন্য
@@ -654,7 +704,7 @@ const PC = {
 };
 const pcField = {background:PC.inputBg,border:`1px solid ${PC.border}`,color:PC.ink,borderRadius:9,padding:"9px 12px",fontFamily:"inherit",fontSize:13,width:"100%",outline:"none"};
 
-function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessionCount}){
+function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading,onRetryRefData,push,sessionCount,setSessionCount}){
   const[paper,setPaper]=useState(makeInitialPaper);
   const[activeTab,setActiveTab]=useState("bangla");
   const[saving,setSaving]=useState(false);
@@ -739,7 +789,7 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
     const start=el.selectionStart, end=el.selectionEnd;
     if(start===end){ push("warn","আগে যে শব্দ/অংশ মার্ক করবে সেটা সিলেক্ট করো",""); return; }
     const val=el.value;
-    const marker=formatStyle==="fillblank"?"__":"*";
+    const marker=formatStyle==="fillblank"?"_":"*";
     const newVal=val.slice(0,start)+marker+val.slice(start,end)+marker+val.slice(end);
     updateItem(tab,cardId,itemId,{question:newVal});
     requestAnimationFrame(()=>{ el.focus(); const p=end+marker.length*2; el.setSelectionRange(p,p); });
@@ -875,7 +925,38 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
           if(t.grouped){
             const validItems=(card.items||[]).filter(it=>it.question.trim());
             if(!validItems.length)continue;
-            const subjId=await resolveSubjectCached(t.fixedSubject);
+            // 🐛 ফিক্স (ভুল/ডুপ্লিকেট Subject): t.subjectChoices থাকলে (বাংলা/ইংরেজি ট্যাব)
+            // এই কার্ডের প্রশ্নগুলো ২টা আসল subject-এর (ব্যাকরণ/সাহিত্য) কোনটার নিচে
+            // যাবে সেটা এই ক্রমে ঠিক হয় — ১) Topic ড্রপডাউন থেকে বেছে নেওয়া হলে সেই
+            // টপিক আসলে যেই subject-এর নিচে আছে সেটাই (সবচেয়ে নির্ভরযোগ্য), ২) টাইপ করা
+            // নাম যদি হুবহু কোনো বিদ্যমান টপিকের সাথে মেলে (২টা subject-এর যেকোনোটাতে)
+            // সেটাই, ৩) সম্পূর্ণ নতুন টপিক হলে card.subjectChoice টগল (ডিফল্ট ব্যাকরণ/
+            // Grammar) অনুযায়ী — এতে একই নামের টপিক দুইবার (দুই subject-এ) তৈরি হয়ে
+            // যাওয়ার সুযোগ নেই।
+            let subjId,subjName;
+            if(t.subjectChoices){
+              const pairSubjIds=await Promise.all(t.subjectChoices.map(c=>resolveSubjectCached(c.name)));
+              const topicNameRaw=card.topicSel.name.trim();
+              let chosenSubjId=null;
+              if(card.topicSel.id){
+                const ex=(refData.topics||[]).find(tp=>tp.topic_id===card.topicSel.id);
+                if(ex) chosenSubjId=ex.subject_id;
+              }
+              if(!chosenSubjId && topicNameRaw){
+                const nameNorm=norm(topicNameRaw);
+                const ex=(refData.topics||[]).find(tp=>pairSubjIds.includes(tp.subject_id)&&norm(tp.topic_name)===nameNorm);
+                if(ex) chosenSubjId=ex.subject_id;
+              }
+              if(!chosenSubjId){
+                const idx=t.subjectChoices.findIndex(c=>c.key===card.subjectChoice);
+                chosenSubjId=pairSubjIds[idx>=0?idx:0];
+              }
+              subjId=chosenSubjId;
+              subjName=(refData.subjects||[]).find(s=>s.subject_id===subjId)?.subject_name||t.subjectChoices[0].name;
+            } else {
+              subjId=await resolveSubjectCached(t.fixedSubject);
+              subjName=t.fixedSubject;
+            }
             const topicName=card.topicSel.name.trim();
             if(!topicName)throw new Error(`"${t.label}" ট্যাবে একটা কার্ডে Topic ফাঁকা আছে — Topic লিখো/বেছে নাও`);
             const topicId=await resolveTopicCached(subjId,card.topicSel);
@@ -884,9 +965,10 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
             const groupId=heading?("GRP_"+Date.now().toString(36).toUpperCase()+Math.random().toString(36).slice(2,6).toUpperCase()):"";
             // 🐛 ফিক্স (Fill-blank/Highlight): এখন formatStyle ড্রপডাউন থেকে বেছে নেওয়া বা
             // 🖍 বাটনে চাপা — কোনোটাই বাধ্যতামূলক না। প্রশ্নের টেক্সটে সরাসরি টাইপ করা
-            // __শব্দ__ (blank) বা *শব্দ* (highlight) থাকলেই detectAutoMarkup() সেটা ধরে
-            // ফেলে আর card.formatStyle-কে override করে — টাইপ করেই সহজ এপের ডাটাবেজ-নিয়ম
-            // অনুযায়ী সেভ হয়ে যায়, আলাদা করে বাটনে ক্লিক/ড্রপডাউন বদলানো লাগে না। ──
+            // _শব্দ_ (blank, একপাশে একটা করে আন্ডারস্কোর) বা *শব্দ* (highlight) থাকলেই
+            // detectAutoMarkup() সেটা ধরে ফেলে আর card.formatStyle-কে override করে —
+            // টাইপ করেই সহজ এপের ডাটাবেজ-নিয়ম অনুযায়ী সেভ হয়ে যায়, আলাদা করে বাটনে
+            // ক্লিক/ড্রপডাউন বদলানো লাগে না। ──
             validItems.forEach((it,idx)=>{
               let ansText=it.answer.trim();
               let effFormat=card.formatStyle;
@@ -897,13 +979,13 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
               } else if(auto.style==="highlight"){
                 effFormat=effFormat==="table"?effFormat:"highlight";
               } else if(card.formatStyle==="fillblank"){
-                const m=/__([^_]+)__/.exec(it.question);
-                if(!m)throw new Error(`"${t.label}" ট্যাবে Fill-blank ফরম্যাটে একটা প্রশ্নে 🖍 মার্ক করা হয়নি — যে শব্দ/অংশ blank হবে সেটা সিলেক্ট করো, অথবা সরাসরি __শব্দ__ লিখো`);
+                const m=/_([^_]+)_/.exec(it.question);
+                if(!m)throw new Error(`"${t.label}" ট্যাবে Fill-blank ফরম্যাটে একটা প্রশ্নে 🖍 মার্ক করা হয়নি — যে শব্দ/অংশ blank হবে সেটা সিলেক্ট করো, অথবা সরাসরি _শব্দ_ লিখো`);
                 ansText=m[1].trim();
               }
               allRows.push(buildSheetRow({
                 item:{q:it.question.trim(),correct:ansText,explanation:it.explanation,technique:it.technique},
-                subject:t.fixedSubject,subtopic:topicName,qtype:"Written",
+                subject:subjName,subtopic:topicName,qtype:"Written",
                 audienceTags:[],mainQpaper:"",subjectId:subjId,topicId,
                 groupId,subIndex:groupId?(idx+1):null,groupHeading:groupId?heading:"",
                 formatStyle:effFormat!=="plain"?effFormat:"",
@@ -1067,22 +1149,53 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                 </div>
               </div>
               <div className="fld" style={{marginBottom:6}}>
-                <label>📌 Topic (এই পুরো গ্রুপের জন্য একবারই)</label>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+                  <label style={{margin:0}}>📌 Topic (এই পুরো গ্রুপের জন্য একবারই)</label>
+                  {/* 🆕 বাংলা/ইংরেজি ট্যাবে টপিক-লিস্ট ২টা আসল subject (ব্যাকরণ+সাহিত্য/
+                      Grammar+Literature) মিলিয়ে দেখানো হয় (দেখো mergedTopicOptionsFor)।
+                      বিদ্যমান Topic বেছে নিলে এই টগল অটো বদলে যায় (আসল subject অনুযায়ী);
+                      নতুন Topic টাইপ করলে এই টগল অনুযায়ী subject ঠিক হবে। */}
+                  {tabDef.subjectChoices&&(
+                    <div style={{display:"flex",gap:4}}>
+                      {tabDef.subjectChoices.map(c=>(
+                        <button key={c.key} type="button" onClick={()=>updateCard(activeTab,card.id,{subjectChoice:c.key})}
+                          style={{fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:6,cursor:"pointer",
+                            border:`1px solid ${card.subjectChoice===c.key?PC.ink:PC.border}`,
+                            background:card.subjectChoice===c.key?PC.ink:"transparent",
+                            color:card.subjectChoice===c.key?"#fff":PC.muted}}>{c.short}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
                 <TypeaheadCombo
-                  options={topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
+                  options={tabDef.subjectChoices
+                    ? mergedTopicOptionsFor(refData,tabDef.subjectChoices.map(c=>subjectOptions.find(s=>s.name===c.name)?.id).filter(Boolean))
+                    : topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
                   value={card.topicSel}
-                  onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel})}
+                  onChange={sel=>{
+                    const patch={topicSel:sel};
+                    if(sel.id&&tabDef.subjectChoices){
+                      const ex=(refData?.topics||[]).find(tp=>tp.topic_id===sel.id);
+                      if(ex){
+                        const idx=tabDef.subjectChoices.findIndex(c=>subjectOptions.find(s=>s.name===c.name)?.id===ex.subject_id);
+                        if(idx>=0) patch.subjectChoice=tabDef.subjectChoices[idx].key;
+                      }
+                    }
+                    updateCard(activeTab,card.id,patch);
+                  }}
                   placeholder="Topic লিখো বা লিস্ট থেকে বেছে নাও..."
-                  newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}
+                  newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে${tabDef.subjectChoices?` (${(tabDef.subjectChoices.find(c=>c.key===card.subjectChoice)||tabDef.subjectChoices[0]).short})`:""}`}
                   inputStyle={pcField} lightTheme
                 />
               </div>
               {/* 🆕 সরাসরি টাইপ করে মার্ক করার শর্টকাট — ফরম্যাট বদলানো/বাটনে চাপা কোনোটাই
-                  বাধ্যতামূলক না, টাইপ করলেই ধরা পড়ে যায় (দেখো detectAutoMarkup, submitPaper)। */}
+                  বাধ্যতামূলক না, টাইপ করলেই ধরা পড়ে যায় (দেখো detectAutoMarkup, submitPaper)।
+                  🐛 ফিক্স: blank মার্কার আগে ডাবল আন্ডারস্কোর (__..__) ছিল, এখন একপাশে
+                  একটা করে (_.._) — ফিডব্যাক অনুযায়ী। */}
               <div style={{fontSize:9.5,color:PC.muted,marginBottom:8,lineHeight:1.5}}>
                 {activeTab==="english"
-                  ? <>💡 Type <code>__word__</code> for a blank, <code>*word*</code> to highlight — no button needed</>
-                  : <>💡 <code>__শব্দ__</code> লিখলে শূন্যস্থান, <code>*শব্দ*</code> লিখলে হাইলাইট — বাটনে চাপা লাগবে না</>}
+                  ? <>💡 Type <code>_word_</code> for a blank, <code>*word*</code> to highlight — no button needed</>
+                  : <>💡 <code>_শব্দ_</code> লিখলে শূন্যস্থান, <code>*শব্দ*</code> লিখলে হাইলাইট — বাটনে চাপা লাগবে না</>}
               </div>
 
               {card.items.map((it,idx)=>{
@@ -1106,8 +1219,8 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
                       className="ta" style={{...pcField,minHeight:44,fontSize:12.5}}
                       value={it.question} onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}
                       onKeyDown={e=>handleGroupQKeyDown(e,it.id)}
-                      placeholder={card.formatStyle==="table"?(activeTab==="english"?"word":"শব্দ (যেমন: অহর্নিশ)"):card.formatStyle==="fillblank"?"__..__ বা 🖍 দিয়ে blank মার্ক করো...":activeTab==="english"?"Type the question...":"প্রশ্ন লিখো..."}/>
-                    {/* 🐛 ফিক্স: Fill-blank সনাক্ত হলে (formatStyle থেকে বা সরাসরি __..__ টাইপ
+                      placeholder={card.formatStyle==="table"?(activeTab==="english"?"word":"শব্দ (যেমন: অহর্নিশ)"):card.formatStyle==="fillblank"?"_..._ বা 🖍 দিয়ে blank মার্ক করো...":activeTab==="english"?"Type the question...":"প্রশ্ন লিখো..."}/>
+                    {/* 🐛 ফিক্স: Fill-blank সনাক্ত হলে (formatStyle থেকে বা সরাসরি _..._ টাইপ
                         করা থেকে) আলাদা raw answer বক্সের দরকার নেই — প্রশ্নের ভিতরের মার্ক করা
                         অংশটাই সাবমিটের সময় Answer হিসেবে auto বসে যায় (দেখো submitPaper)। ── */}
                     {(card.formatStyle==="fillblank"||detectAutoMarkup(it.question).style==="fillblank") ? (
@@ -1236,8 +1349,21 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
             থেকে আসে — স্লো কানেকশনে (স্ক্রিনশটে 6 KB/s, 1.15 KB/s দেখা গেছে) এটা লোড হতে
             বেশ কয়েক সেকেন্ড লাগতে পারে। তার আগেই Submit চাপলে subjectOptions তখনও খালি
             থাকে, ফলে app বুঝতেই পারে না "বাংলা" আগে থেকে আছে কিনা — প্রতিবার নতুন বানিয়ে
-            ফেলে। তাই এখন যতক্ষণ refData লোড না হয় Submit বাটন disable + লোডিং হিন্ট। ── */}
-        {refData===null && (
+            ফেলে। তাই এখন যতক্ষণ refData লোড না হয় Submit বাটন disable + লোডিং হিন্ট।
+            🐛 ফিক্স ("লোড হচ্ছে" চিরকাল আটকে থাকা): আগে ব্যর্থ হলেও refData===null-ই
+            থাকতো, তাই এই একই "লোড হচ্ছে" বার্তা অনন্তকাল দেখাতো, কোনো এরর/রিট্রাই ছাড়াই।
+            এখন refDataError আলাদা — ব্যর্থ হলে আসল কারণ + 🔁 রিট্রাই বাটন দেখায়। ── */}
+        {refDataError ? (
+          <div style={{background:"#4a2020",border:"1px solid #ef444455",borderRadius:10,padding:"10px 12px",marginBottom:8}}>
+            <div style={{fontSize:11.5,fontWeight:800,color:"#f87171",marginBottom:3}}>❌ রেফারেন্স ডেটা লোড ব্যর্থ হয়েছে</div>
+            <div style={{fontSize:10.5,color:"#fca5a5",marginBottom:8,lineHeight:1.5}}>{refDataError}</div>
+            <button type="button" onClick={onRetryRefData}
+              style={{width:"100%",padding:"7px 0",borderRadius:8,border:"1px solid #ef444488",
+                background:"transparent",color:"#f87171",fontWeight:700,fontSize:11.5,cursor:"pointer"}}>
+              🔁 আবার চেষ্টা করো
+            </button>
+          </div>
+        ) : refData===null && (
           <div style={{textAlign:"center",fontSize:11,color:PC.gold,fontWeight:700,marginBottom:6}}>
             ⏳ রেফারেন্স ডেটা (Subject/Topic লিস্ট) লোড হচ্ছে — একটু অপেক্ষা করো, নাহলে ডুপ্লিকেট Subject তৈরি হয়ে যেতে পারে
           </div>
@@ -1246,9 +1372,9 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
             সাবমিটের সময় এখন বাটনের ভিতরেই লাইভ "X/Y (NN%)" আর একটা পাতলা প্রোগ্রেস বার
             দেখা যায় (saveProgress, submitPaper-এর onProgress থেকে আসে) — কতদূর এগোলো
             বোঝা যায়, একদম হ্যাং হয়ে গেছে মনে হয় না। ── */}
-        <button className="btn" disabled={saving||refData===null} onClick={submitPaper}
+        <button className="btn" disabled={saving||refData===null||!!refDataError} onClick={submitPaper}
           style={{width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14.5,position:"relative",overflow:"hidden",
-            background:(saving||refData===null)?PC.muted:PC.ink,color:"#fff",border:"none"}}>
+            background:(saving||refData===null||refDataError)?PC.muted:PC.ink,color:"#fff",border:"none"}}>
           {saving&&saveProgress&&(
             <span style={{position:"absolute",left:0,top:0,bottom:0,
               width:`${Math.round((saveProgress.done/Math.max(1,saveProgress.total))*100)}%`,
@@ -1259,6 +1385,7 @@ function PaperComposer({gasSecret,refData,setRefData,push,sessionCount,setSessio
               ? (saveProgress
                   ? `⏳ সেভ হচ্ছে... ${saveProgress.done}/${saveProgress.total} (${Math.round((saveProgress.done/Math.max(1,saveProgress.total))*100)}%)`
                   : "⏳ সেভ হচ্ছে...")
+              : refDataError?"❌ রেফারেন্স ডেটা লোড ব্যর্থ — উপরে রিট্রাই চাপো"
               : refData===null?"⏳ রেফারেন্স ডেটা লোড হচ্ছে...":`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
           </span>
         </button>
