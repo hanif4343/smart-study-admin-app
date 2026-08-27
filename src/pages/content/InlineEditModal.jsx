@@ -49,7 +49,14 @@ function InlineEditModal({q,sheet,onClose,onSaved,push}){
         push("success","✅ Sheet-এ আপডেট!",`#${qid}`);
         onSaved();
       } else {
-        push("error","❌ Edit ব্যর্থ",`ফিল্ড: ${sheetRes.failed.join(", ")||"সব"}`);
+        // 🐛 ফিক্স (আসল কারণ দেখা যেত না): sheetRes.error-এ GAS-এর আসল এরর মেসেজ
+        // (exception.toString()) আগে থেকেই আসতো, কিন্তু এখানে দেখানো হতো শুধু
+        // sheetRes.failed (ফিল্ডের নামের লিস্ট) — GAS-সাইডে কোনো exception হলে
+        // (lock timeout, বাগ, ইত্যাদি) failed-এ শুধু পাঠানো সব ফিল্ডের নাম ফিরে
+        // আসতো (fallback), আসল কারণটা (error string) কখনো দেখানোই হতো না। এখন
+        // error string-ও সাথে দেখানো হচ্ছে — এবার আসল কারণ বোঝা যাবে। ──
+        push("error","❌ Edit ব্যর্থ",
+          `ফিল্ড: ${sheetRes.failed.join(", ")||"সব"}`+(sheetRes.error?` — ${sheetRes.error}`:""));
       }
     }catch(e){push("error","Edit ব্যর্থ",String(e?.message||e||"unknown"));}
     setSaving(false);
