@@ -709,6 +709,23 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const[activeTab,setActiveTab]=useState("bangla");
   const[saving,setSaving]=useState(false);
   const[saveProgress,setSaveProgress]=useState(null); // {done,total} — সাবমিট চলাকালীন প্রোগ্রেস বার/শতকরা দেখানোর জন্য
+  // 🐛 ফিক্স ("১টা মাত্র প্রশ্ন সাবমিট করতেও অনেকক্ষণ, প্রোগ্রেস বার নড়ে না, hang
+  // মনে হয়"): saveProgress শুধু একটা চাংক (batch) *শেষ হওয়ার পরেই* আপডেট হয় — মাত্র
+  // ১টা প্রশ্ন হলে পুরো সময়টাই ১টা চাংকের ভেতরে কাটে, তাই সাবমিট চলাকালীন বারটা
+  // একদম নড়েই না (0% → হঠাৎ 100%), স্লো নেটওয়ার্কে এটাকে hang মনে হয়। এখন সাবমিট
+  // শুরু হওয়ার পর থেকে সেকেন্ড গোনা হয় (elapsedMs) আর সেটার ওপর ভিত্তি করে একটা
+  // "estimate" প্রোগ্রেস-শতকরা (আসল চাংক-প্রোগ্রেস না থাকলে) দেখানো হয়, যেটা সময়ের
+  // সাথে সাথে ধীরে ধীরে বাড়তেই থাকে (কখনো ৯২%-এর বেশি ওঠে না যতক্ষণ না আসল রেসপন্স
+  // আসে) — তাই বার সবসময় নড়তে থাকে, কখনো স্থির/hang মনে হয় না। সাথে সেকেন্ড-কাউন্টও
+  // দেখানো হয়, যাতে বোঝা যায় অ্যাপ সক্রিয়ভাবে কাজ করছে। ──
+  const[elapsedMs,setElapsedMs]=useState(0);
+  const savingStartRef=useRef(null);
+  useEffect(()=>{
+    if(!saving){ setElapsedMs(0); savingStartRef.current=null; return; }
+    savingStartRef.current=Date.now();
+    const iv=setInterval(()=>setElapsedMs(Date.now()-savingStartRef.current),200);
+    return ()=>clearInterval(iv);
+  },[saving]);
   const textareaRefs=useRef({}); // প্রশ্ন-বক্স refs (itemId কী দিয়ে)
   const answerRefs=useRef({});   // উত্তর-বক্স refs (itemId কী দিয়ে) — Tab-ফ্লো-এর জন্য
   const flatQRefs=useRef({});    // math/GK ফ্ল্যাট-কার্ডের প্রশ্ন-বক্স refs (cardId কী দিয়ে)
@@ -1138,7 +1155,20 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                 <div className="fld" style={{marginBottom:0,flex:1}}>
                   <label>🏷️ গ্রুপ হেডিং (ঐচ্ছিক — খালি = প্রতিটা sub-part স্বাধীন)</label>
                   <input className="inp" style={pcField} placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"' value={card.heading}
-                    onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}/>
+                    onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}
+                    onKeyDown={e=>{
+                      // 🐛 ফিক্স (হেডিং থেকে Tab মারলে এলোমেলো জায়গায় চলে যাওয়া):
+                      // ব্রাউজারের ডিফল্ট Tab-অর্ডারে হেডিং-এর পরে থাকে ফরম্যাট
+                      // ড্রপডাউন, তারপর Topic — এই দুটোই সাধারণত একবার সেট করে
+                      // রেখে দেওয়া হয়, বারবার ছোঁয়া লাগে না। তাই হেডিং লিখে Tab
+                      // মারলে এখন সরাসরি প্রথম সাব-পার্টের প্রশ্ন-বক্সে চলে যায় —
+                      // ফরম্যাট/Topic ডিঙিয়ে, র‍্যাপিড টাইপিং-এর জন্য। ──
+                      if(e.key==="Tab"&&!e.shiftKey){
+                        e.preventDefault();
+                        const firstItem=card.items&&card.items[0];
+                        if(firstItem) textareaRefs.current[firstItem.id]?.focus();
+                      }
+                    }}/>
                 </div>
                 <div className="fld" style={{marginBottom:0,width:130,flexShrink:0}}>
                   <label>{activeTab==="english"?"Format":"ফরম্যাট"}</label>
@@ -1368,23 +1398,30 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             ⏳ রেফারেন্স ডেটা (Subject/Topic লিস্ট) লোড হচ্ছে — একটু অপেক্ষা করো, নাহলে ডুপ্লিকেট Subject তৈরি হয়ে যেতে পারে
           </div>
         )}
-        {/* 🐛 ফিক্স (প্রোগ্রেস বার না থাকা — "20 min ধরে সেভ হচ্ছে... দেখে ধৈর্য হারানো"):
-            সাবমিটের সময় এখন বাটনের ভিতরেই লাইভ "X/Y (NN%)" আর একটা পাতলা প্রোগ্রেস বার
-            দেখা যায় (saveProgress, submitPaper-এর onProgress থেকে আসে) — কতদূর এগোলো
-            বোঝা যায়, একদম হ্যাং হয়ে গেছে মনে হয় না। ── */}
+        {/* 🐛 ফিক্স (১টা প্রশ্নেও প্রোগ্রেস বার না নড়া — "hang মনে হয়"): আসল
+            saveProgress (চাংক-ভিত্তিক) শুধু ১টার বেশি চাংক থাকলেই দৃশ্যমানভাবে
+            বাড়ে — মাত্র ১টা প্রশ্ন/১টা চাংকে পুরো অপেক্ষাটাই কোনো আপডেট ছাড়া কাটে।
+            তাই এখন real progress না থাকলে elapsedMs (গত কয়েক সেকেন্ড) থেকে একটা
+            "estimate" শতকরা বানানো হয় (সময়ের সাথে বাড়ে, কখনো ৯২%-এর বেশি ওঠে না) —
+            বার সবসময় নড়তে থাকে + সেকেন্ড-কাউন্টও দেখায়, তাই hang মনে হয় না। ── */}
         <button className="btn" disabled={saving||refData===null||!!refDataError} onClick={submitPaper}
           style={{width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14.5,position:"relative",overflow:"hidden",
             background:(saving||refData===null||refDataError)?PC.muted:PC.ink,color:"#fff",border:"none"}}>
-          {saving&&saveProgress&&(
-            <span style={{position:"absolute",left:0,top:0,bottom:0,
-              width:`${Math.round((saveProgress.done/Math.max(1,saveProgress.total))*100)}%`,
-              background:"#ffffff26",transition:"width .25s ease"}}/>
-          )}
+          {saving&&(()=>{
+            const hasReal=saveProgress&&saveProgress.total>0;
+            const realPct=hasReal?Math.round((saveProgress.done/saveProgress.total)*100):0;
+            const estPct=Math.min(92,Math.round((1-Math.exp(-elapsedMs/9000))*100));
+            const pct=hasReal&&realPct>0?realPct:estPct;
+            return(
+              <span style={{position:"absolute",left:0,top:0,bottom:0,width:`${pct}%`,
+                background:"#ffffff26",transition:"width .3s ease"}}/>
+            );
+          })()}
           <span style={{position:"relative"}}>
             {saving
-              ? (saveProgress
-                  ? `⏳ সেভ হচ্ছে... ${saveProgress.done}/${saveProgress.total} (${Math.round((saveProgress.done/Math.max(1,saveProgress.total))*100)}%)`
-                  : "⏳ সেভ হচ্ছে...")
+              ? (saveProgress&&saveProgress.total>1
+                  ? `⏳ সেভ হচ্ছে... ${saveProgress.done}/${saveProgress.total} (${Math.round((saveProgress.done/saveProgress.total)*100)}%)`
+                  : `⏳ সেভ হচ্ছে... (${Math.max(1,Math.floor(elapsedMs/1000))} সেকেন্ড)`)
               : refDataError?"❌ রেফারেন্স ডেটা লোড ব্যর্থ — উপরে রিট্রাই চাপো"
               : refData===null?"⏳ রেফারেন্স ডেটা লোড হচ্ছে...":`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
           </span>
