@@ -3874,3 +3874,24 @@ function checkExamDiag() {
   var raw = PropertiesService.getScriptProperties().getProperty("LAST_EXAM_APPEARANCES_DIAG");
   Logger.log(raw || "❌ কোনো ডেটা সেভ হয়নি");
 }
+function testUpdateFieldsDirectly() {
+  var testId = "QB-00117";
+  var testSheet = "QBank";
+
+  var fakeEvent = {
+    postData: {
+      contents: JSON.stringify({
+        secret: PropertiesService.getScriptProperties().getProperty("SECRET_KEY"),
+        type: "update_fields",
+        sheet: testSheet,
+        id: testId,
+        fields: { explanation: "🔬DIAG_TEST_" + Date.now() },
+        editSource: "DiagnosticTest"
+      })
+    },
+    parameter: {}
+  };
+
+  var result = doPost(fakeEvent);
+  Logger.log("RESULT: " + result.getContent());
+}
