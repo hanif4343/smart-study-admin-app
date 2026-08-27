@@ -19,7 +19,7 @@
 // build-নামটা দেখা যাবে (secret লাগবেনা) — যদি পুরনো মান দেখা যায় বা এরর আসে,
 // তার মানে নতুন কোড এখনো লাইভ হয়নি (নতুন "deployment" বানানো হয়ে থাকলে সেটার
 // আলাদা URL হয়, পুরনো URL-এই পুরনো কোড থেকে যায় — এই কারণেই এই মার্কার)।
-var GAS_BUILD_VERSION = "2026-08-26-examDiag-v1";
+var GAS_BUILD_VERSION = "2026-08-27-fresh-project-v1";
 
 function getProps() {
   var p = PropertiesService.getScriptProperties();
