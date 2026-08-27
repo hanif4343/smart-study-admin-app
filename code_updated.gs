@@ -3870,3 +3870,7 @@ function pullFirebaseToSheet_(sheetName) {
 
   Logger.log("✅ " + sheetName + " ব্যাকআপ সম্পন্ন — " + rows.length + " রো (Firebase → Sheet, read-only)।");
 }
+function checkExamDiag() {
+  var raw = PropertiesService.getScriptProperties().getProperty("LAST_EXAM_APPEARANCES_DIAG");
+  Logger.log(raw || "❌ কোনো ডেটা সেভ হয়নি");
+}
