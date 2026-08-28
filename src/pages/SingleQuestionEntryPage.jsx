@@ -7,7 +7,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
-import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, loadDraft, saveDraft, clearDraft } from "../core/uploaderUtils.js";
+import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData, fetchReferenceDataVerbose } from "../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
@@ -693,6 +693,22 @@ function mergedTopicOptionsFor(refData,subjIds){
   return Array.from(seen.values()).sort((a,b)=>b.usage-a.usage||a.name.localeCompare(b.name,"bn"));
 }
 
+// 🆕 হেডিং ও টপিক প্রায় একই রকম হয় (যেমন হেডিং: "সন্ধি বিচ্ছেদ করুন:" → Topic:
+// "সন্ধি বিচ্ছেদ")। হেডিং বক্স থেকে বেরোনোর (blur) সাথে সাথে — যদি Topic এখনো
+// খালি থাকে — হেডিং থেকে সাধারণ নির্দেশনা-শব্দ (করুন/লিখুন/নির্ণয় করো ইত্যাদি) ও
+// শেষের : - বাদ দিয়ে একটা "গেস" বানানো হয়; বিদ্যমান Topic-লিস্টে হুবহু মিলে গেলে
+// সেটাই সিলেক্ট হয়ে যায় (subject_id সহ), না মিললেও গেসটা Topic বক্সে বসিয়ে দেওয়া
+// হয় (এডিট করে নেওয়া যায়) — প্রতিটা সাব-পার্ট গ্রুপে আলাদা করে Topic টাইপ করা
+// লাগে না, কাজ অনেক দ্রুত হয়।
+function headingToTopicGuess(heading){
+  let s=(heading||"").toString().trim();
+  if(!s) return "";
+  s=s.replace(/[:：\-–—]+\s*$/,"").trim();
+  s=s.replace(/(নির্ণয়\s*করু?ন|নির্ণয়\s*করো|লিখু?ন|লিখো|করু?ন|করো|বলু?ন|বলো|দাও|দিন|চিহ্নিত\s*করু?ন)\s*$/,"").trim();
+  s=s.replace(/[:：\-–—,।]+\s*$/,"").trim();
+  return s;
+}
+
 // ── PAPER COMPOSER-এর নিজস্ব হালকা "পরীক্ষার খাতা" থিম ("black a type kora jhamela") —
 // বাকি অ্যাডমিন অ্যাপ ডার্ক-থিমে থাকলেও এই স্ক্রিনটা লেখাপড়ার/প্রুফ-রিডিং-এর জন্য
 // ব্যবহার হয় বলে হালকা cream ব্যাকগ্রাউন্ড + গাঢ় নেভি টেক্সট — টাইপ করার সময় অনেক
@@ -787,6 +803,60 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     return ()=>clearTimeout(t);
   },[paper,activeTab,postSel,instSel,examYear,saving,draftBanner]);
 
+  // ── 🆕 নামসহ একাধিক খসড়া — উপরের অটো-ড্রাফট (LS_DRAFT_PAPER) শুধু ১টা "চলতি
+  // সেশন" স্লট, নিঃশব্দে ওভাররাইট হয়। কিন্তু একসাথে একাধিক প্রশ্নপত্র নিয়ে কাজ
+  // করলে (যেমন একটা পদ/প্রতিষ্ঠানের কাজ অর্ধেক রেখে অন্যটায় সুইচ করা) দরকার হয়
+  // একাধিক খসড়া আলাদাভাবে জমা রাখার — তাই এই আলাদা তালিকা (localStorage-এ
+  // LS_DRAFT_PAPER_LIST), প্রতিটা এন্ট্রি Post+Institution+সাল দিয়ে হেডলাইন করা,
+  // সবচেয়ে নতুনটা সবার উপরে (savedAt অনুযায়ী descending sort)। ──
+  const[draftList,setDraftList]=useState(()=>{
+    try{ const raw=localStorage.getItem(LS_DRAFT_PAPER_LIST); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; }catch{ return []; }
+  });
+  const[showDraftList,setShowDraftList]=useState(false);
+  const persistDraftList=(list)=>{
+    setDraftList(list);
+    try{ localStorage.setItem(LS_DRAFT_PAPER_LIST,JSON.stringify(list)); }catch{}
+  };
+  const saveNamedDraft=()=>{
+    if(!paperHasContent(paper)){ push("warn","এখনো কিছু টাইপ করা হয়নি","আগে কিছু প্রশ্ন টাইপ করো, তারপর খসড়া সেভ করো"); return; }
+    const entry={id:newPaperId(),savedAt:Date.now(),paper,activeTab,postSel,instSel,examYear};
+    persistDraftList([entry,...draftList].slice(0,15)); // ১৫টার বেশি জমতে দেওয়া হয় না
+    push("success","💾 নতুন খসড়া হিসেবে সেভ হলো",draftHeadline(entry));
+  };
+  const loadNamedDraft=(entry)=>{
+    setPaper(entry.paper);
+    if(entry.activeTab)setActiveTab(entry.activeTab);
+    if(entry.postSel)setPostSel(entry.postSel);
+    if(entry.instSel)setInstSel(entry.instSel);
+    if(entry.examYear!==undefined)setExamYear(entry.examYear);
+    setShowDraftList(false);
+    push("success","♻️ খসড়া লোড হলো",draftHeadline(entry));
+  };
+  const deleteNamedDraft=(id)=>{ persistDraftList(draftList.filter(d=>d.id!==id)); };
+  function draftHeadline(d){
+    const p=((d.postSel&&d.postSel.name)||"").trim();
+    const i=((d.instSel&&d.instSel.name)||"").trim();
+    const y=(d.examYear||"").toString().trim();
+    const parts=[p,i].filter(Boolean);
+    let label=parts.length?parts.join(" — "):"নাম-ছাড়া খসড়া";
+    if(y)label+=` (${y})`;
+    return label;
+  }
+  function draftQCount(d){
+    let n=0;
+    PAPER_TABS.forEach(t=>{
+      (d.paper[t.key]||[]).forEach(c=>{
+        if(t.grouped) n+=(c.items||[]).filter(it=>it.question.trim()).length;
+        else if((c.question||"").trim()) n+=1;
+      });
+    });
+    return n;
+  }
+  function fmtDraftTime(ms){
+    try{ return new Date(ms).toLocaleString("bn-BD",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}); }
+    catch{ return new Date(ms).toLocaleString(); }
+  }
+
   const setCards=(tab,updater)=>setPaper(p=>({...p,[tab]:updater(p[tab])}));
   const updateCard=(tab,cardId,patch)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,...patch}:c));
   const removeCard=(tab,cardId)=>setCards(tab,cards=>cards.length>1?cards.filter(c=>c.id!==cardId):cards);
@@ -815,20 +885,35 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   /* ── Tab-ফ্লো: প্রশ্ন-বক্সে Tab → সাথে সাথে উত্তর-বক্সে; উত্তর-বক্সে Tab → পরের
      সাব-পার্টের প্রশ্ন-বক্সে (শেষ সাব-পার্ট হলে নতুন একটা যোগ করে সেখানেই ফোকাস) —
      মাঝে ব্যাখ্যা/টেকনিক (ঐচ্ছিক, এখন ডিফল্টভাবে hidden/collapsed) বাদ পড়ে যায়,
-     তাই বাধ্যতামূলক নয় এমন বক্সে বারবার Tab চেপে যেতে হয় না। ── */
-  const handleGroupQKeyDown=(e,itemId)=>{
-    if(e.key==="Tab"&&!e.shiftKey){ e.preventDefault(); answerRefs.current[itemId]?.focus(); }
+     তাই বাধ্যতামূলক নয় এমন বক্সে বারবার Tab চেপে যেতে হয় না।
+     🐛 ফিক্স (Fill-blank সিলেক্ট করলে Tab কাজ করতো না): Fill-blank মোডে answer
+     ইনপুট-বক্সটাই DOM-এ render হয় না (বদলে একটা হিন্ট-মেসেজ দেখায়), কিন্তু আগে
+     প্রশ্ন-বক্সে Tab চাপলে সবসময় answerRefs.current[itemId]?.focus() ট্রাই করতো —
+     সেই ref কখনো সেট-ই হতো না, তাই focus() নিঃশব্দে fail করতো, আর e.preventDefault()
+     করার কারণে ব্রাউজারের ডিফল্ট Tab-ও কাজ করতো না — কার্সর কোথাও যেতোই না। এখন
+     Fill-blank (বা auto-detected _blank_) হলে প্রশ্ন-বক্স থেকে Tab সরাসরি পরের
+     সাব-পার্টের প্রশ্ন-বক্সে (বা শেষ হলে নতুন সাব-পার্ট) নিয়ে যায় — উত্তর-বক্স
+     ডিঙিয়ে, ঠিক যেমনটা উত্তর-বক্স থেকে Tab করলে হতো। ── */
+  const goToNextSubItem=(tab,cardId,items,idx)=>{
+    if(idx<items.length-1){
+      textareaRefs.current[items[idx+1].id]?.focus();
+    } else {
+      pendingFocusRef.current={tab,cardId,flat:false};
+      addSubItem(tab,cardId);
+    }
   };
-  const handleGroupAKeyDown=(e,tab,cardId,items,idx)=>{
+  const handleGroupQKeyDown=(e,tab,cardId,items,idx,isFillblank)=>{
     if(e.key==="Tab"&&!e.shiftKey){
       e.preventDefault();
-      if(idx<items.length-1){
-        textareaRefs.current[items[idx+1].id]?.focus();
+      if(isFillblank){
+        goToNextSubItem(tab,cardId,items,idx);
       } else {
-        pendingFocusRef.current={tab,cardId,flat:false};
-        addSubItem(tab,cardId);
+        answerRefs.current[items[idx].id]?.focus();
       }
     }
+  };
+  const handleGroupAKeyDown=(e,tab,cardId,items,idx)=>{
+    if(e.key==="Tab"&&!e.shiftKey){ e.preventDefault(); goToNextSubItem(tab,cardId,items,idx); }
   };
   const handleFlatQKeyDown=(e,cardId)=>{
     if(e.key==="Tab"&&!e.shiftKey){ e.preventDefault(); flatARefs.current[cardId]?.focus(); }
@@ -1156,6 +1241,33 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   <label>🏷️ গ্রুপ হেডিং (ঐচ্ছিক — খালি = প্রতিটা sub-part স্বাধীন)</label>
                   <input className="inp" style={pcField} placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"' value={card.heading}
                     onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}
+                    onBlur={()=>{
+                      // 🆕 হেডিং থেকে বেরোলে (Topic এখনো খালি থাকলে) হেডিং থেকে
+                      // Topic আন্দাজ করে অটো-ফিল করে — দেখো headingToTopicGuess()।
+                      // বিদ্যমান Topic-এ হুবহু মিললে (এই কার্ডের subject-জোড়ার
+                      // মধ্যে) সেটাই id-সহ সিলেক্ট হয়, subjectChoice টগলও তখন
+                      // সেই টপিকের আসল subject অনুযায়ী অটো বদলে যায়।
+                      if(card.topicSel.name.trim())return;
+                      const guess=headingToTopicGuess(card.heading);
+                      if(!guess)return;
+                      const options=tabDef.subjectChoices
+                        ? mergedTopicOptionsFor(refData,tabDef.subjectChoices.map(c=>subjectOptions.find(s=>s.name===c.name)?.id).filter(Boolean))
+                        : topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id);
+                      const match=options.find(o=>norm(o.name)===norm(guess));
+                      if(match){
+                        const patch={topicSel:{id:match.id,name:match.name}};
+                        if(tabDef.subjectChoices){
+                          const ex=(refData?.topics||[]).find(tp=>tp.topic_id===match.id);
+                          if(ex){
+                            const idx=tabDef.subjectChoices.findIndex(c=>subjectOptions.find(s=>s.name===c.name)?.id===ex.subject_id);
+                            if(idx>=0) patch.subjectChoice=tabDef.subjectChoices[idx].key;
+                          }
+                        }
+                        updateCard(activeTab,card.id,patch);
+                      } else {
+                        updateCard(activeTab,card.id,{topicSel:{id:"",name:guess}});
+                      }
+                    }}
                     onKeyDown={e=>{
                       // 🐛 ফিক্স (হেডিং থেকে Tab মারলে এলোমেলো জায়গায় চলে যাওয়া):
                       // ব্রাউজারের ডিফল্ট Tab-অর্ডারে হেডিং-এর পরে থাকে ফরম্যাট
@@ -1231,6 +1343,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               {card.items.map((it,idx)=>{
                 const isExpanded=expandedItems.has(it.id);
                 const hasExplTech=it.explanation.trim()||it.technique.trim();
+                const isFillblank=card.formatStyle==="fillblank"||detectAutoMarkup(it.question).style==="fillblank";
                 return (
                 <div key={it.id} style={{display:"flex",gap:8,padding:"8px 0",borderTop:idx>0?`1px dashed ${PC.border}`:"none"}}>
                   <div style={{width:22,flexShrink:0,fontWeight:800,color:PC.ink,fontSize:12,paddingTop:8}}>{SUBLABELS[idx]||idx+1}.</div>
@@ -1248,12 +1361,12 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                       ref={el=>{textareaRefs.current[it.id]=el;}}
                       className="ta" style={{...pcField,minHeight:44,fontSize:12.5}}
                       value={it.question} onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}
-                      onKeyDown={e=>handleGroupQKeyDown(e,it.id)}
+                      onKeyDown={e=>handleGroupQKeyDown(e,activeTab,card.id,card.items,idx,isFillblank)}
                       placeholder={card.formatStyle==="table"?(activeTab==="english"?"word":"শব্দ (যেমন: অহর্নিশ)"):card.formatStyle==="fillblank"?"_..._ বা 🖍 দিয়ে blank মার্ক করো...":activeTab==="english"?"Type the question...":"প্রশ্ন লিখো..."}/>
                     {/* 🐛 ফিক্স: Fill-blank সনাক্ত হলে (formatStyle থেকে বা সরাসরি _..._ টাইপ
                         করা থেকে) আলাদা raw answer বক্সের দরকার নেই — প্রশ্নের ভিতরের মার্ক করা
                         অংশটাই সাবমিটের সময় Answer হিসেবে auto বসে যায় (দেখো submitPaper)। ── */}
-                    {(card.formatStyle==="fillblank"||detectAutoMarkup(it.question).style==="fillblank") ? (
+                    {isFillblank ? (
                       <div style={{fontSize:10,color:PC.gold,fontWeight:700,marginTop:4}}>
                         🖍 প্রশ্নে মার্ক করা শব্দই Answer হিসেবে অটো সেভ হবে — আলাদা করে টাইপ করা লাগবে না
                       </div>
@@ -1374,6 +1487,42 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       </button>
 
       <div style={{position:"sticky",bottom:8,background:PC.bg,paddingTop:8}}>
+        {/* 🆕 Save as Draft — একাধিক নামসহ খসড়া, Post+Institution+সাল দিয়ে
+            হেডলাইন করা, সবচেয়ে নতুনটা সবার উপরে। উপরের অটো-ড্রাফট থেকে এটা আলাদা:
+            এটা ম্যানুয়াল, একাধিক এন্ট্রি জমা রাখে, ইচ্ছামতো পরে ফিরে লোড করা যায়। ── */}
+        <div style={{display:"flex",gap:8,marginBottom:8}}>
+          <button type="button" onClick={saveNamedDraft}
+            style={{flex:1,justifyContent:"center",padding:"9px 0",borderRadius:9,fontSize:11.5,fontWeight:700,
+              background:"transparent",border:`1px solid ${PC.border}`,color:PC.ink,cursor:"pointer"}}>
+            💾 খসড়া হিসেবে সেভ করো
+          </button>
+          <button type="button" onClick={()=>setShowDraftList(s=>!s)}
+            style={{flex:1,justifyContent:"center",padding:"9px 0",borderRadius:9,fontSize:11.5,fontWeight:700,
+              background:"transparent",border:`1px solid ${PC.border}`,color:PC.ink,cursor:"pointer"}}>
+            📂 সেভ করা খসড়া ({draftList.length}) {showDraftList?"▲":"▼"}
+          </button>
+        </div>
+        {showDraftList&&(
+          <div style={{maxHeight:280,overflowY:"auto",border:`1px solid ${PC.border}`,borderRadius:10,marginBottom:8,background:"#fff"}}>
+            {draftList.length===0?(
+              <div style={{padding:14,fontSize:11,color:PC.muted,textAlign:"center"}}>এখনো কোনো খসড়া সেভ করা হয়নি</div>
+            ):(
+              [...draftList].sort((a,b)=>b.savedAt-a.savedAt).map(d=>(
+                <div key={d.id} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderBottom:`1px dashed ${PC.border}`}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:11.5,fontWeight:800,color:PC.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{draftHeadline(d)}</div>
+                    <div style={{fontSize:9.5,color:PC.muted,marginTop:2}}>{fmtDraftTime(d.savedAt)} · {draftQCount(d)}টা প্রশ্ন</div>
+                  </div>
+                  <button type="button" onClick={()=>loadNamedDraft(d)}
+                    style={{flexShrink:0,padding:"6px 10px",borderRadius:7,fontSize:10.5,fontWeight:700,
+                      background:PC.ink,color:"#fff",border:"none",cursor:"pointer"}}>লোড করো</button>
+                  <button type="button" onClick={()=>deleteNamedDraft(d.id)}
+                    style={{flexShrink:0,background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>🗑</button>
+                </div>
+              ))
+            )}
+          </div>
+        )}
         {/* 🐛 ফিক্স (ডুপ্লিকেট Subject বাগ — QB18/QB20/QB22 "বাংলা" একসাথে ৩টা তৈরি হয়ে
             গিয়েছিল): refData (Subject/Topic/Post/Institution লিস্ট) পেজ-লোডে নেটওয়ার্ক
             থেকে আসে — স্লো কানেকশনে (স্ক্রিনশটে 6 KB/s, 1.15 KB/s দেখা গেছে) এটা লোড হতে
