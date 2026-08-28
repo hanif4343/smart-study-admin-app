@@ -13,13 +13,13 @@
 */
 
 // 🆕 ডিপ্লয়মেন্ট-ভেরিফিকেশন মার্কার — নিচে doGet()-এ ?action=version হ্যান্ডলার
-// এই ভ্যারিয়েবলটা রিটার্ন করে। কোড আপডেট কররে "Deploy → Manage deployments →
+// এই ভ্যারিয়েবলটা রিটার্ন করে। কোড আপডেট করার পর "Deploy → Manage deployments →
 // Edit (পেন্সিল আইকন) → Version: New version → Deploy" ঠিকভাবে করা হয়েছে কিনা
 // নিশ্চিত হতে চাইলে GAS_URL-এর শেষে ?action=version জুড়ে ব্রাউজারে খুললেই এই
 // build-নামটা দেখা যাবে (secret লাগবেনা) — যদি পুরনো মান দেখা যায় বা এরর আসে,
 // তার মানে নতুন কোড এখনো লাইভ হয়নি (নতুন "deployment" বানানো হয়ে থাকলে সেটার
 // আলাদা URL হয়, পুরনো URL-এই পুরনো কোড থেকে যায় — এই কারণেই এই মার্কার)।
-var GAS_BUILD_VERSION = "2026-08-27-fresh-project-v1";
+var GAS_BUILD_VERSION = "2026-08-27-reviewlabel-scope-fix-v1";
 
 function getProps() {
   var p = PropertiesService.getScriptProperties();
@@ -61,6 +61,30 @@ function normalizeFieldValue_(s){
    ⚠️ এই ফাংশনটা ছোট, দ্রুত (কোনো নেটওয়ার্ক কল নেই) — তাই লক-করা action-গুলোর
    ভিতরেই নিরাপদে কল করা যায়, বাড়তি সময় লাগে না বললেই চলে।
    ══════════════════════════════════════════════════════════════════════════ */
+/* ── reviewLabelForField — কোন ফিল্ড এডিট হলে Review কলামে কোন লেবেল যোগ হবে
+   তার ম্যাপিং। শুধু "মূল প্রশ্ন/উত্তর/option/ব্যাখ্যা/subject/topic" — এই ৬
+   ক্যাটাগরির এডিটই ট্র্যাক করা হয় (technique/tags/timestamp-জাতীয় মেটাডেটা
+   এডিটে Review কলাম ছোঁয়া হয় না, নাহলে অপ্রয়োজনীয় শব্দে ভরে যাবে)।
+   🐛 ফিক্স (কতদিন ধরে "Edit ব্যর্থ, ফিল্ড: সবগুলো" — আসল কারণ ধরাই পড়ছিল না):
+   এই ফাংশনটা ভুলবশত doGet(e){...}-এর ভেতরে nested function হিসেবে সংজ্ঞায়িত
+   ছিল — তাই শুধু doGet-এর ভেতর থেকেই এটা কল করা যেত। doPost-এর update_fields
+   অ্যাকশন থেকে এটা কল করতে গেলেই "ReferenceError: reviewLabelForField is not
+   defined" ছুঁড়ে পুরো ফাংশন ক্র্যাশ করতো — for-loop-এর প্রথম ফিল্ডটা লেখা হয়ে
+   যাওয়ার ঠিক পরপরই (Sheet-এ setValue() হয়ে যাওয়ার পরই) এই ক্র্যাশ হতো, তাই
+   কখনো কখনো একটা ফিল্ড আংশিক লেখা হয়েও বাকি সব ফিল্ড ছাড়াই থেমে যেত। এখন এই
+   ফাংশনটা গ্লোবাল স্কোপে (ফাইলের একদম উপরে) নিয়ে আসা হলো, doGet ও doPost —
+   দুটো থেকেই এখন এটা কল করা যাবে। ── */
+function reviewLabelForField(fld){
+  var f=(fld||"").toString().toLowerCase().trim();
+  if(f==="question") return "Question Reviewed";
+  if(f==="correct") return "Ans Reviewed";
+  if(f==="opt1"||f==="opt2"||f==="opt3"||f==="opt4"||f==="option1"||f==="option2"||f==="option3"||f==="option4") return "Option Reviewed";
+  if(f==="explanation") return "Explanation Reviewed";
+  if(f==="subject"||f==="subject_id"||f==="subjectid") return "Subject Reviewed";
+  if(f==="topic"||f==="sub_topic"||f==="subtopic"||f==="topic_id"||f==="topicid") return "Topic Reviewed";
+  return null;
+}
+
 function markTopicDirty(topicId) {
   if (!topicId) return;
   try {
@@ -1539,21 +1563,6 @@ function doGet(e) {
      Subjects/Topics/Tags/Posts/Institutions reference-টেবিল
      ও paginated question-fetch এর জন্য
   ══════════════════════════════════════════════════════════ */
-
-  // ── reviewLabelForField — কোন ফিল্ড এডিট হলে Review কলামে কোন লেবেল যোগ হবে
-  // তার ম্যাপিং। শুধু "মূল প্রশ্ন/উত্তর/option/ব্যাখ্যা/subject/topic" — এই ৬
-  // ক্যাটাগরির এডিটই ট্র্যাক করা হয় (technique/tags/timestamp-জাতীয় মেটাডেটা
-  // এডিটে Review কলাম ছোঁয়া হয় না, নাহলে অপ্রয়োজনীয় শব্দে ভরে যাবে)। ──
-  function reviewLabelForField(fld){
-    var f=(fld||"").toString().toLowerCase().trim();
-    if(f==="question") return "Question Reviewed";
-    if(f==="correct") return "Ans Reviewed";
-    if(f==="opt1"||f==="opt2"||f==="opt3"||f==="opt4"||f==="option1"||f==="option2"||f==="option3"||f==="option4") return "Option Reviewed";
-    if(f==="explanation") return "Explanation Reviewed";
-    if(f==="subject"||f==="subject_id"||f==="subjectid") return "Subject Reviewed";
-    if(f==="topic"||f==="sub_topic"||f==="subtopic"||f==="topic_id"||f==="topicid") return "Topic Reviewed";
-    return null;
-  }
 
   // ── REF_TABS: reference-টেবিলের নাম ও তাদের id-কলাম ──
   var REF_TABS = {
