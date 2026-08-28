@@ -661,7 +661,10 @@ function detectAutoMarkup(text){
 
 let _paperIdCounter=0;
 const newPaperId=()=>"it_"+(++_paperIdCounter)+"_"+Date.now().toString(36);
-const newPaperItem=()=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:""});
+// 🆕 qtype:"written"|"mcq" + opt1-4 — MCQ সাপোর্ট (AI দিয়ে ভুল অপশন জেনারেট করা,
+// দেখো aiGenerateMcqOptions())। প্রতিটা সাব-পার্ট/flat কার্ড আলাদাভাবে Written বা
+// MCQ হতে পারে — একই গ্রুপে দুই ধরনের প্রশ্ন মিশিয়ে থাকতে কোনো বাধা নেই।
+const newPaperItem=()=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:"",qtype:"written",opt1:"",opt2:"",opt3:"",opt4:""});
 // 🐛 ফিক্স: আগে প্রতিটা নতুন গ্রুপ-কার্ডে ১টা মাত্র সাব-পার্ট (ক) নিয়ে শুরু হতো —
 // সন্ধি/কারক/Idioms-এর মতো টপিকে প্রায় সবসময়ই ৫টা সাব-পার্ট (ক-ঙ) থাকে, তাই প্রতিবার
 // "+ আরেকটা সাব-পার্ট" চাপা লাগতো। এখন ডিফল্টভাবে ৫টা খালি বক্স নিয়েই শুরু হয় —
@@ -669,7 +672,7 @@ const newPaperItem=()=>({id:newPaperId(),question:"",answer:"",explanation:"",te
 const DEFAULT_SUBPARTS=5;
 const newGroupCard=()=>({id:newPaperId(),formatStyle:"plain",heading:"",topicSel:{id:"",name:""},subjectChoice:"grammar",
   items:Array.from({length:DEFAULT_SUBPARTS},()=>newPaperItem())});
-const newFlatCard=(isGk)=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:"",topicSel:{id:"",name:""},...(isGk?{subjectSel:{id:"",name:""}}:{})});
+const newFlatCard=(isGk)=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:"",qtype:"written",opt1:"",opt2:"",opt3:"",opt4:"",topicSel:{id:"",name:""},...(isGk?{subjectSel:{id:"",name:""}}:{})});
 const makeInitialPaper=()=>({bangla:[newGroupCard()],english:[newGroupCard()],math:[newFlatCard(false)],gk:[newFlatCard(true)]});
 const SUBLABELS=["ক","খ","গ","ঘ","ঙ","চ","ছ","জ","ঝ","ঞ","ট","ঠ","ড","ঢ"];
 
@@ -793,6 +796,19 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const[examYear,setExamYear]=useState("");
   const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
   const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
+  // 🆕 Audience Tags — কে এই প্রশ্ন দেখবে (Job/Masters 1/Class 7 ইত্যাদি, Tags শিট
+  // থেকে)। "Job" ডিফল্টভাবে সিলেক্ট থাকে (QBank-এর বেশিরভাগ প্রশ্নই চাকরির
+  // পরীক্ষার জন্য) — বদলাতে চাইলে চিপে ট্যাপ করে বদলানো যায় (মাল্টি-সিলেক্ট)।
+  // Post/Institution-এর মতোই সেশন-জুড়ে থাকে, সব রো-তে একই ট্যাগ প্রযোজ্য হয়।
+  const tagOptions=refData?(refData.tags||[]).map(tg=>({id:tg.tag_id,name:tg.tag_name})):[];
+  const[selectedTagIds,setSelectedTagIds]=useState([]);
+  const defaultTagAppliedRef=useRef(false);
+  useEffect(()=>{
+    if(defaultTagAppliedRef.current||!tagOptions.length)return;
+    const job=tagOptions.find(tg=>norm(tg.name)==="job");
+    if(job){ setSelectedTagIds([job.id]); defaultTagAppliedRef.current=true; }
+  },[tagOptions.length]);
+  const toggleTag=id=>setSelectedTagIds(ids=>ids.includes(id)?ids.filter(x=>x!==id):[...ids,id]);
 
   // ── ড্রাফট অটোসেভ — বড় প্রশ্নপত্র টাইপ করতে করতে (৪টা ট্যাব জুড়ে) হারিয়ে গেলে/
   // ব্যাক চাপা হলে/সাবমিট ব্যর্থ হলেও যেন আবার ঠিক যেখানে ছিল সেখান থেকেই এগিয়ে যাওয়া
@@ -891,6 +907,30 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const updateItem=(tab,cardId,itemId,patch)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:c.items.map(it=>it.id===itemId?{...it,...patch}:it)}:c));
   const addSubItem=(tab,cardId)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:[...c.items,newPaperItem()]}:c));
   const removeSubItem=(tab,cardId,itemId)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:c.items.length>1?c.items.filter(it=>it.id!==itemId):c.items}:c));
+
+  /* ── 🆕 MCQ AI-generate — বিদ্যমান plain single-form-এই যেই generate()/
+     buildMcqGenPrompt()/parseGenResponse()/shuffle4() ব্যবহার হয় (উপরে দেখো,
+     ফাইলের শুরুতেই সংজ্ঞায়িত, module-scope) — ঠিক সেই একই ফাংশনগুলো এখানেও
+     রিইউজ করা হচ্ছে, যাতে দুই জায়গায় একই AI-prompt/লজিক আলাদা করে না লিখতে হয়।
+     শুধু প্রশ্ন + সঠিক উত্তর দিলেই ৩টা ভুল অপশন (distractor) বানিয়ে opt1-4-এ
+     এলোমেলো ক্রমে বসিয়ে দেয় — অপশন নিজে টাইপ করা লাগে না। ── */
+  const[mcqGeneratingId,setMcqGeneratingId]=useState(null);
+  const generateMcqOptions=async(tab,cardId,itemId,question,answer,isFlat)=>{
+    if(!question.trim()||!answer.trim()){ push("warn","আগে প্রশ্ন ও সঠিক উত্তর লিখো",""); return; }
+    if(!buildKeyPool().length){ push("warn","⚠️ কোনো AI provider active নেই","API Settings-এ গিয়ে অন্তত একটা key active করো"); return; }
+    setMcqGeneratingId(itemId);
+    try{
+      const raw=await callAiProviderRotatingRaw(buildMcqGenPrompt(question,answer));
+      const parsed=parseGenResponse(raw);
+      const distractors=(parsed.options||[]).slice(0,3);
+      while(distractors.length<3) distractors.push("");
+      const[a,b,c,d]=shuffle4([answer,...distractors]);
+      const patch={opt1:a,opt2:b,opt3:c,opt4:d};
+      if(isFlat) updateCard(tab,cardId,patch); else updateItem(tab,cardId,itemId,patch);
+      push("success","🤖 অপশন তৈরি হয়েছে","চেক করে দরকার হলে ঠিক করে নাও");
+    }catch(e){ push("error","Generate ব্যর্থ",e.message); }
+    setMcqGeneratingId(null);
+  };
 
   /* ── 🖍 মার্ক — টেক্সট সিলেক্ট করে এই বাটন চাপলে সিলেকশনটা মার্ক হয়ে যায়।
      🆕 এখন formatStyle অনুযায়ী দুই রকম মার্কার — fillblank হলে __..__ (ভেতরের
@@ -1048,6 +1088,9 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         return res.id;
       };
 
+      // 🆕 Audience Tags — এই সেশনে যেই ট্যাগ(গুলো) বাছা আছে (ডিফল্ট "Job"),
+      // সব রো-তেই একই ট্যাগ প্রযোজ্য হয় (post/institution/year-এর মতোই session-wide)।
+      const selectedTagNames=selectedTagIds.map(id=>(tagOptions.find(tg=>tg.id===id)||{}).name).filter(Boolean);
       const allRows=[];
       for(const t of PAPER_TABS){
         for(const card of (paper[t.key]||[])){
@@ -1099,6 +1142,24 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             // টাইপ করেই সহজ এপের ডাটাবেজ-নিয়ম অনুযায়ী সেভ হয়ে যায়, আলাদা করে বাটনে
             // ক্লিক/ড্রপডাউন বদলানো লাগে না। ──
             validItems.forEach((it,idx)=>{
+              // 🆕 MCQ: fillblank/highlight অটো-মার্কআপ অপ্রাসঙ্গিক (question-এর
+              // ভিতরে _..._/*..* থাকলেও MCQ-তে সেটা প্লেইন টেক্সট হিসেবেই থাকবে,
+              // ব্যাখ্যা/টেকনিক ছাড়া বাকি সব সাধারণ MCQ রো-এর মতো)।
+              if(it.qtype==="mcq"){
+                const opts=[it.opt1,it.opt2,it.opt3,it.opt4].map(o=>o.trim());
+                if(opts.some(o=>!o))throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে ৪টা অপশনের কোনোটা ফাঁকা — 🤖 Generate চাপো অথবা নিজে পূরণ করো`);
+                const ansTrim=it.answer.trim();
+                if(!ansTrim)throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে সঠিক উত্তর ফাঁকা`);
+                if(!opts.some(o=>norm(o)===norm(ansTrim)))throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে সঠিক উত্তর ৪টা অপশনের কোনোটার সাথেই মিলছে না`);
+                allRows.push(buildSheetRow({
+                  item:{q:it.question.trim(),correct:ansTrim,opt1:opts[0],opt2:opts[1],opt3:opts[2],opt4:opts[3],explanation:it.explanation,technique:it.technique},
+                  subject:subjName,subtopic:topicName,qtype:"MCQ",
+                  audienceTags:selectedTagNames,tagIds:selectedTagIds,mainQpaper:"",subjectId:subjId,topicId,
+                  groupId,subIndex:groupId?(idx+1):null,groupHeading:groupId?heading:"",
+                  formatStyle:"",
+                }));
+                return;
+              }
               let ansText=it.answer.trim();
               let effFormat=card.formatStyle;
               const auto=detectAutoMarkup(it.question);
@@ -1115,7 +1176,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               allRows.push(buildSheetRow({
                 item:{q:it.question.trim(),correct:ansText,explanation:it.explanation,technique:it.technique},
                 subject:subjName,subtopic:topicName,qtype:"Written",
-                audienceTags:[],mainQpaper:"",subjectId:subjId,topicId,
+                audienceTags:selectedTagNames,tagIds:selectedTagIds,mainQpaper:"",subjectId:subjId,topicId,
                 groupId,subIndex:groupId?(idx+1):null,groupHeading:groupId?heading:"",
                 formatStyle:effFormat!=="plain"?effFormat:"",
               }));
@@ -1134,10 +1195,24 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             if(!topicName)throw new Error(`"${t.label}" ট্যাবে একটা প্রশ্নে Topic ফাঁকা আছে`);
             const topicId=await resolveTopicCached(subjId,card.topicSel);
             if(!topicId)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
+            if(card.qtype==="mcq"){
+              const opts=[card.opt1,card.opt2,card.opt3,card.opt4].map(o=>o.trim());
+              if(opts.some(o=>!o))throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে ৪টা অপশনের কোনোটা ফাঁকা — 🤖 Generate চাপো অথবা নিজে পূরণ করো`);
+              const ansTrim=card.answer.trim();
+              if(!ansTrim)throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে সঠিক উত্তর ফাঁকা`);
+              if(!opts.some(o=>norm(o)===norm(ansTrim)))throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে সঠিক উত্তর ৪টা অপশনের কোনোটার সাথেই মিলছে না`);
+              allRows.push(buildSheetRow({
+                item:{q:card.question.trim(),correct:ansTrim,opt1:opts[0],opt2:opts[1],opt3:opts[2],opt4:opts[3],explanation:card.explanation,technique:card.technique},
+                subject:t.gkStyle?card.subjectSel.name.trim():t.fixedSubject,subtopic:topicName,qtype:"MCQ",
+                audienceTags:selectedTagNames,tagIds:selectedTagIds,mainQpaper:"",subjectId:subjId,topicId,
+                groupId:"",subIndex:null,groupHeading:"",formatStyle:"",
+              }));
+              continue;
+            }
             allRows.push(buildSheetRow({
               item:{q:card.question.trim(),correct:card.answer.trim(),explanation:card.explanation,technique:card.technique},
               subject:t.gkStyle?card.subjectSel.name.trim():t.fixedSubject,subtopic:topicName,qtype:"Written",
-              audienceTags:[],mainQpaper:"",subjectId:subjId,topicId,
+              audienceTags:selectedTagNames,tagIds:selectedTagIds,mainQpaper:"",subjectId:subjId,topicId,
               groupId:"",subIndex:null,groupHeading:"",formatStyle:"",
             }));
           }
@@ -1236,6 +1311,26 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         <div className="fld" style={{marginBottom:0}}>
           <label>সাল</label>
           <input className="inp" style={pcField} placeholder="যেমন: 2025" value={examYear} onChange={e=>setExamYear(e.target.value)}/>
+        </div>
+      </div>
+
+      {/* 🆕 Audience Tags — কে এই প্রশ্ন দেখবে (Job/Masters 1/Class 7...) — সেশন-জুড়ে,
+          সব ট্যাবের সব প্রশ্নেই একই ট্যাগ প্রযোজ্য হয়। "Job" ডিফল্টভাবে সিলেক্ট থাকে। ── */}
+      <div style={{background:PC.card,border:`1px solid ${PC.border}`,borderRadius:12,padding:12,marginBottom:12}}>
+        <div style={{fontSize:12,fontWeight:800,color:PC.ink,marginBottom:2}}>🎯 কাদের জন্য এই প্রশ্ন? (Audience Tag)</div>
+        <div style={{fontSize:10.5,color:PC.muted,marginBottom:8}}>ডিফল্টভাবে "Job" সিলেক্ট থাকে — দরকার হলে বদলাও (একাধিকও বেছে নেওয়া যায়)। এই সেশনের সব প্রশ্নেই একই ট্যাগ যাবে।</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {tagOptions.length===0?(
+            <div style={{fontSize:10.5,color:PC.muted}}>{refData===null?"লোড হচ্ছে...":"কোনো Tag পাওয়া যায়নি"}</div>
+          ):tagOptions.map(tg=>(
+            <button key={tg.id} type="button" onClick={()=>toggleTag(tg.id)}
+              style={{fontSize:11,fontWeight:700,padding:"6px 12px",borderRadius:20,cursor:"pointer",
+                border:`1.5px solid ${selectedTagIds.includes(tg.id)?PC.ink:PC.border}`,
+                background:selectedTagIds.includes(tg.id)?PC.ink:"transparent",
+                color:selectedTagIds.includes(tg.id)?"#fff":PC.muted}}>
+              {selectedTagIds.includes(tg.id)?"✓ ":""}{tg.name}
+            </button>
+          ))}
         </div>
       </div>
 
@@ -1373,23 +1468,72 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   <div style={{flex:1}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                       <label style={{margin:0,fontSize:10.5,color:PC.muted,fontWeight:700}}>{activeTab==="english"?"Question":"প্রশ্ন"}</label>
-                      {(card.formatStyle==="highlight"||card.formatStyle==="fillblank")&&(
-                        <button onClick={()=>wrapHighlight(activeTab,card.id,it.id,card.formatStyle)}
-                          title={card.formatStyle==="fillblank"?"যে শব্দ blank হবে সেটা সিলেক্ট করে মার্ক করো — এটাই Answer হয়ে সেভ হবে":"সিলেক্ট করা অংশ হাইলাইট/মার্ক করো"}
-                          style={{background:"#facc1522",color:"#facc15",border:"1px solid #facc1544",borderRadius:6,
-                            fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>🖍 {card.formatStyle==="fillblank"?"Blank মার্ক করো":"হাইলাইট করো"}</button>
-                      )}
+                      <div style={{display:"flex",gap:6}}>
+                        {/* 🆕 প্রতিটা সাব-পার্ট আলাদাভাবে Written/MCQ হতে পারে —
+                            একই গ্রুপে দুই ধরনের প্রশ্ন মিশিয়ে থাকতে বাধা নেই। */}
+                        <button type="button" onClick={()=>updateItem(activeTab,card.id,it.id,{qtype:it.qtype==="mcq"?"written":"mcq"})}
+                          style={{background:it.qtype==="mcq"?"#6d28d922":"transparent",color:it.qtype==="mcq"?"#6d28d9":PC.muted,
+                            border:`1px solid ${it.qtype==="mcq"?"#6d28d944":PC.border}`,borderRadius:6,
+                            fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>
+                          {it.qtype==="mcq"?"❓ MCQ":"✍️ Written"}
+                        </button>
+                        {(card.formatStyle==="highlight"||card.formatStyle==="fillblank")&&it.qtype!=="mcq"&&(
+                          <button onClick={()=>wrapHighlight(activeTab,card.id,it.id,card.formatStyle)}
+                            title={card.formatStyle==="fillblank"?"যে শব্দ blank হবে সেটা সিলেক্ট করে মার্ক করো — এটাই Answer হয়ে সেভ হবে":"সিলেক্ট করা অংশ হাইলাইট/মার্ক করো"}
+                            style={{background:"#facc1522",color:"#facc15",border:"1px solid #facc1544",borderRadius:6,
+                              fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>🖍 {card.formatStyle==="fillblank"?"Blank মার্ক করো":"হাইলাইট করো"}</button>
+                        )}
+                      </div>
                     </div>
                     <textarea
                       ref={el=>{textareaRefs.current[it.id]=el;}}
                       className="ta" style={{...pcField,minHeight:44,fontSize:12.5}}
                       value={it.question} onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}
-                      onKeyDown={e=>handleGroupQKeyDown(e,activeTab,card.id,card.items,idx,isFillblank)}
+                      onKeyDown={e=>handleGroupQKeyDown(e,activeTab,card.id,card.items,idx,isFillblank||it.qtype==="mcq")}
                       placeholder={card.formatStyle==="table"?(activeTab==="english"?"word":"শব্দ (যেমন: অহর্নিশ)"):card.formatStyle==="fillblank"?"_..._ বা 🖍 দিয়ে blank মার্ক করো...":activeTab==="english"?"Type the question...":"প্রশ্ন লিখো..."}/>
                     {/* 🐛 ফিক্স: Fill-blank সনাক্ত হলে (formatStyle থেকে বা সরাসরি _..._ টাইপ
                         করা থেকে) আলাদা raw answer বক্সের দরকার নেই — প্রশ্নের ভিতরের মার্ক করা
                         অংশটাই সাবমিটের সময় Answer হিসেবে auto বসে যায় (দেখো submitPaper)। ── */}
-                    {isFillblank ? (
+                    {it.qtype==="mcq" ? (
+                      <>
+                        <label style={{fontSize:10.5,color:PC.muted,fontWeight:700,marginTop:4}}>✅ সঠিক উত্তর</label>
+                        <input
+                          ref={el=>{answerRefs.current[it.id]=el;}}
+                          className="inp" style={{...pcField,fontSize:12.5,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}}
+                          value={it.answer} onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}
+                          onKeyDown={e=>handleGroupAKeyDown(e,activeTab,card.id,card.items,idx)}
+                          placeholder="সঠিক উত্তর লিখো..."/>
+                        <button type="button" onClick={()=>generateMcqOptions(activeTab,card.id,it.id,it.question,it.answer,false)}
+                          disabled={mcqGeneratingId===it.id}
+                          style={{width:"100%",marginTop:6,background:"#6d28d922",color:"#6d28d9",border:"1px solid #6d28d944",
+                            borderRadius:7,fontSize:11,fontWeight:700,padding:"7px 0",cursor:"pointer"}}>
+                          {mcqGeneratingId===it.id?"⏳ তৈরি হচ্ছে...":"🤖 AI দিয়ে ৩টা ভুল অপশন বানাও"}
+                        </button>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:6}}>
+                          {["opt1","opt2","opt3","opt4"].map((k,oi)=>(
+                            <input key={k} className="inp" style={{...pcField,fontSize:11.5,
+                                borderColor:it[k].trim()&&norm(it[k])===norm(it.answer)?"#22c55e":PC.border}}
+                              value={it[k]} onChange={e=>updateItem(activeTab,card.id,it.id,{[k]:e.target.value})}
+                              placeholder={`অপশন ${String.fromCharCode(65+oi)}`}/>
+                          ))}
+                        </div>
+                        {/* কোনো অপশনের টেক্সট বদলে সেটাই সঠিক করতে চাইলে ট্যাপ করলেই
+                            "সঠিক উত্তর" বক্সে বসে যায় — নতুন করে টাইপ করা লাগে না। */}
+                        {(it.opt1.trim()||it.opt2.trim()||it.opt3.trim()||it.opt4.trim())&&(
+                          <div style={{display:"flex",gap:4,marginTop:4,flexWrap:"wrap"}}>
+                            {["opt1","opt2","opt3","opt4"].map(k=>it[k].trim()&&(
+                              <button key={k} type="button" onClick={()=>updateItem(activeTab,card.id,it.id,{answer:it[k]})}
+                                style={{fontSize:9.5,padding:"3px 8px",borderRadius:6,cursor:"pointer",
+                                  border:`1px solid ${norm(it[k])===norm(it.answer)?"#22c55e":PC.border}`,
+                                  background:norm(it[k])===norm(it.answer)?"#22c55e22":"transparent",
+                                  color:norm(it[k])===norm(it.answer)?"#16a34a":PC.muted,fontWeight:700}}>
+                                {it[k].length>16?it[k].slice(0,16)+"…":it[k]}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </>
+                    ) : isFillblank ? (
                       <div style={{fontSize:10,color:PC.gold,fontWeight:700,marginTop:4}}>
                         🖍 প্রশ্নে মার্ক করা শব্দই Answer হিসেবে অটো সেভ হবে — আলাদা করে টাইপ করা লাগবে না
                       </div>
@@ -1467,7 +1611,16 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                 />
               </div>
               <div className="fld" style={{marginBottom:8}}>
-                <label>❓ প্রশ্ন</label>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+                  <label style={{margin:0}}>❓ প্রশ্ন</label>
+                  {/* 🆕 flat কার্ডেও (গণিত/GK) Written/MCQ টগল — একই প্যাটার্ন। */}
+                  <button type="button" onClick={()=>updateCard(activeTab,card.id,{qtype:card.qtype==="mcq"?"written":"mcq"})}
+                    style={{background:card.qtype==="mcq"?"#6d28d922":"transparent",color:card.qtype==="mcq"?"#6d28d9":PC.muted,
+                      border:`1px solid ${card.qtype==="mcq"?"#6d28d944":PC.border}`,borderRadius:6,
+                      fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>
+                    {card.qtype==="mcq"?"❓ MCQ":"✍️ Written"}
+                  </button>
+                </div>
                 <textarea
                   ref={el=>{flatQRefs.current[card.id]=el;}}
                   className="ta" style={{...pcField,minHeight:70}} value={card.question}
@@ -1476,13 +1629,44 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   placeholder="প্রশ্ন লিখো..."/>
               </div>
               <div className="fld" style={{marginBottom:8}}>
-                <label>✅ উত্তর</label>
+                <label>{card.qtype==="mcq"?"✅ সঠিক উত্তর":"✅ উত্তর"}</label>
                 <textarea
                   ref={el=>{flatARefs.current[card.id]=el;}}
                   className="ta" style={{...pcField,minHeight:50,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}} value={card.answer}
                   onChange={e=>updateCard(activeTab,card.id,{answer:e.target.value})}
                   onKeyDown={e=>handleFlatAKeyDown(e,activeTab,card.id,paper[activeTab]||[],ci)}
-                  placeholder={activeTab==="math"?"চূড়ান্ত উত্তর (ধাপে-ধাপে সমাধান নিচে ব্যাখ্যায়)...":"উত্তর লিখো..."}/>
+                  placeholder={card.qtype==="mcq"?"সঠিক উত্তর লিখো...":activeTab==="math"?"চূড়ান্ত উত্তর (ধাপে-ধাপে সমাধান নিচে ব্যাখ্যায়)...":"উত্তর লিখো..."}/>
+                {card.qtype==="mcq"&&(
+                  <>
+                    <button type="button" onClick={()=>generateMcqOptions(activeTab,card.id,card.id,card.question,card.answer,true)}
+                      disabled={mcqGeneratingId===card.id}
+                      style={{width:"100%",marginTop:6,background:"#6d28d922",color:"#6d28d9",border:"1px solid #6d28d944",
+                        borderRadius:7,fontSize:11,fontWeight:700,padding:"7px 0",cursor:"pointer"}}>
+                      {mcqGeneratingId===card.id?"⏳ তৈরি হচ্ছে...":"🤖 AI দিয়ে ৩টা ভুল অপশন বানাও"}
+                    </button>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:6}}>
+                      {["opt1","opt2","opt3","opt4"].map((k,oi)=>(
+                        <input key={k} className="inp" style={{...pcField,fontSize:11.5,
+                            borderColor:card[k].trim()&&norm(card[k])===norm(card.answer)?"#22c55e":PC.border}}
+                          value={card[k]} onChange={e=>updateCard(activeTab,card.id,{[k]:e.target.value})}
+                          placeholder={`অপশন ${String.fromCharCode(65+oi)}`}/>
+                      ))}
+                    </div>
+                    {(card.opt1.trim()||card.opt2.trim()||card.opt3.trim()||card.opt4.trim())&&(
+                      <div style={{display:"flex",gap:4,marginTop:4,flexWrap:"wrap"}}>
+                        {["opt1","opt2","opt3","opt4"].map(k=>card[k].trim()&&(
+                          <button key={k} type="button" onClick={()=>updateCard(activeTab,card.id,{answer:card[k]})}
+                            style={{fontSize:9.5,padding:"3px 8px",borderRadius:6,cursor:"pointer",
+                              border:`1px solid ${norm(card[k])===norm(card.answer)?"#22c55e":PC.border}`,
+                              background:norm(card[k])===norm(card.answer)?"#22c55e22":"transparent",
+                              color:norm(card[k])===norm(card.answer)?"#16a34a":PC.muted,fontWeight:700}}>
+                            {card[k].length>16?card[k].slice(0,16)+"…":card[k]}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
               </div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
                 <div className="fld" style={{marginBottom:0}}>
