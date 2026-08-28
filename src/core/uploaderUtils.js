@@ -193,7 +193,13 @@ function buildSheetRow({item,subject,subtopic,qtype,audienceTags,mainQpaper,subj
     correct:item.correct||"",
     // ── লিগেসি নাম-ভিত্তিক কলাম (backward-compat, পুরনো duplicate-check ও
     // Sheet readability এখনো এগুলো ব্যবহার করে) ──
-    subject, sub_topic:subtopic||subject,
+    // 🐛 ফিক্স (QBank-এ "Topic" কলাম সবসময় ফাঁকা থাকা): GAS-এর bFieldMap-এ
+    // "sub_topic" আর "topic" — দুটো *আলাদা* কলাম হিসেবে ম্যাপ করা আছে, কিন্তু
+    // এখান থেকে আগে শুধু sub_topic পাঠানো হতো — তাই "topic" কলাম কখনো মান
+    // পেতোই না। এখন দুটোতেই একই মান পাঠানো হচ্ছে — কোন কলামটা Sheet-এ আসলে
+    // আছে তা নিয়ে চিন্তা না করেই সঠিক জায়গায় বসে যাবে। (Sheet-এ দুটো কলামই
+    // থাকলে সাময়িকভাবে দুটোতেই একই মান দেখাবে — একটা ডিলিট করে দিলেই পরিষ্কার।)
+    subject, sub_topic:subtopic||subject, topic:subtopic||subject,
     explanation:item.explanation||"",
     qType:isWritten?"Written":(qtype==="Study"?"Study":"MCQ"),
     technique:item.technique||"", prevExam:"", mainQpaper:mainQpaper||"",
