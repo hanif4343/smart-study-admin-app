@@ -693,20 +693,47 @@ function mergedTopicOptionsFor(refData,subjIds){
   return Array.from(seen.values()).sort((a,b)=>b.usage-a.usage||a.name.localeCompare(b.name,"bn"));
 }
 
-// 🆕 হেডিং ও টপিক প্রায় একই রকম হয় (যেমন হেডিং: "সন্ধি বিচ্ছেদ করুন:" → Topic:
-// "সন্ধি বিচ্ছেদ")। হেডিং বক্স থেকে বেরোনোর (blur) সাথে সাথে — যদি Topic এখনো
-// খালি থাকে — হেডিং থেকে সাধারণ নির্দেশনা-শব্দ (করুন/লিখুন/নির্ণয় করো ইত্যাদি) ও
-// শেষের : - বাদ দিয়ে একটা "গেস" বানানো হয়; বিদ্যমান Topic-লিস্টে হুবহু মিলে গেলে
-// সেটাই সিলেক্ট হয়ে যায় (subject_id সহ), না মিললেও গেসটা Topic বক্সে বসিয়ে দেওয়া
-// হয় (এডিট করে নেওয়া যায়) — প্রতিটা সাব-পার্ট গ্রুপে আলাদা করে Topic টাইপ করা
-// লাগে না, কাজ অনেক দ্রুত হয়।
+// 🐛 ফিক্স (হেডিং-Topic ম্যাচিং ভুল ছিল): আগে হেডিং থেকে বাদ দেওয়া নির্দেশনা-শব্দের
+// পর যা বাকি থাকতো সেটাকেই হুবহু একটা "নতুন Topic" হিসেবে বসিয়ে দেওয়া হতো (যেমন
+// "কারক নির্ণয় কর" থেকে "কারক নির্ণয় কর" নামেই একটা Topic!) — অথচ বিদ্যমান
+// Topic-লিস্টে হয়তো "কারক ও বিভক্তি" নামে টপিকটা আগে থেকেই আছে। এখন আসল
+// পদ্ধতি: হেডিং পরিষ্কার করে (নির্দেশনা-শব্দ বাদ দিয়ে) তার প্রতিটা শব্দ বিদ্যমান
+// Topic-লিস্টের প্রতিটা অপশনের শব্দের সাথে মিলিয়ে স্কোর করা হয় (word-overlap) —
+// সবচেয়ে বেশি মিল থাকা Topic-টাই বেছে নেওয়া হয় (কনফিডেন্ট মিল হলে তবেই)। ভালো
+// মিল না পেলে Topic ফাঁকাই রাখা হয় — নতুন কোনো Topic নিজে থেকে তৈরি করা হয় না,
+// অ্যাডমিন নিজে বেছে নেবে।
 function headingToTopicGuess(heading){
   let s=(heading||"").toString().trim();
   if(!s) return "";
-  s=s.replace(/[:：\-–—]+\s*$/,"").trim();
-  s=s.replace(/(নির্ণয়\s*করু?ন|নির্ণয়\s*করো|লিখু?ন|লিখো|করু?ন|করো|বলু?ন|বলো|দাও|দিন|চিহ্নিত\s*করু?ন)\s*$/,"").trim();
-  s=s.replace(/[:：\-–—,।]+\s*$/,"").trim();
+  // 🐛 ফিক্স: হেডিং প্রায়ই বাংলা দাঁড়ি (।) দিয়ে শেষ হয় (যেমন "কারক নির্ণয় কর।")
+  // — আগে punctuation স্ট্রিপ করা হতো ক্রিয়া-রূপ বাদ দেওয়ার *আগে*, ফলে ক্রিয়া-রূপ
+  // (কর/করো ইত্যাদি) স্ট্রিং-এর একদম শেষে না পড়ায় (পরে "।" থাকায়) regex ম্যাচই
+  // করতো না। এখন punctuation স্ট্রিপ হয় ক্রিয়া-রূপ বাদ দেওয়ার আগে ও পরে — দুইবার।
+  const stripPunct=x=>x.replace(/[:：\-–—,।৷.!?]+\s*$/,"").trim();
+  s=stripPunct(s);
+  s=s.replace(/(নির্ণয়|চিহ্নিত|প্রকাশ)?\s*(করু?ন|করো|কর|লিখু?ন|লিখো|লিখ|লেখ|বলু?ন|বলো|বল|দাও|দিন)\s*$/,"").trim();
+  s=stripPunct(s);
   return s;
+}
+const normWordsBn=s=>norm(s).split(/\s+/).filter(Boolean);
+function bestTopicMatchForHeading(heading,options){
+  const cleaned=headingToTopicGuess(heading);
+  if(!cleaned)return null;
+  const hWords=normWordsBn(cleaned);
+  if(!hWords.length)return null;
+  let best=null,bestScore=0;
+  (options||[]).forEach(opt=>{
+    const oWords=normWordsBn(opt.name);
+    if(!oWords.length)return;
+    let score=0;
+    hWords.forEach(hw=>{
+      if(oWords.includes(hw))score+=2; // হুবহু শব্দ মিল
+      else if(oWords.some(ow=>ow.length>=2&&hw.length>=2&&(ow.includes(hw)||hw.includes(ow))))score+=1; // আংশিক মিল
+    });
+    const normScore=score/Math.max(hWords.length,oWords.length);
+    if(normScore>bestScore){ bestScore=normScore; best=opt; }
+  });
+  return bestScore>=0.5?best:null; // যথেষ্ট কনফিডেন্ট না হলে null (ফাঁকা থাকবে)
 }
 
 // ── PAPER COMPOSER-এর নিজস্ব হালকা "পরীক্ষার খাতা" থিম ("black a type kora jhamela") —
@@ -1242,31 +1269,27 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   <input className="inp" style={pcField} placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"' value={card.heading}
                     onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}
                     onBlur={()=>{
-                      // 🆕 হেডিং থেকে বেরোলে (Topic এখনো খালি থাকলে) হেডিং থেকে
-                      // Topic আন্দাজ করে অটো-ফিল করে — দেখো headingToTopicGuess()।
-                      // বিদ্যমান Topic-এ হুবহু মিললে (এই কার্ডের subject-জোড়ার
-                      // মধ্যে) সেটাই id-সহ সিলেক্ট হয়, subjectChoice টগলও তখন
-                      // সেই টপিকের আসল subject অনুযায়ী অটো বদলে যায়।
+                      // 🐛 ফিক্স (ভুল ম্যাচিং — হুবহু-বাক্য না মিলিয়ে বিদ্যমান
+                      // Topic-লিস্টের সাথে fuzzy word-overlap মেলানো হয়, দেখো
+                      // bestTopicMatchForHeading()। কনফিডেন্ট মিল না পেলে Topic
+                      // ফাঁকাই থাকে — নতুন কিছু বসানো হয় না, অ্যাডমিন নিজে বেছে
+                      // নেবে। মিললে subjectChoice টগলও সেই টপিকের আসল subject
+                      // অনুযায়ী অটো বদলে যায়। ──
                       if(card.topicSel.name.trim())return;
-                      const guess=headingToTopicGuess(card.heading);
-                      if(!guess)return;
                       const options=tabDef.subjectChoices
                         ? mergedTopicOptionsFor(refData,tabDef.subjectChoices.map(c=>subjectOptions.find(s=>s.name===c.name)?.id).filter(Boolean))
                         : topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id);
-                      const match=options.find(o=>norm(o.name)===norm(guess));
-                      if(match){
-                        const patch={topicSel:{id:match.id,name:match.name}};
-                        if(tabDef.subjectChoices){
-                          const ex=(refData?.topics||[]).find(tp=>tp.topic_id===match.id);
-                          if(ex){
-                            const idx=tabDef.subjectChoices.findIndex(c=>subjectOptions.find(s=>s.name===c.name)?.id===ex.subject_id);
-                            if(idx>=0) patch.subjectChoice=tabDef.subjectChoices[idx].key;
-                          }
+                      const match=bestTopicMatchForHeading(card.heading,options);
+                      if(!match)return; // ভালো মিল পাওয়া যায়নি — ফাঁকাই থাক
+                      const patch={topicSel:{id:match.id,name:match.name}};
+                      if(tabDef.subjectChoices){
+                        const ex=(refData?.topics||[]).find(tp=>tp.topic_id===match.id);
+                        if(ex){
+                          const idx=tabDef.subjectChoices.findIndex(c=>subjectOptions.find(s=>s.name===c.name)?.id===ex.subject_id);
+                          if(idx>=0) patch.subjectChoice=tabDef.subjectChoices[idx].key;
                         }
-                        updateCard(activeTab,card.id,patch);
-                      } else {
-                        updateCard(activeTab,card.id,{topicSel:{id:"",name:guess}});
                       }
+                      updateCard(activeTab,card.id,patch);
                     }}
                     onKeyDown={e=>{
                       // 🐛 ফিক্স (হেডিং থেকে Tab মারলে এলোমেলো জায়গায় চলে যাওয়া):
