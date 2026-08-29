@@ -10,7 +10,7 @@ import {
   LS_DRAFT_BULK, loadDraft, saveDraft, clearDraft
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
-import { resolveOrCreateReference, resolveSubjectTopicForEntries } from "../core/referenceHelpers.js";
+import { resolveOrCreateReference, resolveSubjectTopicForEntries, norm } from "../core/referenceHelpers.js";
 import { archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
@@ -209,6 +209,45 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const handleMode=(v)=>{setMode(v);runValidate(bulkText,v,qtype);};
   const handleFallbackSubject=(v)=>{setFallbackSubject(v);runValidate(bulkText,mode,qtype,v,undefined);};
   const handleFallbackTopic=(v)=>{setFallbackTopic(v);runValidate(bulkText,mode,qtype,undefined,v);};
+
+  // ── 🆕 Subject/Topic ডুপ্লিকেট-প্রিভিউ (submit করার আগেই) — শুধু QBank
+  // Written/MCQ ইনলাইন মোডে দরকার (Quiz/Study dropdown-ভিত্তিক, ওখানে ডুপ্লিকেট
+  // হওয়ার সুযোগই নেই)। bulkText/fallback বদলালে debounce করে
+  // resolveSubjectTopicForEntries()-কে dryRun মোডে চালানো হয় (কিছু তৈরি হয় না,
+  // শুধু "কোনগুলো নতুন হবে" + fuzzy "did you mean?" বের করে)। ──
+  const[dupPreview,setDupPreview]=useState(null); // {wouldCreate:[...]} | null
+  const[dupPreviewLoading,setDupPreviewLoading]=useState(false);
+  useEffect(()=>{
+    const eff=getEffectiveType(mode,qtype);
+    const isInlineEff=(eff==="MCQ"||eff==="Written");
+    if(!isInlineEff||!bulkText.trim()||!refData){ setDupPreview(null); return; }
+    let cancelled=false;
+    const t=setTimeout(async()=>{
+      setDupPreviewLoading(true);
+      const entries=getEntries(bulkText).map(e=>parseEntry(e,eff)).filter(r=>r.ok);
+      if(!entries.length){ if(!cancelled){ setDupPreview(null); setDupPreviewLoading(false);} return; }
+      const res=await resolveSubjectTopicForEntries({
+        entries, subjectOptions, topicsAll:refData?.topics||[], sheet:mode,
+        fallbackSubject, fallbackTopic, dryRun:true,
+      });
+      if(cancelled)return;
+      setDupPreview(res.ok?res:null);
+      setDupPreviewLoading(false);
+    },700);
+    return ()=>{ cancelled=true; clearTimeout(t); };
+  },[bulkText,mode,qtype,fallbackSubject,fallbackTopic,refData]);
+
+  // 🆕 Audience Tag ডিফল্ট "Job" — Single Entry-এর সাথে সামঞ্জস্য রাখতে। একবারই
+  // প্রযোজ্য হয় (tagOptions লোড হওয়ার পর), ব্যবহারকারী নিজে বদলালে আর ছোঁয়া হয় না।
+  const defaultTagAppliedRef=useRef(false);
+  useEffect(()=>{
+    if(defaultTagAppliedRef.current||!refData)return;
+    const opts=refData.tags||[];
+    if(!opts.length)return;
+    const job=opts.find(tg=>norm(tg.tag_name)==="job");
+    if(job){ setTagIds([job.tag_id]); }
+    defaultTagAppliedRef.current=true;
+  },[refData]);
 
   // ── ⚠️ error/skip হওয়া লাইনে এক-ট্যাপে জাম্প — টেক্সটএরিয়ায় ওই লাইনটা
   // সিলেক্ট করে স্ক্রল করে দেয়, মডাল বন্ধ হয়ে যায়, admin সরাসরি ঠিক করতে পারে।
@@ -619,6 +658,38 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
             <span key={x.label} onClick={()=>{setShowDetail(x.filter);}} style={{fontSize:11,fontWeight:800,padding:"4px 12px",borderRadius:20,color:x.color,background:x.bg,cursor:"pointer",border:`1px solid ${x.color}44`}}>{x.label} 👁</span>
           ))}
         </div>
+      )}
+
+      {/* 🆕 Subject/Topic ডুপ্লিকেট-প্রিভিউ — submit করার আগেই দেখায় কোন কোন
+          Subject/Topic *নতুন* হিসেবে তৈরি হবে (এখনো তৈরি হয়নি, শুধু প্রিভিউ)।
+          টাইপো থাকলে কাছাকাছি বিদ্যমান নাম (fuzzy "did you mean?") দেখায়, যাতে
+          ভুলবশত ডুপ্লিকেট Subject/Topic তৈরি হওয়ার আগেই ধরা পড়ে। ── */}
+      {dupPreviewLoading && (
+        <div style={{fontSize:10.5,color:C.muted,marginBottom:8}}>⏳ Subject/Topic চেক করা হচ্ছে...</div>
+      )}
+      {!dupPreviewLoading && dupPreview && dupPreview.wouldCreate && (
+        dupPreview.wouldCreate.length===0 ? (
+          <div style={{fontSize:10.5,color:"#10b981",marginBottom:8}}>✅ সব Subject/Topic বিদ্যমান তালিকার সাথে মিলেছে — নতুন কিছু তৈরি হবে না</div>
+        ) : (
+          <div style={{background:"#1c1004",border:"1px solid #d9770644",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
+            <div style={{fontSize:11.5,fontWeight:800,color:"#f59e0b",marginBottom:6}}>
+              🆕 {dupPreview.wouldCreate.length}টা নতুন Subject/Topic তৈরি হবে
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:5}}>
+              {dupPreview.wouldCreate.map((w,i)=>(
+                <div key={i} style={{fontSize:10.5,color:C.text}}>
+                  <span style={{fontWeight:700}}>{w.type==="subject"?"📚 Subject":"📌 Topic"}:</span> "{w.name}"
+                  {w.parentSubjectName?<span style={{color:C.muted}}> ({w.parentSubjectName}-এর আন্ডারে)</span>:null}
+                  {w.similarTo&&(
+                    <div style={{color:"#ef4444",marginTop:2}}>
+                      ⚠️ কাছাকাছি বিদ্যমান নাম আছে: <b>"{w.similarTo}"</b> — এটাই বোঝাতে চেয়েছ? (টাইপো হলে লাইনে/Fallback ফিল্ডে ঠিক করে নাও)
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )
       )}
 
       {/* Validation Detail Modal */}
