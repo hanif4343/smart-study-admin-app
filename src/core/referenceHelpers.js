@@ -11,6 +11,30 @@ import { addReferenceItem } from "./sheetSave.js";
 
 const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
 
+// 🆕 ফাজি "did you mean?" ম্যাচার — Single Entry-এর heading→Topic ম্যাচিং-এ যেই
+// word-overlap স্কোরিং ব্যবহার হয়েছিল, ঠিক সেই একই পদ্ধতি এখানেও (শেয়ার্ড, তাই
+// দুই জায়গায় আলাদা লজিক রাখতে হয় না)। বাল্ক আপলোডে টাইপো হলে (যেমন "বাংলা
+// ব্যাকরন" বনাম বিদ্যমান "বাংলা ব্যাকরণ") নতুন ডুপ্লিকেট Subject/Topic তৈরি
+// হয়ে যাওয়ার আগেই admin-কে সতর্ক করতে ব্যবহার হয়, দেখো resolveSubjectTopicForEntries()-এর dryRun মোড।
+const normWordsRef=s=>norm(s).split(/\s+/).filter(Boolean);
+function fuzzyBestMatch(name,options){
+  const words=normWordsRef(name);
+  if(!words.length||!options||!options.length)return null;
+  let best=null,bestScore=0;
+  options.forEach(o=>{
+    const oWords=normWordsRef(o.name);
+    if(!oWords.length)return;
+    let score=0;
+    words.forEach(w=>{
+      if(oWords.includes(w))score+=2;
+      else if(oWords.some(ow=>ow.length>=2&&w.length>=2&&(ow.includes(w)||w.includes(ow))))score+=1;
+    });
+    const normScore=score/Math.max(words.length,oWords.length);
+    if(normScore>bestScore){bestScore=normScore;best=o;}
+  });
+  return bestScore>=0.5?{...best,score:bestScore}:null;
+}
+
 /**
  * sel: {id,name} — TypeaheadCombo-র value (id ফাঁকা মানে বিদ্যমান তালিকায় হুবহু মিল নেই)
  * refType: "posts" | "institutions" | "subjects" | "topics" (addReferenceItem-এর refType)
@@ -42,16 +66,22 @@ async function resolveOrCreateReference({sel,refType,options,gasSecret,push,pare
  * subjectOptions: [{subject_id,subject_name}] — শুধু বর্তমান sheet-এর (মোড অনুযায়ী ফিল্টার করা)
  * topicsAll: [{topic_id,topic_name,subject_id}] — সব টপিক (ফাংশন নিজেই subject_id দিয়ে ফিল্টার করে)
  * sheet: "Quiz"|"QBank"|"Study" — নতুন Subject তৈরি হলে কোন ট্যাবে স্কোপ হবে
+ * dryRun: true হলে **কিছুই তৈরি করে না** (addReferenceItem কল হয় না) — শুধু বলে দেয়
+ *   কোন কোন Subject/Topic নতুন হিসেবে ধরা পড়েছে (wouldCreate), প্রতিটার জন্য
+ *   বিদ্যমান তালিকায় কাছাকাছি নাম থাকলে সেটাও (fuzzy "did you mean?") — সাবমিটের
+ *   আগে preview দেখানোর জন্য। এটাই আসল সিদ্ধান্ত না, শুধু তথ্য।
  *
- * ফেরত: {ok:true, resolved:[{item,subjectId,topicId,subjectName,topicName}], anyCreated}
+ * ফেরত (dryRun না হলে, আগের মতোই): {ok:true, resolved:[{item,subjectId,topicId,subjectName,topicName}], anyCreated}
+ * ফেরত (dryRun হলে): {ok:true, wouldCreate:[{type,name,sheet?,parentSubjectName?,similarTo?}]}
  *      | {ok:false, reason}
  */
-async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,gasSecret,sheet,push,fallbackSubject,fallbackTopic}){
+async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,gasSecret,sheet,push,fallbackSubject,fallbackTopic,dryRun}){
   const subjCache=new Map(); // norm(name) -> subject_id
   const topicCache=new Map(); // subject_id+"|"+norm(name) -> topic_id
   let curSubjects=subjectOptions||[], curTopics=topicsAll||[];
   let anyCreated=false;
   const resolved=[];
+  const wouldCreate=[]; // শুধু dryRun-এ ব্যবহৃত — deduped (subjCache/topicCache-এর কারণে একই নাম দুইবার ঢোকে না)
   for(const item of entries){
     const sName=((item.subject&&item.subject.trim())||fallbackSubject||"").trim();
     const tName=((item.topic&&item.topic.trim())||fallbackTopic||"").trim();
@@ -61,7 +91,13 @@ async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,g
     if(!sId){
       const hit=curSubjects.find(s=>norm(s.subject_name)===sKey);
       if(hit) sId=hit.subject_id;
-      else{
+      else if(dryRun){
+        // 🆕 dry-run: কিছু তৈরি না করেই placeholder id, শুধু প্রিভিউ-লিস্টে যোগ করা
+        const similar=fuzzyBestMatch(sName,curSubjects.map(s=>({id:s.subject_id,name:s.subject_name})));
+        wouldCreate.push({type:"subject",name:sName,sheet,similarTo:similar?similar.name:null});
+        sId="__NEW_SUBJECT__"+sKey;
+        curSubjects=[...curSubjects,{subject_id:sId,subject_name:sName,sheet}];
+      } else {
         const res=await resolveOrCreateReference({sel:{id:"",name:sName},refType:"subjects",options:curSubjects.map(s=>({id:s.subject_id,name:s.subject_name})),gasSecret,sheet,push});
         if(!res.ok) return{ok:false,reason:`Subject "${sName}" যোগ/খুঁজে পাওয়া যায়নি`};
         sId=res.id;
@@ -74,7 +110,12 @@ async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,g
     if(!tId){
       const hit=curTopics.find(t=>t.subject_id===sId && norm(t.topic_name)===norm(tName));
       if(hit) tId=hit.topic_id;
-      else{
+      else if(dryRun){
+        const similar=fuzzyBestMatch(tName,curTopics.filter(t=>t.subject_id===sId).map(t=>({id:t.topic_id,name:t.topic_name})));
+        wouldCreate.push({type:"topic",name:tName,parentSubjectName:sName,similarTo:similar?similar.name:null});
+        tId="__NEW_TOPIC__"+tKey;
+        curTopics=[...curTopics,{topic_id:tId,topic_name:tName,subject_id:sId}];
+      } else {
         const res=await resolveOrCreateReference({sel:{id:"",name:tName},refType:"topics",options:curTopics.filter(t=>t.subject_id===sId).map(t=>({id:t.topic_id,name:t.topic_name})),gasSecret,parentId:sId,push});
         if(!res.ok) return{ok:false,reason:`Topic "${tName}" যোগ/খুঁজে পাওয়া যায়নি`};
         tId=res.id;
@@ -84,7 +125,8 @@ async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,g
     }
     resolved.push({item,subjectId:sId,topicId:tId,subjectName:sName,topicName:tName});
   }
+  if(dryRun) return{ok:true,wouldCreate,resolved};
   return{ok:true,resolved,anyCreated};
 }
 
-export { resolveOrCreateReference, resolveSubjectTopicForEntries, norm };
+export { resolveOrCreateReference, resolveSubjectTopicForEntries, fuzzyBestMatch, norm };
