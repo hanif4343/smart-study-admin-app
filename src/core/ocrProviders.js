@@ -94,16 +94,29 @@ const OCR_NOISE_RULES=`
 const OCR_SPLIT_RULES=`
 - কোনো নম্বরের নিচে একাধিক উপ-প্রশ্ন/ভাগ থাকলে (ক/খ/গ/ঘ/ঙ, a/b/c/d/e, ১/২/৩ ইত্যাদি দিয়ে চিহ্নিত) — প্রতিটা উপ-প্রশ্নকে সম্পূর্ণ আলাদা, স্বতন্ত্র entry হিসেবে দাও। কখনোই একাধিক উপ-প্রশ্ন একসাথে জোড়া লাগিয়ে একটা entry বানাবে না।
 - প্রতিটা উপ-প্রশ্নের entry-তে মূল নির্দেশনা বাক্যটাও (যেমন "সন্ধিবিচ্ছেদ করুন", "Fill in the blank with appropriate preposition") পুনরাবৃত্তি করে জুড়ে দাও, যাতে সেই entry-টা প্রসঙ্গ ছাড়াই একা পড়লেও বোঝা যায়। উদাহরণ: "৩. সন্ধিবিচ্ছেদ করুন: ক. বিদ্যালয় খ. নায়ক" থেকে দুটো আলাদা entry হবে — প্রশ্ন="সন্ধিবিচ্ছেদ করুন: বিদ্যালয়", প্রশ্ন="সন্ধিবিচ্ছেদ করুন: নায়ক" — একটাতে সব জোড়া লাগানো entry বানাবে না।`;
+// 🆕 প্রতিটা প্রশ্নের নিজস্ব Subject+Topic বের করার নিয়ম — একটা ছবিতে/পাতায় একসাথে
+// অনেকগুলো ভিন্ন Topic থাকতে পারে (যেমন এক পাতায় সন্ধি বিচ্ছেদ + বাগধারা + এক কথায়
+// প্রকাশ + Gender + Number + Preposition — সবগুলো আলাদা Topic)। আগে পুরো ছবির জন্য
+// একটাই Subject/Topic ধরে নেওয়া হতো (উপরের ফিক্সড ফিল্ড থেকে) — এখন প্রতিটা
+// প্রশ্নের কাছের নির্দেশনা/heading (যেমন "সন্ধি বিচ্ছেদ করুন:") থেকেই Topic বের
+// করা হয়, ঠিক Single Entry-তে heading→Topic auto-match যেভাবে কাজ করে সেই একই
+// স্পিরিটে (নির্দেশনা-ক্রিয়া বাদ দিয়ে বাকিটাই Topic)।
+const OCR_TOPIC_RULES=`
+Subject/Topic বের করার নিয়ম (প্রতিটা প্রশ্নের জন্য আলাদাভাবে, একই পাতায় একাধিক ভিন্ন Topic থাকতে পারে):
+- প্রতিটা প্রশ্নের ঠিক উপরে/কাছে যেই নির্দেশনা বাক্য বা সেকশন-হেডিং আছে (যেমন "সন্ধি বিচ্ছেদ করুন:", "শুদ্ধ বানান লিখুন:", "বাগধারার অর্থ লিখুন:", "এক কথায় প্রকাশ করুন:", "Change the Gender:", "Change the Number:", "Write the appropriate preposition:") সেটা থেকেই Topic বের করো — নির্দেশনা-ক্রিয়া অংশ (করুন/করো/লিখুন/লেখো/Write/Change ইত্যাদি) বাদ দিয়ে যা বাকি থাকে সেটাই Topic (যেমন "সন্ধি বিচ্ছেদ করুন:" → Topic: "সন্ধি বিচ্ছেদ", "Change the Gender:" → Topic: "Gender", "বাগধারার অর্থ লিখুন:" → Topic: "বাগধারা")।
+- পাতার উপরে যেই বিষয়ের নাম লেখা আছে (যেমন "বাংলা", "ইংরেজি", "গণিত", "সাধারণ জ্ঞান") সেটা দিয়ে Subject বের করো, কিন্তু শুধু এই নির্দিষ্ট নামগুলোই ব্যবহার করবে — "বাংলা" দেখলে "বাংলা ব্যাকরণ" (ব্যাকরণ/বানান/সন্ধি/কারক/বাগধারা টাইপ প্রশ্নে) অথবা "বাংলা সাহিত্য" (কবি/লেখক/গ্রন্থ টাইপ প্রশ্নে) বসাও, "ইংরেজি" দেখলে "English Grammar" বা "English Literature", "গণিত" দেখলে "গণিত", "সাধারণ জ্ঞান" দেখলে "সাধারণ জ্ঞান" — নিজে থেকে নতুন Subject নাম বানিও না।
+- একটা প্রশ্নের নির্দেশনা/সেকশন-হেডিং খুঁজে না পেলে সেই প্রশ্নের Subject/Topic ফিল্ড খালি রাখো (আন্দাজ করে কিছু বসিও না)।`;
 const OCR_PROMPT_FORMATS={
   MCQ:`তুমি একজন বাংলা MCQ প্রশ্নপত্র formatter।
 নিচের OCR text থেকে সব MCQ প্রশ্ন বের করে নিচের format-এ দাও।
-প্রশ্ন;অপশন১;অপশন২;অপশন৩;অপশন৪;সঠিকউত্তর
+প্রশ্ন;অপশন১;অপশন২;অপশন৩;অপশন৪;সঠিকউত্তর;Subject;Topic
 সঠিক উত্তর বের করার নিয়ম (এই ক্রম অনুযায়ী চেষ্টা করো):
 ১. যদি কোনো অপশনের পাশে/আগে ভরাট বা কালো বৃত্ত/বুলেট চিহ্ন (যেমন ●, ⬤, ⚫, বা কালো রঙে হাইলাইট করা বৃত্ত) থাকে আর বাকিগুলোর পাশে ফাঁকা/সাদা বৃত্ত (○, ◯) থাকে — তাহলে যেটার পাশে ভরাট চিহ্ন সেটাই সঠিক উত্তর।
 ২. যদি প্রশ্নের শেষে আলাদা "উ." বা "Ans" বা "Answer" লাইনে ক/খ/গ/ঘ বা A/B/C/D লেখা থাকে — সেই অক্ষরের পজিশন অনুযায়ী অপশন ধরবে (ক বা A = ১ম অপশন, খ বা B = ২য়, গ বা C = ৩য়, ঘ বা D = ৪র্থ)।
 ৩. যদি উত্তর হিসেবে সরাসরি কোনো অপশনের হুবহু টেক্সট লেখা থাকে — সেটাই ব্যবহার করো।
 ৪. উপরের কোনোটাই না বুঝলে, প্রশ্নের বিষয়বস্তু অনুযায়ী তোমার নিজের জ্ঞান দিয়ে সবচেয়ে সম্ভাব্য সঠিক উত্তরটা অনুমান করো — কখনোই সঠিক উত্তর ফাঁকা রাখবে না।
 ${OCR_CORRECTION_RULES}
+${OCR_TOPIC_RULES}
 RULES:
 - শুধু formatted data দাও, কোনো label বা explanation নয়
 - Serial number বাদ দাও
@@ -112,19 +125,22 @@ RULES:
 ${OCR_NOISE_RULES}
 - সঠিক উত্তর ফিল্ডে সবসময় অপশনের আসল টেক্সট বসাবে (ক/খ/গ/ঘ বা A/B/C/D অক্ষর নয়)
 - field-এ ; থাকলে | দিয়ে replace করো
-- কোনো প্রশ্ন বাদ দিও না`,
+- কোনো প্রশ্ন বাদ দিও না
+- Subject/Topic বের করতে না পারলে সেই ফিল্ড খালি রাখো (নিজে থেকে বানিয়ে বসাবে না) — খালি থাকলে অ্যাপ নিজে ফলব্যাক ব্যবহার করবে`,
   Written:`তুমি একজন বাংলা প্রশ্নপত্র formatter।
 নিচের OCR text থেকে সব প্রশ্ন-উত্তর বের করে নিচের format-এ দাও, প্রতিটি entry {} দিয়ে wrap করে:
-{প্রশ্ন;উত্তর}
+{প্রশ্ন;উত্তর;Subject;Topic}
 ${OCR_CORRECTION_RULES}
 ${OCR_SPLIT_RULES}
+${OCR_TOPIC_RULES}
 RULES:
 - শুধু formatted data দাও, কোনো label বা explanation নয়
 - Serial number বাদ দাও
 - পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
 ${OCR_NOISE_RULES}
 - field-এ ; থাকলে | দিয়ে replace করো
-- কোনো প্রশ্ন বাদ দিও না`,
+- কোনো প্রশ্ন বাদ দিও না
+- Subject/Topic বের করতে না পারলে সেই ফিল্ড খালি রাখো (নিজে থেকে বানিয়ে বসাবে না) — খালি থাকলে অ্যাপ নিজে ফলব্যাক ব্যবহার করবে`,
   Study:`তুমি একজন বাংলা প্রশ্নপত্র formatter।
 নিচের OCR text থেকে সব প্রশ্ন-উত্তর বের করে নিচের format-এ দাও, প্রতিটি entry {} দিয়ে wrap করে:
 {প্রশ্ন;উত্তর}
@@ -142,6 +158,59 @@ ${OCR_NOISE_RULES}
 function buildOcrPrompt(qtype,ocrText){
   const tmpl=OCR_PROMPT_FORMATS[qtype]||OCR_PROMPT_FORMATS.MCQ;
   return `${tmpl}\n=== OCR TEXT ===\n${ocrText}`;
+}
+
+/* ══════════ 🆕 Group-aware OCR প্রম্পট — Single Entry-এর কার্ড/সাব-পার্ট UI-তে
+   সরাসরি বসানোর জন্য ══════════
+   buildOcrPrompt()/OCR_SPLIT_RULES-এর উদ্দেশ্য ছিল প্রতিটা সাব-পার্টকে *আলাদা*
+   লাইনে ভেঙে ফেলা (Bulk Uploader-এর জন্য, যেখানে flat লাইন-ভিত্তিক টেক্সট লাগে)।
+   কিন্তু Single Entry-এর কার্ড UI-তে বসাতে হলে ঠিক উল্টোটা দরকার — একই হেডিং-এর
+   নিচের সব সাব-পার্ট *একসাথে গ্রুপ করে* রাখা, যাতে একটা কার্ডেই ক/খ/গ বসে। তাই
+   এটা সম্পূর্ণ আলাদা, স্বতন্ত্র প্রম্পট — বিদ্যমান MCQ/Written/Study প্রম্পট
+   অপরিবর্তিত রইলো (Bulk Uploader/copy-prompt ফ্লো ভাঙবে না)।
+   আউটপুট শেপ ঠিক ocrToPaperConverter.js-এর ocrGroupsToPaper() যা আশা করে সেটাই:
+   [{subject,heading,topic,formatStyle?,items:[{q,a}]}, ...] ══════════ */
+const OCR_GROUP_FORMAT_RULES=`
+আউটপুট অবশ্যই একটা বিশুদ্ধ JSON array হবে — কোনো markdown code fence (\`\`\`json), কোনো label, কোনো ব্যাখ্যা ছাড়া, শুধু নিচের শেপে:
+[
+  {
+    "subject": "বাংলা" | "ইংরেজি" | "গণিত" | "সাধারণ জ্ঞান" | অন্য যেকোনো বিষয়ের নাম যা পাতায় লেখা আছে,
+    "heading": "নির্দেশনা বাক্য, যদি থাকে (যেমন: সন্ধি বিচ্ছেদ করুন:), না থাকলে খালি স্ট্রিং",
+    "topic": "এই নির্দেশনা/সেকশন থেকে বের করা সংক্ষিপ্ত Topic (যেমন: সন্ধি বিচ্ছেদ, Gender, Preposition)",
+    "formatStyle": "table" | "plain",
+    "items": [ {"q":"প্রশ্ন/শব্দ", "a":"উত্তর"}, ... ]
+  },
+  ...
+]
+নিয়ম:
+- একই নম্বর/নির্দেশনার নিচে থাকা সব ক/খ/গ/ঘ/ঙ বা a/b/c/d/e সাব-পার্ট **একই group-এর items array-তে** একসাথে রাখো — এগুলোকে আলাদা আলাদা group বানাবে না।
+- ভিন্ন নম্বর/নির্দেশনা/heading হলেই কেবল নতুন group শুরু করো।
+- যেই প্রশ্নগুলোর কোনো heading/নির্দেশনা নেই (যেমন GK-এর এক-লাইন প্রশ্ন), সেগুলোকে heading="" দিয়ে একটা বা একাধিক group-এ রাখো — একই subject-এর কাছাকাছি প্রশ্নগুলো একসাথে একটা group-এও রাখতে পারো (items-এ অনেকগুলো), অথবা প্রতিটাকে আলাদা group হিসেবেও দিতে পারো, দুটোই ঠিক আছে (heading না থাকায় গ্রুপিং grouping-এ প্রভাব ফেলে না)।
+- টেবিল-আকারে দেখানো প্রশ্ন (দুই কলাম, যেমন অশুদ্ধ→শুদ্ধ, Gender/Number পরিবর্তন) হলে formatStyle="table" দাও, নাহলে "plain"।
+- "q" ফিল্ডে শুধু প্রশ্ন/শব্দ রাখো, সাব-পার্ট লেবেল (ক./খ./a)/b)) বাদ দিয়ে।
+${OCR_TOPIC_RULES}`;
+function buildOcrGroupPrompt(ocrText){
+  return `তুমি একজন প্রশ্নপত্র formatter। নিচের OCR text থেকে সব প্রশ্ন বের করে, একই নির্দেশনার নিচের সাব-প্রশ্নগুলোকে একসাথে গ্রুপ করে, নির্দিষ্ট JSON format-এ দাও।
+${OCR_CORRECTION_RULES}
+${OCR_GROUP_FORMAT_RULES}
+RULES:
+- শুধু JSON array দাও, অন্য কোনো টেক্সট নয়
+- পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
+${OCR_NOISE_RULES}
+- কোনো প্রশ্ন বাদ দিও না
+=== OCR TEXT ===
+${ocrText}`;
+}
+/* ── AI-এর raw টেক্সট রেসপন্স থেকে JSON array বের করা — code fence/leading-trailing
+   টেক্সট থাকলেও safely পার্স করার চেষ্টা করে। ── */
+function parseOcrGroupResponse(text){
+  let t=(text||"").trim();
+  t=t.replace(/^```json/i,"").replace(/^```/,"").replace(/```\s*$/,"").trim();
+  const start=t.indexOf("["),end=t.lastIndexOf("]");
+  if(start===-1||end===-1) throw new Error("AI response-এ JSON array পাওয়া যায়নি");
+  const parsed=JSON.parse(t.slice(start,end+1));
+  if(!Array.isArray(parsed)) throw new Error("AI response একটা array না");
+  return parsed;
 }
 
 // একটামাত্র provider/key দিয়ে একবার কল — ব্যর্থ হলে throw করে (rotation ফাংশন এটাকে wrap করে)
@@ -242,4 +311,4 @@ async function callAiProviderRotatingRaw(prompt){
   throw new Error("সব provider ব্যর্থ — "+errors.slice(0,3).join(" | "));
 }
 
-export { DEFAULT_PROVIDERS, loadProviders, saveProviders, buildKeyPool, getActiveProvider, OCR_PROMPT_FORMATS, OCR_CORRECTION_RULES, OCR_SPLIT_RULES, OCR_NOISE_RULES, buildOcrPrompt, callProviderOnce, callAiProviderRotating, callAiProvider, callAiProviderRotatingRaw };
+export { DEFAULT_PROVIDERS, loadProviders, saveProviders, buildKeyPool, getActiveProvider, OCR_PROMPT_FORMATS, OCR_CORRECTION_RULES, OCR_SPLIT_RULES, OCR_TOPIC_RULES, OCR_NOISE_RULES, buildOcrPrompt, buildOcrGroupPrompt, parseOcrGroupResponse, callProviderOnce, callAiProviderRotating, callAiProvider, callAiProviderRotatingRaw };
