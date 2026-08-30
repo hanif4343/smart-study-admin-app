@@ -11,7 +11,7 @@
 import React, { useState, useEffect, useCallback } from "react";
 import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
-import { fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest } from "../../core/sheetSave.js";
+import { fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest, forceReindexNow } from "../../core/sheetSave.js";
 
 const LS_LAST_PUBLISH = "cdn_last_publish_result"; // persistent status — localStorage-এ থাকে, অ্যাপ বন্ধ করলেও শেষ ফলাফল দেখা যায়
 
@@ -139,6 +139,21 @@ function PublishTab({push}){
 
   useEffect(()=>{ refreshCount(); },[refreshCount]);
 
+  // ── ⚡ Force Reindex Now — ১৫-মিনিটের auto-reindex ট্রিগারের জন্য অপেক্ষা
+  // না করে, এখনই Topics শিটের row_count_* কলাম রিফ্রেশ করে দেয়। এটা
+  // "Publish Now"-এর চেয়ে অনেক হালকা (GitHub-এ কিছু commit করে না, শুধু
+  // Sheet-ইনডেক্স ঠিক করে) — তাই নতুন প্রশ্ন/টপিক যোগ করার পর সাথে সাথে
+  // app-এ দেখাতে চাইলে এটাই সবচেয়ে দ্রুত রাস্তা। ──
+  const[reindexing,setReindexing]=useState(false);
+  const doForceReindex=async()=>{
+    setReindexing(true);
+    const result=await forceReindexNow({gasSecret,push});
+    setReindexing(false);
+    if(result.ok){
+      push?.("success","✅ Reindex সম্পন্ন","Subject/Topic তালিকা এখন app-এ সাথে সাথেই আপডেট থাকা উচিত");
+    }
+  };
+
   const allChecked = checked.every(Boolean);
 
   const doPublish = async()=>{
@@ -229,6 +244,25 @@ function PublishTab({push}){
             </div>
           </div>
         )}
+
+        {/* ── ⚡ Force Reindex Now — নতুন প্রশ্ন/টপিক app-এ ১৫ মিনিট অপেক্ষা না
+            করে এখনই দেখাতে। Publish Now-এর চেয়ে হালকা: শুধু Sheet-ইনডেক্স
+            ঠিক করে, GitHub-এ কিছু commit করে না। CDN কার্ডের ভিতরেই রাখা
+            হলো, কারণ এটাও CDN-এ visibility-সম্পর্কিত একটা কাজ। ── */}
+        <div style={{marginTop:10,paddingTop:10,borderTop:`1px dashed ${C.border}`}}>
+          <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>
+            নতুন প্রশ্ন/টপিক স্বয়ংক্রিয়ভাবে সর্বোচ্চ ১৫ মিনিটে app-এ দেখা যায় — এখনই দেখতে চাইলে নিচের বাটন চাপো (শুধু ইনডেক্স রিফ্রেশ, GitHub publish লাগে না, দ্রুত)।
+          </div>
+          <button
+            className="btn"
+            style={{width:"100%",justifyContent:"center",padding:"9px",fontSize:12,
+              background: gasSecret ? C.success : C.border, color: gasSecret ? "#fff" : C.muted}}
+            disabled={!gasSecret || reindexing}
+            onClick={doForceReindex}
+          >
+            {reindexing ? "⏳ Reindex হচ্ছে..." : "⚡ Force Reindex Now"}
+          </button>
+        </div>
       </div>
 
       {/* ── Orphan Questions — যেসব প্রশ্নের topic_id Topics শিটে অস্তিত্বই নেই ── */}
