@@ -467,4 +467,22 @@ async function rollbackManifest({gasSecret,push,sha}){
   }catch(e){ push?.("error","❌ ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, updateFieldsInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, fetchReferenceDataVerbose, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest };
+/* এখনই, কোনো অপেক্ষা ছাড়াই — শুধু Topics শিটের row_start/row_count_*
+   কলামগুলো রিফ্রেশ করে (runRebuildIndexCore()), যাতে app-এর Subject/Topic
+   browse-tree-তে নতুন প্রশ্ন/টপিক সাথে সাথেই দেখা যায়। এটা "Publish Now"
+   থেকে আলাদা ও হালকা — GitHub-এ কিছু commit করে না, শুধু Sheet-ইনডেক্স
+   ঠিক করে। ১৫-মিনিটের auto-reindex ট্রিগারের জন্য অপেক্ষা করতে না চাইলে
+   admin এটা যেকোনো সময় ম্যানুয়ালি চাপতে পারে। */
+async function forceReindexNow({gasSecret,push}){
+  if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{ok:false}; }
+  if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","উপরে Secret Key বসাও"); return{ok:false}; }
+  try{
+    const url=`${GAS}?action=rebuildIndex&secret=${encodeURIComponent(gasSecret)}`;
+    const resp=await fetch(url);
+    const data=await resp.json().catch(()=>({}));
+    if(data.status==="error"){ push?.("error","❌ Reindex ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    return{ok:true,...data}; // {status, message, details}
+  }catch(e){ push?.("error","❌ Reindex ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
+}
+
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, updateFieldsInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, fetchReferenceDataVerbose, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest, forceReindexNow };
