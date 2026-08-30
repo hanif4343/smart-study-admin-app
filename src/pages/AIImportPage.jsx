@@ -1,21 +1,23 @@
 /* ══════════ AI IMPORT PAGE (ML Kit OCR) ══════════ */
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { C, tint } from "../core/config.js";
 import { _LC } from "../core/logger.js";
 import { loadPath, invalidate } from "../core/dataCache.js";
 import { toArr, nowTs } from "../core/utils.js";
-import { callAiProviderRotating, buildKeyPool } from "../core/ocrProviders.js";
+import { callAiProviderRotating, callAiProviderRotatingRaw, buildKeyPool, buildOcrPrompt, buildOcrGroupPrompt, parseOcrGroupResponse } from "../core/ocrProviders.js";
 import {
   getBulkEntries, parseBulkEntry, buildBulkRecord, buildSheetRow,
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems
 } from "../core/uploaderUtils.js";
-import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
+import { saveRowsToSheet, fetchReferenceData, fetchReferenceDataVerbose } from "../core/sheetSave.js";
 import { resolveSubjectTopicForEntries, resolveOrCreateReference } from "../core/referenceHelpers.js";
 import { getOcrCacheEntry, setOcrCacheEntry, clearOcrCache } from "../core/ocrCache.js";
 import { archiveAdd, archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
+import { PaperComposer } from "../components/shared/PaperComposer.jsx";
+import { ocrGroupsToPaper } from "../core/ocrToPaperConverter.js";
 import { ApiSettingsPage } from "./ApiSettingsPage.jsx";
 
 function AIImportPage({push,onSendToBulk}){
@@ -47,6 +49,59 @@ function AIImportPage({push,onSendToBulk}){
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
+
+  // 🆕 "🗂️ কার্ড আকারে দেখাও" — Single Entry-এর ঠিক একই কার্ড/সাব-পার্ট UI
+  // (PaperComposer, শেয়ার্ড কম্পোনেন্ট) এখানেও ব্যবহার করা হচ্ছে। OCR টেক্সট থেকে
+  // group-aware JSON (buildOcrGroupPrompt) বানিয়ে, ocrGroupsToPaper() দিয়ে
+  // PaperComposer-এর paper shape-এ রূপান্তর করে সরাসরি দেখানো হয় — raw/parsed
+  // টেক্সট মোড থেকে সম্পূর্ণ আলাদা, বিদ্যমান কোনো ফ্লো ভাঙে না (পাশাপাশি থাকে)।
+  const[cardMode,setCardMode]=useState(false);
+  const[cardBuilding,setCardBuilding]=useState(false);
+  const[cardPaper,setCardPaper]=useState(null); // PaperComposer-এ initialPaper হিসেবে যায়
+  const[cardError,setCardError]=useState(null);
+  // PaperComposer-এর জন্য refData/sessionCount — SingleQuestionEntryPage-এ যেই
+  // একই প্যাটার্ন ব্যবহার হয় (ছোট ব্লক বলে এখানে আলাদাভাবে রাখা হলো, শেয়ার্ড
+  // হুক বানানো এই মুহূর্তে প্রয়োজনীয় না)।
+  const[cardRefData,setCardRefData]=useState(null);
+  const[cardRefDataError,setCardRefDataError]=useState(null);
+  const[cardRefDataLoading,setCardRefDataLoading]=useState(false);
+  const loadCardRefData=useCallback(()=>{
+    if(!gasSecret)return;
+    setCardRefDataLoading(true); setCardRefDataError(null);
+    fetchReferenceDataVerbose({gasSecret}).then(res=>{
+      if(res.ok) setCardRefData(res.data);
+      else setCardRefDataError(res.error||"অজানা কারণে রেফারেন্স ডেটা লোড ব্যর্থ হয়েছে");
+      setCardRefDataLoading(false);
+    });
+  },[gasSecret]);
+  useEffect(()=>{ loadCardRefData(); },[loadCardRefData]);
+  const[cardSessionCount,setCardSessionCount]=useState(0);
+
+  const buildCardsFromOcr=async()=>{
+    if(!ocrAll.trim()){ push("warn","আগে OCR চালাও","ছবি থেকে টেক্সট বের করার পর কার্ড বানানো যাবে"); return; }
+    if(!buildKeyPool().length){ push("warn","⚠️ কোনো AI provider active নেই","⚙️ থেকে অন্তত একটা key active করো"); return; }
+    setCardBuilding(true); setCardError(null);
+    try{
+      const raw=await callAiProviderRotatingRaw(buildOcrGroupPrompt(ocrAll));
+      const groups=parseOcrGroupResponse(raw);
+      const newPaper=ocrGroupsToPaper(groups,{refData:cardRefData});
+      setCardPaper(p=>{
+        if(!p)return newPaper;
+        // 🆕 একাধিকবার (একাধিক ব্যাচ ছবির পর) চাপলে আগের কার্ডের সাথে যোগ হবে,
+        // রিপ্লেস হবে না — PaperComposer-এর initialPaper-merge লজিকই যথেষ্ট নয়
+        // এখানে কারণ initialPaper effect শুধু prop বদলালেই চলে, তাই merge এখানেই করা হলো
+        const merged={};
+        ["bangla","english","math","gk"].forEach(k=>{ merged[k]=[...(p[k]||[]),...(newPaper[k]||[])]; });
+        return merged;
+      });
+      setCardMode(true);
+      push("success","🗂️ কার্ড তৈরি হয়েছে!","নিচে দেখো, দরকারে এডিট করে সাবমিট করো");
+    }catch(e){
+      setCardError(e.message);
+      push("error","❌ কার্ড বানানো ব্যর্থ",e.message);
+    }
+    setCardBuilding(false);
+  };
 
   const effMode=ocrQtype==="Study"?"Study":targetMode; // টার্গেট Sheet
   const effQtype=ocrQtype==="Study"?"Study":ocrQtype;  // MCQ | Written | Study
@@ -375,12 +430,13 @@ function AIImportPage({push,onSendToBulk}){
   /* ── Copy OCR + Prompt ── */
   const copyPrompt=(qtype)=>{
     if(!ocrAll.trim()){push("warn","আগে OCR চালান","");return;}
-    const formats={
-      MCQ:`MCQ format — প্রতি লাইন:\nপ্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;সঠিকউত্তর;ব্যাখ্যা(optional)\nউদাহরণ: বাংলাদেশের রাজধানী?;ঢাকা;চট্টগ্রাম;খুলনা;রাজশাহী;ঢাকা\nসঠিক উত্তর বের করার নিয়ম: (১) ভরাট/কালো বৃত্ত (●) চিহ্নিত অপশন থাকলে সেটাই সঠিক (২) ক/খ/গ/ঘ বা A/B/C/D পজিশন দেওয়া থাকলে সেই পজিশনের অপশন (৩) সরাসরি টেক্সট দেওয়া থাকলে সেটাই ব্যবহার করো — সবসময় আসল টেক্সট বসাবে, অক্ষর নয়`,
-      Written:`Written format — প্রতি entry {} দিয়ে wrap করো:\n{প্রশ্ন;উত্তর}\nউদাহরণ: {সন্ধি বিচ্ছেদ: সঞ্চয়;সম+চয়}`,
-      Study:`Study format — প্রতি entry {} দিয়ে wrap করো:\n{প্রশ্ন;উত্তর লাইন১\nউত্তর লাইন২}\nউদাহরণ: {রাষ্ট্রবিজ্ঞানের জনক কে?;এরিস্টটল}`,
-    };
-    const prompt=`তুমি একজন প্রশ্নপত্র formatter। নিচের OCR text থেকে সব প্রশ্ন বের করে নির্দিষ্ট format-এ দাও।\n\nOUTPUT FORMAT (${qtype}):\n${formats[qtype]}\n\nRULES:\n- শুধু formatted data দাও, কোনো label বা explanation নয়\n- Serial number বাদ দাও\n- field-এর ভেতরে ; থাকলে | দিয়ে replace করো\n- কোনো প্রশ্ন বাদ দিও না\n\n=== OCR TEXT ===\n${ocrAll}`;
+    // 🐛 ফিক্স (কপি-প্রম্পট আলাদা, ভেঙে-পড়া টেমপ্লেট রাখা হতো — buildOcrPrompt()-এর
+    // সাথে সিঙ্কে থাকতো না, তাই Subject/Topic-per-question রুল এখানে ছিলই না):
+    // এখন ইন-অ্যাপ AI কল যেই একই buildOcrPrompt() ব্যবহার করে (OCR_TOPIC_RULES,
+    // OCR_SPLIT_RULES সহ), বাইরের ChatGPT/Gemini-এ কপি করার প্রম্পটও ঠিক সেটাই —
+    // দুই জায়গায় আলাদা করে prompt maintain করা লাগে না, ভবিষ্যতে prompt বদলালে
+    // দুটোই এক থাকবে।
+    const prompt=buildOcrPrompt(qtype,ocrAll);
     navigator.clipboard.writeText(prompt).then(()=>{
       setCopied(true);
       push("success","✅ Copied!","Gemini/ChatGPT-এ paste করুন → format করা text আবার Bulk-এ paste করুন");
@@ -563,6 +619,21 @@ function AIImportPage({push,onSendToBulk}){
             onClick={()=>stopRef.current=true}>⛔ বন্ধ করুন</button>
         )}
 
+        {/* 🆕 কার্ড আকারে বসাও — Single Entry-এর ঠিক একই কার্ড/সাব-পার্ট UI (PaperComposer)
+            এখানে ব্যবহার করে, OCR টেক্সট থেকে গ্রুপ-সচেতন প্রশ্ন সাজানো (হেডিং, Topic,
+            সাব-পার্ট আলাদা — raw/parsed টেক্সটের বদলে)। বিদ্যমান raw/parsed ফ্লো পাশাপাশি
+            অক্ষত থাকে, এটা একটা বিকল্প পথ মাত্র। শুধু Written-স্টাইল প্রশ্নের জন্য
+            (MCQ অপশন এখনো এই মোডে সাপোর্টেড না)। ── */}
+        {ocrAll&&!running&&(
+          <button className="btn" disabled={cardBuilding} onClick={buildCardsFromOcr}
+            style={{justifyContent:"center",background:"#3b0764",color:"#c4b5fd",borderColor:"#7c3aed"}}>
+            {cardBuilding?"⏳ কার্ড সাজানো হচ্ছে...":"🗂️ কার্ড আকারে বসাও (Single Entry স্টাইল)"}
+          </button>
+        )}
+        {cardError&&!cardBuilding&&(
+          <div style={{fontSize:10.5,color:"#ef4444"}}>❌ {cardError}</div>
+        )}
+
         {/* Step 2 (fallback only) — auto-parse ব্যর্থ হলে Gemini দিয়ে ম্যানুয়ালি format করার পথ */}
         {ocrAll&&!running&&!parsedAll&&(
           <>
@@ -710,6 +781,39 @@ function AIImportPage({push,onSendToBulk}){
           </div>
         )}
       </div>
+
+      {/* 🆕 কার্ড আকারে দেখানো — Single Entry-এর ঠিক একই PaperComposer, initialPaper
+          দিয়ে seed করা। এখানেই রিভিউ-এডিট-সাবমিট সব হবে, আলাদা পেজে যাওয়া লাগে না।
+          🐛 ফিক্স: রেন্ডার-শর্ত শুধু cardMode (cardPaper না) — কারণ initialPaper
+          consume হওয়ার পর cardPaper null হয়ে যায় (দেখো onConsumedInitialPaper),
+          কিন্তু PaperComposer ততক্ষণে নিজের ভেতরে কার্ডগুলো state হিসেবে ধরে রাখে —
+          cardPaper-এর ওপর রেন্ডার-শর্ত রাখলে null হওয়ার সাথে সাথেই পুরো
+          PaperComposer unmount হয়ে সদ্য-ইম্পোর্ট করা সব কার্ড হারিয়ে যেত। ── */}
+      {cardMode&&(
+        <div style={{marginTop:16,paddingTop:12,borderTop:`2px dashed ${C.border}`}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+            <div style={{fontSize:13,fontWeight:900,color:C.text}}>🗂️ কার্ড আকারে — রিভিউ করে সাবমিট করো</div>
+            <button onClick={()=>{setCardMode(false);setCardPaper(null);}}
+              style={{background:"transparent",border:`1px solid ${C.border}`,color:C.muted,borderRadius:8,fontSize:11,padding:"4px 10px",cursor:"pointer"}}>
+              ✕ বন্ধ করো
+            </button>
+          </div>
+          <PaperComposer
+            gasSecret={gasSecret}
+            refData={cardRefData}
+            setRefData={setCardRefData}
+            refDataError={cardRefDataError}
+            refDataLoading={cardRefDataLoading}
+            onRetryRefData={loadCardRefData}
+            push={push}
+            sessionCount={cardSessionCount}
+            setSessionCount={setCardSessionCount}
+            initialPaper={cardPaper}
+            onConsumedInitialPaper={()=>setCardPaper(null)}
+          />
+        </div>
+      )}
+
       {/* ── ট্যাপ করলে ছবি বড় করে দেখানোর প্রিভিউ — long-press লাগে না, সরাসরি ট্যাপেই খোলে ── */}
       {previewImg&&(
         <div onClick={()=>setPreviewImg(null)} style={{position:"fixed",inset:0,background:"#000000ee",zIndex:9999,
