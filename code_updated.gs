@@ -19,7 +19,7 @@
 // build-নামটা দেখা যাবে (secret লাগবেনা) — যদি পুরনো মান দেখা যায় বা এরর আসে,
 // তার মানে নতুন কোড এখনো লাইভ হয়নি (নতুন "deployment" বানানো হয়ে থাকলে সেটার
 // আলাদা URL হয়, পুরনো URL-এই পুরনো কোড থেকে যায় — এই কারণেই এই মার্কার)।
-var GAS_BUILD_VERSION = "2026-08-27-reviewlabel-scope-fix-v1";
+var GAS_BUILD_VERSION = "2026-08-29-refDiag-v1";
 
 function getProps() {
   var p = PropertiesService.getScriptProperties();
@@ -251,7 +251,13 @@ function doPublish_() {
   var topicsMap = {};
   if (topicsSh) {
     var tData = topicsSh.getDataRange().getValues(), tHdr = tData[0];
-    var tIdCol = tHdr.indexOf("topic_id"), tNameCol = tHdr.indexOf("name"), tSubjIdCol = tHdr.indexOf("subject_id");
+    // 🐛 FIX (২০২৬-০৮-২৯): আগে এখানে tHdr.indexOf("name") ছিল — Topics শিটে
+    // "name" নামে কোনো কলামই নেই (আসল কলাম নাম "topic_name"), তাই indexOf
+    // সবসময় -1 রিটার্ন করত, ফলে topicsMap-এর প্রতিটা এন্ট্রির .name সবসময়
+    // undefined হয়ে যেত। এর প্রভাবে manifest.topics[].subTopic সবসময় বাদ
+    // পড়ত, আর প্রতিটা প্রশ্নের q["topic"] ফিল্ডে জোর করে undefined বসে
+    // JSON.stringify-এ সেই key-ই হারিয়ে যেত (Quiz/QBank-এ "no topic" বাগ)।
+    var tIdCol = tHdr.indexOf("topic_id"), tNameCol = tHdr.indexOf("topic_name"), tSubjIdCol = tHdr.indexOf("subject_id");
     for (var ti = 1; ti < tData.length; ti++) {
       var tid = (tData[ti][tIdCol] || "").toString();
       if (tid) topicsMap[tid] = { name: tData[ti][tNameCol], subjectId: (tData[ti][tSubjIdCol] || "").toString() };
@@ -261,7 +267,10 @@ function doPublish_() {
   var subjectsMap = {};
   if (subjectsSh) {
     var sData = subjectsSh.getDataRange().getValues(), sHdr = sData[0];
-    var sIdCol = sHdr.indexOf("subject_id"), sNameCol = sHdr.indexOf("name");
+    // 🐛 FIX (২০২৬-০৮-২৯): একই বাগ — Subjects শিটের আসল কলাম নাম "subject_name",
+    // "name" না। আগে এটা ভুল থাকায় subjectsMap-এর সব value undefined হতো,
+    // manifest.topics[].subject সবসময় "" (খালি) থেকে যেত।
+    var sIdCol = sHdr.indexOf("subject_id"), sNameCol = sHdr.indexOf("subject_name");
     for (var si = 1; si < sData.length; si++) {
       var sid = (sData[si][sIdCol] || "").toString();
       if (sid) subjectsMap[sid] = sData[si][sNameCol];
@@ -395,54 +404,48 @@ function doPublish_() {
   // চলার কথা — তাই Tags/Posts/Institutions/Exam_Appearances ও এখন publish হচ্ছে।
   // (Headings শিট শুধু admin-এর নিজের documentation, CDN-এ দরকার নেই বলে বাদ।) ──
   if (results.published > 0) {
-    try {
-      ghPutFile_(ghOwner, ghRepo, ghBranch, "reference/subjects.json", JSON.stringify(sheetToJsonArray_(subjectsSh)), ghToken, "Update reference/subjects.json");
-      ghPutFile_(ghOwner, ghRepo, ghBranch, "reference/topics.json", JSON.stringify(sheetToJsonArray_(topicsSh)), ghToken, "Update reference/topics.json");
+    // 🔬 DIAG (২০২৬-০৮-২৯ — reference/*.json বার বার GitHub-এ commit না হওয়ার
+    // আসল কারণ ধরার জন্য): আগে subjects.json থেকে exam-appearances.json
+    // পর্যন্ত সবগুলো ফাইল একটাই try/catch-এ মোড়ানো ছিল — প্রথম ফাইলেই
+    // (subjects.json) ব্যর্থ হলে বাকি সবগুলো (topics/tags/posts/institutions/
+    // exam-appearances) কখনো চেষ্টাই হতো না, আর error শুধু Logger.log-এ যেত
+    // (কোথাও দৃশ্যমান না)। এখন প্রতিটা ফাইল আলাদা try/catch-এ, একটা ব্যর্থ
+    // হলেও বাকিগুলো চলতেই থাকবে — আর প্রতিটার ফলাফল (success/error/rows/bytes)
+    // একটা Script Property-তে জমা হয়, GAS_URL+"?action=refDiag" খুলে
+    // ব্রাউজারেই সরাসরি দেখা যাবে। রুট কারণ পাওয়া গেলে এই diagnostic কোড আর
+    // refDiag action ফেরত মুছে ফেলা উচিত। ──
+    var refDiag = { at: new Date().toString(), files: {} };
 
-      var tagsSh = ss.getSheetByName("Tags");
-      if (tagsSh) {
-        ghPutFile_(ghOwner, ghRepo, ghBranch, "reference/tags.json", JSON.stringify(sheetToJsonArray_(tagsSh)), ghToken, "Update reference/tags.json");
+    var refPublishOne_ = function (label, sheetName, filePath, commitMsg) {
+      var sh = ss.getSheetByName(sheetName);
+      if (!sh) {
+        refDiag.files[label] = { skipped: true, reason: "sheet '" + sheetName + "' not found" };
+        return;
       }
-      var postsSh = ss.getSheetByName("Posts");
-      if (postsSh) {
-        ghPutFile_(ghOwner, ghRepo, ghBranch, "reference/posts.json", JSON.stringify(sheetToJsonArray_(postsSh)), ghToken, "Update reference/posts.json");
+      try {
+        var data = sheetToJsonArray_(sh);
+        var jsonStr = JSON.stringify(data);
+        var result = ghPutFile_(ghOwner, ghRepo, ghBranch, filePath, jsonStr, ghToken, commitMsg);
+        refDiag.files[label] = { rows: data.length, bytes: jsonStr.length, result: result };
+      } catch (err) {
+        refDiag.files[label] = { success: false, error: "EXCEPTION: " + err };
+        logError_("refPublishOne_/" + label, String(err));
       }
-      var institutionsSh = ss.getSheetByName("Institutions");
-      if (institutionsSh) {
-        ghPutFile_(ghOwner, ghRepo, ghBranch, "reference/institutions.json", JSON.stringify(sheetToJsonArray_(institutionsSh)), ghToken, "Update reference/institutions.json");
-      }
-      var examAppearancesSh = ss.getSheetByName("Exam_Appearances");
-      if (examAppearancesSh) {
-        // 🔬 DIAG (exam-appearances.json বার বার GitHub-এ commit না হওয়ার কারণ
-        // খোঁজার জন্য সাময়িক ইনস্ট্রুমেন্টেশন): আগে এই কলের রেজাল্ট কোথাও
-        // দেখা যেত না (ghPutFile_ ব্যর্থ হলেও silently ignore হতো)। এখন রেজাল্ট
-        // (rows/bytes/success/error) একটা Script Property-তে সেভ হয়, যেটা
-        // GAS_URL+"?action=examDiag" খুলে ব্রাউজারেই সরাসরি দেখা যাবে —
-        // Apps Script Executions লগে ঢোকার দরকার নেই। রুট কারণ পাওয়া গেলে
-        // এই ব্লক আর examDiag action দুটোই ফেরত মুছে ফেলা উচিত। ──
-        var eaData = sheetToJsonArray_(examAppearancesSh);
-        var eaJson = JSON.stringify(eaData);
-        var eaResult;
-        try {
-          eaResult = ghPutFile_(ghOwner, ghRepo, ghBranch, "exam-appearances.json", eaJson, ghToken, "Update exam-appearances.json");
-        } catch (eaErr) {
-          eaResult = { success: false, error: "EXCEPTION: " + eaErr };
-        }
-        try {
-          PropertiesService.getScriptProperties().setProperty("LAST_EXAM_APPEARANCES_DIAG", JSON.stringify({
-            rows: eaData.length,
-            bytes: eaJson.length,
-            result: eaResult,
-            at: new Date().toString()
-          }));
-        } catch (propErr) {
-          Logger.log("exam-appearances diag property write failed: " + propErr);
-        }
-        Logger.log("exam-appearances publish: rows=" + eaData.length + " bytes=" + eaJson.length + " result=" + JSON.stringify(eaResult));
-      }
-    } catch (refErr) {
-      Logger.log("Reference data publish error (non-fatal): " + refErr);
+    };
+
+    refPublishOne_("subjects", "Subjects", "reference/subjects.json", "Update reference/subjects.json");
+    refPublishOne_("topics", "Topics", "reference/topics.json", "Update reference/topics.json");
+    refPublishOne_("tags", "Tags", "reference/tags.json", "Update reference/tags.json");
+    refPublishOne_("posts", "Posts", "reference/posts.json", "Update reference/posts.json");
+    refPublishOne_("institutions", "Institutions", "reference/institutions.json", "Update reference/institutions.json");
+    refPublishOne_("examAppearances", "Exam_Appearances", "exam-appearances.json", "Update exam-appearances.json");
+
+    try {
+      PropertiesService.getScriptProperties().setProperty("LAST_REFERENCE_DIAG", JSON.stringify(refDiag));
+    } catch (propErr) {
+      Logger.log("reference diag property write failed: " + propErr);
     }
+    Logger.log("reference publish diag: " + JSON.stringify(refDiag));
   }
 
   // ── Sanity-check: Sheet-এর আসল মোট প্রশ্নসংখ্যা vs manifest-এ থাকা মোট
@@ -1291,6 +1294,15 @@ function doGet(e) {
   if (action==="examDiag") {
     var eaDiagRaw = PropertiesService.getScriptProperties().getProperty("LAST_EXAM_APPEARANCES_DIAG");
     return json(eaDiagRaw ? JSON.parse(eaDiagRaw) : { message: "এখনো কোনো publish attempt রেকর্ড হয়নি" });
+  }
+
+  // ── refDiag — secret ছাড়াই, ব্রাউজারে সরাসরি GAS_URL+"?action=refDiag" খুলে
+  // সবশেষ Publish-এ subjects/topics/tags/posts/institutions/exam-appearances —
+  // প্রতিটা reference ফাইল আলাদাভাবে সফল/ব্যর্থ হয়েছিল কিনা দেখা যায়। দেখো
+  // doPublish_()-এর ভেতরের DIAG কমেন্ট (refPublishOne_)। ──
+  if (action==="refDiag") {
+    var refDiagRaw = PropertiesService.getScriptProperties().getProperty("LAST_REFERENCE_DIAG");
+    return json(refDiagRaw ? JSON.parse(refDiagRaw) : { message: "এখনো কোনো publish attempt রেকর্ড হয়নি" });
   }
 
   var cfg    = getProps();
@@ -2695,6 +2707,112 @@ function doGet(e) {
     }
     markTopicsDirty(matDirty);
     return json({status:"success",result:"success",markedCount:Object.keys(matDirty).length});
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════
+     pruneManifest — "Dirty All Topic + Publish Now" শুধু Topics শিটে
+     *বর্তমানে থাকা* topic_id-গুলোই clean করতে পারে (doPublish_ সেই
+     topic_id-গুলোর জন্যই GitHub-এ scan চালায়)। কিন্তু কোনো topic_id যদি
+     কখনো Topics শিট থেকেই মুছে ফেলা হয় (বা পুরনো/rename হওয়া ID, যা এখন আর
+     Topics শিটে নেই), সেটা আর কখনোই dirty হয় না — ফলে তার পুরনো
+     qbank/quiz/study JSON ফাইল আর manifest.topics-এর entry চিরদিন GitHub-এ
+     আটকে/stuck থেকে যায়, publish যতবারই চালানো হোক না কেন। এই action
+     সরাসরি manifest.json-এর সব topic key বনাম Topics শিটের বর্তমান
+     topic_id সেট মিলিয়ে, যেগুলো Topics শিটে আর নেই সেগুলোর GitHub ফাইল
+     ডিলিট করে + manifest থেকে entry সরিয়ে দেয়। এক-কালীন cleanup action —
+     ব্যবহারের পর normal dirty-tracking-ই যথেষ্ট।
+     ?action=pruneManifest&dryRun=1  → শুধু কী কী মোছা হতো তার লিস্ট দেখাবে,
+                                        আসলে কিছুই মুছবে না (আগে এটা দিয়ে
+                                        যাচাই করে নেওয়াই নিরাপদ)
+     ?action=pruneManifest           → আসলেই মুছে দেবে + manifest commit করবে
+     ══════════════════════════════════════════════════════════════════════ */
+  if (action==="pruneManifest") {
+    var pmProps = PropertiesService.getScriptProperties();
+    var pmGhOwner = pmProps.getProperty("GH_OWNER");
+    var pmGhRepo = pmProps.getProperty("GH_REPO");
+    var pmGhBranch = pmProps.getProperty("GH_BRANCH") || "main";
+    var pmGhToken = pmProps.getProperty("GITHUB_WRITE_TOKEN");
+    if (!pmGhOwner || !pmGhRepo || !pmGhToken) {
+      return json({status:"error",result:"error",message:"GitHub config Script Properties-এ সেট করা নেই"});
+    }
+    var pmDryRun = (e.parameter.dryRun === "1" || e.parameter.dryRun === "true");
+
+    var pmTopicsSh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName("Topics");
+    if (!pmTopicsSh) return json({status:"error",result:"error",message:"Topics sheet নেই"});
+    var pmTData = pmTopicsSh.getDataRange().getValues(), pmTHdr = pmTData[0];
+    var pmTIdCol = pmTHdr.indexOf("topic_id");
+    if (pmTIdCol < 0) return json({status:"error",result:"error",message:"Topics ট্যাবে topic_id কলাম নেই"});
+    var pmValidIds = {};
+    for (var pv=1; pv<pmTData.length; pv++) {
+      var pvId = (pmTData[pv][pmTIdCol]||"").toString();
+      if (pvId) pmValidIds[pvId] = 1;
+    }
+
+    var pmManifestGet = ghGetFile_(pmGhOwner, pmGhRepo, pmGhBranch, "manifest.json", pmGhToken);
+    if (!pmManifestGet.exists) {
+      return json({status:"success",result:"success",message:"manifest.json এখনো নেই, prune করার কিছু নেই",prunedCount:0});
+    }
+    var pmManifest = JSON.parse(pmManifestGet.content);
+    if (!pmManifest.topics) pmManifest.topics = {};
+
+    var pmOrphanIds = [];
+    for (var pmtid in pmManifest.topics) {
+      if (pmManifest.topics.hasOwnProperty(pmtid) && !pmValidIds[pmtid]) pmOrphanIds.push(pmtid);
+    }
+
+    if (!pmOrphanIds.length) {
+      return json({status:"success",result:"success",message:"কোনো orphan manifest entry পাওয়া যায়নি — সব ঠিক আছে",prunedCount:0});
+    }
+
+    if (pmDryRun) {
+      return json({status:"success",result:"success",dryRun:true,
+        message:pmOrphanIds.length+"টা orphan topic পাওয়া গেছে (এখনো মোছা হয়নি — dryRun=1 বাদ দিয়ে আবার কল করলে আসলেই মুছবে)",
+        orphanCount:pmOrphanIds.length, orphanTopicIds:pmOrphanIds});
+    }
+
+    var pmShaMap = ghGetTree_(pmGhOwner, pmGhRepo, pmGhBranch, pmGhToken);
+    var pmPruned = [], pmFailed = [];
+    pmOrphanIds.forEach(function (tid) {
+      try {
+        var pmSheetName = tid.indexOf("QZ") === 0 ? "Quiz" : tid.indexOf("QB") === 0 ? "QBank" : tid.indexOf("ST") === 0 ? "Study" : null;
+        if (pmSheetName) {
+          var pmFilePath = sheetLowerName_(pmSheetName) + "/" + tid + ".json";
+          var pmKnownSha = pmShaMap.hasOwnProperty(pmFilePath) ? pmShaMap[pmFilePath] : null;
+          ghDeleteFile_(pmGhOwner, pmGhRepo, pmGhBranch, pmFilePath, pmGhToken, pmKnownSha);
+        }
+        delete pmManifest.topics[tid];
+        pmPruned.push(tid);
+      } catch (pmErr) {
+        pmFailed.push(tid + ": " + pmErr);
+        logError_("pruneManifest", tid + ": " + pmErr);
+      }
+    });
+
+    // ── subjectTotals পুনর্গণনা (orphan বাদ দিয়ে বাকিদের নিয়ে) ──
+    var pmTopicsMapForTotals = {};
+    for (var pt=1; pt<pmTData.length; pt++) {
+      var ptId = (pmTData[pt][pmTIdCol]||"").toString();
+      var ptSubjIdCol = pmTHdr.indexOf("subject_id");
+      if (ptId) pmTopicsMapForTotals[ptId] = (pmTData[pt][ptSubjIdCol]||"").toString();
+    }
+    var pmSubjectTotals = {};
+    for (var pmtid2 in pmManifest.topics) {
+      if (!pmManifest.topics.hasOwnProperty(pmtid2)) continue;
+      var pmSubjId = pmTopicsMapForTotals[pmtid2];
+      if (!pmSubjId) continue;
+      pmSubjectTotals[pmSubjId] = (pmSubjectTotals[pmSubjId] || 0) + (pmManifest.topics[pmtid2].count || 0);
+    }
+    pmManifest.subjectTotals = pmSubjectTotals;
+
+    pmManifest.version = (pmManifest.version || 0) + 1;
+    pmManifest.publishedAt = Date.now();
+    var pmManifestPut = ghPutFile_(pmGhOwner, pmGhRepo, pmGhBranch, "manifest.json", JSON.stringify(pmManifest), pmGhToken, "Prune " + pmPruned.length + " orphan topics (v" + pmManifest.version + ")");
+    if (!pmManifestPut.success) {
+      return json({status:"error",result:"error",message:"orphan ফাইল মোছা হলেও manifest.json commit ব্যর্থ: "+pmManifestPut.error, prunedCount:pmPruned.length, failed:pmFailed});
+    }
+
+    return json({status: pmFailed.length ? "partial" : "success", result: pmFailed.length ? "partial" : "success",
+      prunedCount: pmPruned.length, prunedTopicIds: pmPruned, failed: pmFailed, manifestVersion: pmManifest.version});
   }
 
   // ── countOrphanQuestions — Diagnostic (read-only, নিরাপদ)। কোন Sheet-এ
