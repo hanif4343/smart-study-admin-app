@@ -276,4 +276,62 @@ function loadDraft(key){ try{ const raw=localStorage.getItem(key); return raw?JS
 function saveDraft(key,data){ try{ localStorage.setItem(key,JSON.stringify({...data,_savedAt:Date.now()})); }catch{} }
 function clearDraft(key){ try{ localStorage.removeItem(key); }catch{} }
 
-export { getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow, LS_SAVE_LOCATION, LS_FAILED_QUEUE, LS_OCR_CACHE, OCR_CACHE_MAX, loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, loadFailedQueue, saveFailedQueueList, pushFailedItems, removeFailedItems, LS_DRAFT_BULK, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft };
+/* ══════════════════════════════════════════════════════════════════
+   RICH-TEXT KEYBOARD SHORTCUTS (Bold/Underline/Big/Small) — admin app-এর
+   যেকোনো <textarea>/<input> এ ব্যবহার করা যায়, একটা onKeyDown লাইন বসিয়ে।
+
+   Ctrl+B → **bold** টগল, Ctrl+U → underline টগল, Ctrl+} → এক ধাপ বড়,
+   Ctrl+{ → এক ধাপ ছোট (বারবার চাপলে আরও বড়/ছোট — nesting বাড়ে)।
+
+   মার্কআপ হিসেবে আসল HTML ট্যাগ (<b>, <u>, <big>, <small>) ব্যবহার করা
+   হচ্ছে — কাস্টম সিনট্যাক্স নয়। কারণ Android-এর HtmlCompat.fromHtml()
+   এই ৪টা ট্যাগ নেটিভভাবেই বোঝে ও রেন্ডার করে (BoldSpan/UnderlineSpan/
+   RelativeSizeSpan) — Kotlin অ্যাপে আলাদা কোনো parser লিখতে হবে না,
+   শুধু যেখানে question/option/answer/explanation দেখানো হয়, সেখানে
+   `textView.text = rawText` না করে
+   `textView.text = HtmlCompat.fromHtml(rawText, HtmlCompat.FROM_HTML_MODE_LEGACY)`
+   করলেই এই ট্যাগগুলো bold/underline/big/small আকারে দেখা যাবে। যেহেতু
+   এটা Sheet-এ প্লেইন টেক্সট হিসেবেই সেভ হয় (শুধু ভিতরে ট্যাগ থাকে), তাই
+   ডেটাবেজ/CDN/API — কোনো কিছুতেই আলাদা কোনো স্কিমা-পরিবর্তন লাগে না।
+   ══════════════════════════════════════════════════════════════════ */
+function applyRichTextShortcut(e, setValue){
+  const isMod = e.ctrlKey || e.metaKey; // metaKey → Mac-এ Cmd দিয়েও কাজ করবে
+  if(!isMod) return false;
+  let tag=null, mode=null; // mode: "toggle" (bold/underline) | "wrap" (big/small — বারবার চাপলে nest হয়)
+  if(e.key==="b"||e.key==="B"){ tag="b"; mode="toggle"; }
+  else if(e.key==="u"||e.key==="U"){ tag="u"; mode="toggle"; }
+  else if(e.key==="}"){ tag="big"; mode="wrap"; }
+  else if(e.key==="{"){ tag="small"; mode="wrap"; }
+  else return false;
+
+  e.preventDefault(); // ব্রাউজারের ডিফল্ট আচরণ আটকানো — বিশেষ করে Ctrl+U (Chrome-এ "view source" খোলে) ও Ctrl+B (bookmarks bar)
+  const el=e.target;
+  const start=el.selectionStart, end=el.selectionEnd;
+  if(start==null||end==null||start===end) return true; // কিছু সিলেক্ট করা না থাকলে কিছুই হবে না
+
+  const val=el.value;
+  const selected=val.slice(start,end);
+  const openTag=`<${tag}>`, closeTag=`</${tag}>`;
+  let newSelected,newStart,newEnd;
+
+  if(mode==="toggle" && selected.startsWith(openTag) && selected.endsWith(closeTag) && selected.length>=openTag.length+closeTag.length){
+    // ইতিমধ্যে wrapped — টগল অফ (bold/underline সরিয়ে দেওয়া)
+    newSelected=selected.slice(openTag.length, selected.length-closeTag.length);
+    newStart=start; newEnd=start+newSelected.length;
+  } else {
+    newSelected=openTag+selected+closeTag;
+    newStart=start+openTag.length; newEnd=newStart+selected.length;
+  }
+
+  const newVal=val.slice(0,start)+newSelected+val.slice(end);
+  setValue(newVal);
+  // ── React কন্ট্রোল্ড ইনপুট re-render হওয়ার পর কার্সার/সিলেকশন হারিয়ে যায়,
+  // তাই পরের ফ্রেমে আবার বসাতে হচ্ছে (bulkText জাম্প-টু-এরর ফিচারেও একই প্যাটার্ন) ──
+  requestAnimationFrame(()=>{
+    el.focus();
+    el.setSelectionRange(newStart,newEnd);
+  });
+  return true;
+}
+
+export { getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow, LS_SAVE_LOCATION, LS_FAILED_QUEUE, LS_OCR_CACHE, OCR_CACHE_MAX, loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, loadFailedQueue, saveFailedQueueList, pushFailedItems, removeFailedItems, LS_DRAFT_BULK, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft, applyRichTextShortcut };
