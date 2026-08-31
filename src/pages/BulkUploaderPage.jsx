@@ -7,7 +7,7 @@ import { Bar } from "../components/shared/MiniComponents.jsx";
 import {
   getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow,
   loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, pushFailedItems,
-  LS_DRAFT_BULK, loadDraft, saveDraft, clearDraft
+  LS_DRAFT_BULK, loadDraft, saveDraft, clearDraft, applyRichTextShortcut
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
 import { resolveOrCreateReference, resolveSubjectTopicForEntries, norm } from "../core/referenceHelpers.js";
@@ -792,6 +792,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         )}
         <textarea ref={bulkTextRef} className="ta" style={{minHeight:160,fontFamily:"monospace",fontSize:12}} value={bulkText}
           onChange={e=>handleText(e.target.value)}
+          onKeyDown={e=>applyRichTextShortcut(e,handleText)}
           placeholder={mode==="Study"
             ?"{ প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২ }\n{ পরের প্রশ্ন ; উত্তর }"
             :qtype==="Written"
