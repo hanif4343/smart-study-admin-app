@@ -15,6 +15,7 @@ import { archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
+import { shuffle4 } from "../components/shared/PaperComposer.jsx";
 
 function BulkUploaderPage({push,prefillText,onClearPrefill}){
 
@@ -356,8 +357,27 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     // মিলিয়েই হিসেব করে) থেকেই entries নেওয়া হচ্ছে, তাই যা "Valid" দেখাচ্ছে
     // ঠিক সেটাই সাবমিট হবে — কোনো surprise থাকবে না। ──
     if(!validDetail){ push("warn","⚠️ কোনো valid প্রশ্ন নেই","আগে টাইপ/পেস্ট করো"); return; }
-    const entries=validDetail.filter(r=>r.ok);
+    let entries=validDetail.filter(r=>r.ok);
     if(!entries.length){push("warn","⚠️ কোনো valid প্রশ্ন নেই — Validation chips-এ ক্লিক করে দেখুন","");return;}
+
+    // ── 🔀 AUTO SHUFFLE (submit-এর ঠিক আগে, বাধ্যতামূলক — "🔀 Options Shuffle"
+    // বাটন থাকলেও সেটা চাপতে admin ভুলে যেতে পারে, আর ভুলে গেলে অনেক প্রশ্নে
+    // সঠিক উত্তর সবসময় একই position-এ (যেমন সবসময় ১ম option) বসে যায়, যেটা
+    // ইউজার সহজেই প্যাটার্ন ধরে ফেলতে পারে। তাই এখন submit হওয়ার ঠিক আগে,
+    // প্রতিটা MCQ প্রশ্নের option ক্রম নিজে থেকেই এলোমেলো করে দেওয়া হয় —
+    // manual বাটনের ওপর আর নির্ভর করতে হয় না। `correct` ফিল্ড option-এর
+    // *value* ধরে রাখে (position নয়), তাই শাফলের পরও ঠিক উত্তর ঠিকই থাকে —
+    // handleShuffle()-এর মতো একই নীতি। নতুন copy বানানো হচ্ছে (মূল entry
+    // object mutate না করে), যাতে "Validation chips" মডালে গিয়ে দেখলে
+    // এখনো ঠিক যা টাইপ করা হয়েছিল সেটাই দেখা যায় — শুধু আসলে submit
+    // হওয়া ডেটাতেই শাফল প্রযোজ্য হয়। ──
+    if(eff==="MCQ"){
+      entries=entries.map(e=>{
+        if(!e.opt1&&!e.opt2&&!e.opt3&&!e.opt4) return e; // option-শূন্য হলে (edge case) স্কিপ
+        const[a,b,c,d]=shuffle4([e.opt1,e.opt2,e.opt3,e.opt4]);
+        return{...e,opt1:a,opt2:b,opt3:c,opt4:d};
+      });
+    }
 
     let examAppearance=null;
     if(mode==="QBank" && (postSel.name.trim()||instSel.name.trim()||examYear.trim())){
