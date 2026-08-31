@@ -7,7 +7,7 @@
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
-import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, loadDraft, saveDraft, clearDraft } from "../core/uploaderUtils.js";
+import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, loadDraft, saveDraft, clearDraft, applyRichTextShortcut } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData, fetchReferenceDataVerbose } from "../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
@@ -500,6 +500,7 @@ function SingleQuestionEntryPage({push}){
         <textarea ref={qRef} className="ta" value={question} 
           onFocus={()=>activeInputRef.current="q"}
           onChange={e=>setQuestion(e.target.value)}
+          onKeyDown={e=>applyRichTextShortcut(e,setQuestion)}
           placeholder="বই দেখে প্রশ্ন টাইপ করো..." style={{minHeight:80}} tabIndex={1}/>
       </div>
 
@@ -509,6 +510,7 @@ function SingleQuestionEntryPage({push}){
         <textarea ref={correctRef} className="ta" value={correct} 
           onFocus={()=>activeInputRef.current="correct"}
           onChange={e=>setCorrect(e.target.value)}
+          onKeyDown={e=>applyRichTextShortcut(e,setCorrect)}
           placeholder={isMCQ?"সঠিক উত্তরের টেক্সট...":"উত্তর লিখো..."} style={{minHeight:60}} tabIndex={2}/>
       </div>
 
@@ -517,7 +519,7 @@ function SingleQuestionEntryPage({push}){
           {[["ক",opt1,setOpt1,3],["খ",opt2,setOpt2,4],["গ",opt3,setOpt3,5],["ঘ",opt4,setOpt4,6]].map(([lbl,val,setter,ti])=>(
             <div key={lbl} className="fld" style={{marginBottom:0}}>
               <label>{lbl}. অপশন{val&&val===correct.trim()&&val.trim()?" ✅":""}</label>
-              <input className="inp" value={val} onChange={e=>setter(e.target.value)} placeholder={`অপশন ${lbl}`} tabIndex={ti}/>
+              <input className="inp" value={val} onChange={e=>setter(e.target.value)} onKeyDown={e=>applyRichTextShortcut(e,setter)} placeholder={`অপশন ${lbl}`} tabIndex={ti}/>
             </div>
           ))}
         </div>
@@ -529,6 +531,7 @@ function SingleQuestionEntryPage({push}){
         <textarea ref={explRef} className="ta" value={explanation} 
           onFocus={()=>activeInputRef.current="expl"}
           onChange={e=>setExplanation(e.target.value)}
+          onKeyDown={e=>applyRichTextShortcut(e,setExplanation)}
           placeholder="ব্যাখ্যা লিখো, বা ✨ Generate চাপো..." style={{minHeight:60}} tabIndex={7}/>
       </div>
 
