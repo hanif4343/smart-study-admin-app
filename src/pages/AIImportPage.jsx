@@ -95,7 +95,15 @@ function AIImportPage({push,onSendToBulk}){
         return merged;
       });
       setCardMode(true);
-      push("success","🗂️ কার্ড তৈরি হয়েছে!","নিচে দেখো, দরকারে এডিট করে সাবমিট করো");
+      // 🆕 ফিক্স: AI-এর JSON আংশিক ভাঙা থাকলে (parseOcrGroupResponse তখনো যা
+      // পার্স করা গেছে সেটা রিটার্ন করে) — এখন এটা silent না থেকে স্পষ্ট
+      // ওয়ার্নিং দেখায়, যাতে বাদ পড়া অংশটুকু raw/parsed টেক্সট মোডে গিয়ে
+      // ম্যানুয়ালি চেক করে নেওয়া যায়।
+      if(groups._partialFailCount){
+        push("warn",`⚠️ ${groups._partialFailCount}টা গ্রুপ পার্স করা যায়নি`,"বাকিগুলো ঠিকভাবে কার্ড হয়েছে — বাদ পড়া অংশ Raw OCR টেক্সটে চেক করে ম্যানুয়ালি Bulk-এ পাঠাও");
+      } else {
+        push("success","🗂️ কার্ড তৈরি হয়েছে!","নিচে দেখো, দরকারে এডিট করে সাবমিট করো");
+      }
     }catch(e){
       setCardError(e.message);
       push("error","❌ কার্ড বানানো ব্যর্থ",e.message);
