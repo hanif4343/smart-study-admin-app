@@ -112,7 +112,7 @@ const OCR_PROMPT_FORMATS={
 প্রশ্ন;অপশন১;অপশন২;অপশন৩;অপশন৪;সঠিকউত্তর;Subject;Topic
 সঠিক উত্তর বের করার নিয়ম (এই ক্রম অনুযায়ী চেষ্টা করো):
 ১. যদি কোনো অপশনের পাশে/আগে ভরাট বা কালো বৃত্ত/বুলেট চিহ্ন (যেমন ●, ⬤, ⚫, বা কালো রঙে হাইলাইট করা বৃত্ত) থাকে আর বাকিগুলোর পাশে ফাঁকা/সাদা বৃত্ত (○, ◯) থাকে — তাহলে যেটার পাশে ভরাট চিহ্ন সেটাই সঠিক উত্তর।
-২. যদি প্রশ্নের শেষে আলাদা "উ." বা "Ans" বা "Answer" লাইনে ক/খ/গ/ঘ বা A/B/C/D লেখা থাকে — সেই অক্ষরের পজিশন অনুযায়ী অপশন ধরবে (ক বা A = ১ম অপশন, খ বা B = ২য়, গ বা C = ৩য়, ঘ বা D = ৪র্থ)।
+২. যদি প্রশ্নের পাশে/ডানদিকে/নিচে আলাদাভাবে "উ." বা "ans" বা "Ans" বা "Answer" শব্দের পর ক/খ/গ/ঘ বা a/b/c/d বা A/B/C/D অক্ষর লেখা থাকে (যেমন "ans: b", "Answer: গ") — সেই অক্ষরের পজিশন অনুযায়ী অপশন ধরবে (ক বা a বা A = ১ম অপশন, খ বা b বা B = ২য়, গ বা c বা C = ৩য়, ঘ বা d বা D = ৪র্থ)।
 ৩. যদি উত্তর হিসেবে সরাসরি কোনো অপশনের হুবহু টেক্সট লেখা থাকে — সেটাই ব্যবহার করো।
 ৪. উপরের কোনোটাই না বুঝলে, প্রশ্নের বিষয়বস্তু অনুযায়ী তোমার নিজের জ্ঞান দিয়ে সবচেয়ে সম্ভাব্য সঠিক উত্তরটা অনুমান করো — কখনোই সঠিক উত্তর ফাঁকা রাখবে না।
 ${OCR_CORRECTION_RULES}
@@ -198,19 +198,70 @@ RULES:
 - পৃষ্ঠা নম্বর, বিজ্ঞাপন, Facebook, প্রমোশনাল text বাদ দাও
 ${OCR_NOISE_RULES}
 - কোনো প্রশ্ন বাদ দিও না
+- ⚠️ JSON অবশ্যই strictly valid হতে হবে: "q"/"a"/"subject"/"heading"/"topic"-এর ভেতরে সরাসরি লাইন-ব্রেক দিও না (একই লাইনে লিখো); ভেতরে ইংরেজি ডাবল-কোট (") লাগলে সেটা \\" দিয়ে escape করো; প্রতিটা property-এর পর কমা, শেষ property-তে কমা নয়; কোনো markdown/bullet/extra comment JSON-এর বাইরে দিও না
 === OCR TEXT ===
 ${ocrText}`;
 }
-/* ── AI-এর raw টেক্সট রেসপন্স থেকে JSON array বের করা — code fence/leading-trailing
-   টেক্সট থাকলেও safely পার্স করার চেষ্টা করে। ── */
+/* ── JSON.parse-এর আগে কমন AI-mistake ফিক্স করার চেষ্টা (trailing comma, smart
+   quotes) — সরাসরি parse ব্যর্থ হলেই শুধু কল হয়, তাই স্বাভাবিক ক্ষেত্রে কোনো
+   বাড়তি খরচ নেই। ── */
+function tryParseJsonLenient(str){
+  try{ return JSON.parse(str); }catch(_){}
+  const fixed=str
+    .replace(/,\s*([}\]])/g,"$1")           // trailing comma
+    .replace(/[\u2018\u2019]/g,"'")          // smart single quotes
+    .replace(/[\u201C\u201D]/g,'"');         // smart double quotes
+  try{ return JSON.parse(fixed); }catch(_){ return null; }
+}
+/* ── string-literal-এর ভেতরের { }-কে গণনায় না ধরে, top-level {...} object-গুলো
+   আলাদা আলাদা substring হিসেবে বের করে আনে (bracket-matching, quote-aware)। ── */
+function extractTopLevelObjects(str){
+  const objects=[];
+  let depth=0,start=-1,inStr=false,esc=false;
+  for(let i=0;i<str.length;i++){
+    const ch=str[i];
+    if(inStr){
+      if(esc) esc=false;
+      else if(ch==="\\") esc=true;
+      else if(ch==='"') inStr=false;
+      continue;
+    }
+    if(ch==='"'){ inStr=true; continue; }
+    if(ch==="{"){ if(depth===0) start=i; depth++; }
+    else if(ch==="}"){ depth--; if(depth===0&&start!==-1){ objects.push(str.slice(start,i+1)); start=-1; } }
+  }
+  return objects;
+}
+// 🐛 ফিক্স (একটা group-এ AI-এর JSON ভুলে *পুরো* ইম্পোর্ট ব্যর্থ হয়ে যাওয়া):
+// দীর্ঘ OCR ব্যাচে AI মাঝেমধ্যে একটা group-এর ভেতরে literal newline / unescaped
+// quote / smart-quote জাতীয় ছোট ভুল করে ফেলে — আগে এতে পুরো JSON.parse() throw
+// করে পুরো ইম্পোর্টই ব্যর্থ হয়ে যেত ("Expected ',' or '}' ...")। এখন প্রথমে
+// পুরো array একসাথে (lenient) পার্স করার চেষ্টা হয়; সেটাও ব্যর্থ হলে প্রতিটা
+// {...} group *আলাদাভাবে* বের করে যেগুলো ভ্যালিড সেগুলো রাখা হয়, যেই
+// গ্রুপ(গুলো)-তে সত্যিই ভুল আছে শুধু সেগুলোই বাদ পড়ে (recovered._partialFailCount-এ
+// কতগুলো বাদ পড়লো তার সংখ্যা থাকে, UI চাইলে ওয়ার্নিং দেখাতে পারে)।
 function parseOcrGroupResponse(text){
   let t=(text||"").trim();
   t=t.replace(/^```json/i,"").replace(/^```/,"").replace(/```\s*$/,"").trim();
   const start=t.indexOf("["),end=t.lastIndexOf("]");
-  if(start===-1||end===-1) throw new Error("AI response-এ JSON array পাওয়া যায়নি");
-  const parsed=JSON.parse(t.slice(start,end+1));
-  if(!Array.isArray(parsed)) throw new Error("AI response একটা array না");
-  return parsed;
+  const body=(start!==-1&&end!==-1)?t.slice(start,end+1):t;
+
+  const whole=tryParseJsonLenient(body);
+  if(Array.isArray(whole)) return whole;
+
+  const candidates=extractTopLevelObjects(body);
+  const recovered=[];
+  let failedCount=0;
+  candidates.forEach(c=>{
+    const obj=tryParseJsonLenient(c);
+    if(obj&&typeof obj==="object"&&Array.isArray(obj.items)) recovered.push(obj);
+    else failedCount++;
+  });
+  if(recovered.length){
+    if(failedCount>0) Object.defineProperty(recovered,"_partialFailCount",{value:failedCount,enumerable:false});
+    return recovered;
+  }
+  throw new Error("AI response-এ কোনো বৈধ group পাওয়া যায়নি (JSON সম্পূর্ণ ভাঙা) — আবার চেষ্টা করো, একবারে কম ছবি দিলেও সাহায্য হতে পারে");
 }
 
 // একটামাত্র provider/key দিয়ে একবার কল — ব্যর্থ হলে throw করে (rotation ফাংশন এটাকে wrap করে)
