@@ -42,6 +42,11 @@ function parseGenResponse(text){
   if(start===-1||end===-1) throw new Error("AI response format ঠিক নেই");
   return JSON.parse(t.slice(start,end+1));
 }
+function locatedError(message,tabKey,cardId,field){
+  const err=new Error(message);
+  err.tabKey=tabKey; err.cardId=cardId; err.field=field||"topic";
+  return err;
+}
 function shuffle4(arr){
   const a=[...arr];
   for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
@@ -378,6 +383,28 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
      শুধু প্রশ্ন + সঠিক উত্তর দিলেই ৩টা ভুল অপশন (distractor) বানিয়ে opt1-4-এ
      এলোমেলো ক্রমে বসিয়ে দেয় — অপশন নিজে টাইপ করা লাগে না। ── */
   const[mcqGeneratingId,setMcqGeneratingId]=useState(null);
+  // 🆕 সাবমিট করলে "Topic ফাঁকা" এরর টোস্টে দেখা যেত ঠিকই, কিন্তু একাধিক কার্ডের
+  // মধ্যে ঠিক কোনটা ফাঁকা সেটা খুঁজে বের করা কষ্টকর ছিল। এখন এরর হলে সরাসরি সেই
+  // Topic ফিল্ডে স্ক্রল করে (দরকারে ট্যাব বদলে) নিয়ে যাওয়া হয় + কিছুক্ষণ লাল
+  // হাইলাইট করে দেখানো হয়। ঠিক করে আবার সাবমিট করলে (একাধিক ফাঁকা থাকলে) পরেরটা
+  // পাওয়া যাবে — কারণ প্রতিবার সাবমিটে প্রথম থেকেই নতুন করে ভ্যালিডেশন চলে।
+  const topicRefs=useRef({}); // cardId -> DOM element (Topic ফিল্ড wrapper)
+  const subjectFieldRefs=useRef({}); // cardId -> DOM element (GK Subject ফিল্ড wrapper)
+  const[highlightCardId,setHighlightCardId]=useState(null);
+  const[highlightField,setHighlightField]=useState("topic");
+  const flyToCard=(tabKey,cardId,field)=>{
+    setActiveTab(tabKey);
+    setHighlightCardId(cardId);
+    setHighlightField(field||"topic");
+    // ট্যাব বদলের পর নতুন ট্যাবের DOM রেন্ডার হতে এক টিক সময় দেওয়া হচ্ছে
+    requestAnimationFrame(()=>{
+      setTimeout(()=>{
+        const refMap=field==="subject"?subjectFieldRefs:topicRefs;
+        refMap.current[cardId]?.scrollIntoView({behavior:"smooth",block:"center"});
+      },60);
+    });
+    setTimeout(()=>setHighlightCardId(h=>h===cardId?null:h),2600);
+  };
   const generateMcqOptions=async(tab,cardId,itemId,question,answer,isFlat)=>{
     if(!question.trim()||!answer.trim()){ push("warn","আগে প্রশ্ন ও সঠিক উত্তর লিখো",""); return; }
     if(!buildKeyPool().length){ push("warn","⚠️ কোনো AI provider active নেই","API Settings-এ গিয়ে অন্তত একটা key active করো"); return; }
@@ -593,7 +620,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               subjName=t.fixedSubject;
             }
             const topicName=card.topicSel.name.trim();
-            if(!topicName)throw new Error(`"${t.label}" ট্যাবে একটা কার্ডে Topic ফাঁকা আছে — Topic লিখো/বেছে নাও`);
+            if(!topicName)throw locatedError(`"${t.label}" ট্যাবে একটা কার্ডে Topic ফাঁকা আছে — Topic লিখো/বেছে নাও`,t.key,card.id);
             const topicId=await resolveTopicCached(subjId,card.topicSel);
             if(!topicId)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
             const heading=card.heading.trim();
@@ -649,13 +676,13 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             let subjId;
             if(t.gkStyle){
               const subjName=(card.subjectSel.name||"").trim();
-              if(!subjName)throw new Error(`GK ট্যাবে একটা প্রশ্নে Subject ফাঁকা আছে — কোন real subject (যেমন "সাধারণ বিজ্ঞান") সেটা বেছে দাও`);
+              if(!subjName)throw locatedError(`GK ট্যাবে একটা প্রশ্নে Subject ফাঁকা আছে — কোন real subject (যেমন "সাধারণ বিজ্ঞান") সেটা বেছে দাও`,t.key,card.id,"subject");
               subjId=await resolveSubjectCached(subjName);
             } else {
               subjId=await resolveFixedSubject(t.fixedSubject);
             }
             const topicName=card.topicSel.name.trim();
-            if(!topicName)throw new Error(`"${t.label}" ট্যাবে একটা প্রশ্নে Topic ফাঁকা আছে`);
+            if(!topicName)throw locatedError(`"${t.label}" ট্যাবে একটা প্রশ্নে Topic ফাঁকা আছে`,t.key,card.id);
             const topicId=await resolveTopicCached(subjId,card.topicSel);
             if(!topicId)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
             if(card.qtype==="mcq"){
@@ -718,6 +745,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       }
     }catch(e){
       push("error","সাবমিট ব্যর্থ",e.message+" — খাতা খালি হয়নি, ড্রাফট থেকে গেছে");
+      if(e.tabKey&&e.cardId) flyToCard(e.tabKey,e.cardId,e.field);
     }
     setSaving(false);
     setSaveProgress(null);
@@ -871,7 +899,8 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   </select>
                 </div>
               </div>
-              <div className="fld" style={{marginBottom:6}}>
+              <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:6,
+                  ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
                   <label style={{margin:0}}>📌 Topic (এই পুরো গ্রুপের জন্য একবারই)</label>
                   {/* 🆕 বাংলা/ইংরেজি ট্যাবে টপিক-লিস্ট ২টা আসল subject (ব্যাকরণ+সাহিত্য/
@@ -1050,7 +1079,8 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                 <button onClick={()=>removeCard(activeTab,card.id)} style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:15}}>🗑</button>
               </div>
               {tabDef.gkStyle&&(
-                <div className="fld" style={{marginBottom:8}}>
+              <div ref={el=>{subjectFieldRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
+                  ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                   <label>📚 Subject (real sheet subject — যেমন "সাধারণ বিজ্ঞান")</label>
                   <TypeaheadCombo
                     options={subjectOptions}
@@ -1062,7 +1092,8 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   />
                 </div>
               )}
-              <div className="fld" style={{marginBottom:8}}>
+              <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
+                  ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                 <label>📌 Topic</label>
                 <TypeaheadCombo
                   options={topicOptionsFor(tabDef.gkStyle?card.subjectSel.id:subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
