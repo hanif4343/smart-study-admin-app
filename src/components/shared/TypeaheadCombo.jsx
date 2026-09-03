@@ -12,7 +12,7 @@ import { C } from "../../core/config.js";
 
 const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
 
-function TypeaheadCombo({options,value,onChange,placeholder,newLabel,emptyLabel,inputStyle,lightTheme}){
+function TypeaheadCombo({options,value,onChange,placeholder,newLabel,emptyLabel,inputStyle,lightTheme,tabIndex}){
   // options: [{id,name}]   value: {id,name}
   const[text,setText]=useState(value?.name||"");
   const[open,setOpen]=useState(false);
@@ -76,6 +76,7 @@ function TypeaheadCombo({options,value,onChange,placeholder,newLabel,emptyLabel,
         onChange={e=>handleTextChange(e.target.value)}
         onFocus={()=>setOpen(true)}
         autoComplete="off"
+        tabIndex={tabIndex}
       />
       {open && matches.length>0 && (
         <div style={{
