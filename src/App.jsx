@@ -56,7 +56,7 @@ const UPLOADER_SECTIONS=[
   ]},
   {key:"aijob",title:"🚀 AI-সহায়তায়",color:C.ai,items:[
     {page:"questiongen", icon:"🧬",label:"AI প্রশ্ন",      desc:"টপিক দিয়ে প্রশ্ন জেনারেট"},
-    {page:"joblauncher", icon:"🚀",label:"ব্যাখ্যা জেনারেট", desc:"Explanation তৈরির জব চালু করুন"},
+    {page:"joblauncher", icon:"🚀",label:"ব্যাখ্যা/MCQ অপশন জেনারেট", desc:"Explanation বা MCQ অপশন তৈরির জব চালু করুন"},
     {page:"qbankconv",   icon:"🔁",label:"QBank → Quiz",  desc:"প্রশ্ন ব্যাংক থেকে MCQ বানান"},
     {page:"modeltest",   icon:"🧪",label:"Model Test",    desc:"মডেল টেস্ট জেনারেট করুন"},
   ]},
