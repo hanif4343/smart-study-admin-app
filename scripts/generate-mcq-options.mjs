@@ -35,8 +35,22 @@ const DELAY_MS = parseInt(process.env.DELAY_MS || "1200", 10);
 const MAX_RUNTIME_MS = (parseInt(process.env.MAX_RUNTIME_MIN || "330", 10)) * 60 * 1000;
 const START_TIME = Date.now();
 
-// ── Sheet-এর কলাম নাম — মিলিয়ে নাও (উপরের ⚠️ নোট দ্রষ্টব্য) ──
-const OPTION_FIELDS = ["option1", "option2", "option3", "option4"];
+// ── Sheet-এর কলাম নাম ──
+// 🐛 ফিক্স (real bug — আগে এই স্ক্রিপ্ট option1-4 পড়তো/লিখতো, কিন্তু GAS-এর
+// bFieldMap/buildSheetRow যেই আসল কলাম নাম ব্যবহার করে সেটা opt1-4 — মিসম্যাচের
+// কারণে readField()-এর কেস-ইনসেনসিটিভ চেষ্টাতেও ("option1"/"Option1") কখনো
+// "opt1" কলাম খুঁজে পেতো না, তাই ইতিমধ্যে ৪টা অপশন ভরা MCQ-ও "খালি" ধরে নিয়ে
+// queue-তে ঢুকে যেত, আর gasUpdateField("option1",...) কল করলেও GAS-সাইড কলাম
+// রিজলভ ব্যর্থ হয়ে লেখাই হতো না। এখন আসল কনভেনশন (opt1-4) ব্যবহার করা হচ্ছে,
+// readField-এ এখনো "option1"/"Option1" ফলব্যাক হিসেবে রাখা হলো — যদি কোনো
+// পুরনো শিটে সত্যিই লম্বা নাম থাকে, সেটাও কাজ করবে। ──
+const OPTION_FIELDS = ["opt1", "opt2", "opt3", "opt4"];
+const OPTION_FIELD_ALIASES = {
+  opt1: ["opt1", "Opt1", "option1", "Option1"],
+  opt2: ["opt2", "Opt2", "option2", "Option2"],
+  opt3: ["opt3", "Opt3", "option3", "Option3"],
+  opt4: ["opt4", "Opt4", "option4", "Option4"],
+};
 const EXPLANATION_FIELD = "explanation";
 
 const NONE_TAG = "__NONE__";
@@ -208,7 +222,7 @@ async function main() {
       const id = readField(row, "id", "ID", "_fbKey");
       if (!q || !correct || !id) return;
 
-      const opts = OPTION_FIELDS.map(f => readField(row, f, f.charAt(0).toUpperCase() + f.slice(1)));
+      const opts = OPTION_FIELDS.map(f => readField(row, ...OPTION_FIELD_ALIASES[f]));
       const filledCount = opts.filter(Boolean).length;
       if (filledCount === 4) return; // আগে থেকেই সব অপশন আছে — কিছু করার নেই
       if (filledCount > 0) { partiallyFilledSkipped++; return; } // কিছু অপশন আংশিক ভরা — ডেটা নষ্ট এড়াতে স্কিপ, ম্যানুয়ালি দেখতে হবে
