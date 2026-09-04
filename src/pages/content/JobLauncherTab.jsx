@@ -1,6 +1,14 @@
 /* ══════════════════════════════════════════════════════════════════
    AI JOB LAUNCHER — Audience/Subject/Sub-topic ফিল্টার করে GitHub
-   Action (generate-explanations.yml) রিমোটলি ট্রিগার করে।
+   Action (generate-explanations.yml / generate-mcq-options.yml) রিমোটলি
+   ট্রিগার করে।
+   🆕 MCQ Options জব — GAS ব্যাকএন্ডে (scripts/generate-mcq-options.mjs)
+   এবং workflow (.github/workflows/generate-mcq-options.yml) আগে থেকেই
+   পুরোপুরি বানানো ছিল (৩টা close distractor + আসল উত্তর = ৪টা, Fisher-Yates
+   shuffle দিয়ে সঠিক উত্তরের পজিশন সত্যিকারের এলোমেলো — কোনো fixed প্যাটার্ন
+   নেই) — কিন্তু সেটা ট্রিগার করার কোনো UI ছিল না, GitHub-এর নিজের Actions ট্যাব
+   থেকে ম্যানুয়ালি চালাতে হতো। এখন এই পেজেই "ব্যাখ্যা" আর "MCQ অপশন" — দুই
+   ধরনের জবের জন্য একটা টগল, বাকি সব ফিল্টার/সেটিংস UI দুটোতেই শেয়ার্ড। ──
    ══════════════════════════════════════════════════════════════════ */
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { C, GAS } from "../../core/config.js";
@@ -9,7 +17,19 @@ import { toArr, loadSharedGasSecret } from "../../core/utils.js";
 import { JOB_NONE_TAG, loadGhCfg, saveGhCfgLS } from "../../core/ghConfig.js";
 import { JobCheckList } from "../../components/shared/JobCheckList.jsx";
 
+// 🆕 প্রতিটা row থেকে opt1-4 (কেস-ইনসেনসিটিভ + option1-4 ফলব্যাক, scripts/
+// generate-mcq-options.mjs-এর OPTION_FIELD_ALIASES-এর সাথে সামঞ্জস্যপূর্ণ)
+// পড়ে ক'টা ভরা আছে গোনে — MCQ-Options জবের জন্য "queue" নির্ধারণ করতে লাগে।
+function readOptField(row,n){
+  const keys=[`opt${n}`,`Opt${n}`,`option${n}`,`Option${n}`];
+  for(const k of keys){ const v=(row[k]||"").toString().trim(); if(v) return v; }
+  return "";
+}
+
 function JobLauncherTab({push,tick}){
+  // 🆕 জব-টাইপ টগল — "explain" (ব্যাখ্যা) | "mcqoptions" (MCQ অপশন)
+  const[jobType,setJobType]=useState("explain");
+
   // ⚠️ useFB (Firebase) না — useSheetRows দিয়ে সরাসরি Google Sheet থেকে পড়া হয়,
   // কারণ explanation-fill automation এখন Sheet-এ লেখে (Firebase-এ sync পরে, ব্যাচে হয়)।
   // Firebase থেকে পড়লে এখানে ভুল/পুরনো সংখ্যা দেখাতে পারে (যেমন Sheet-এ নতুন
@@ -29,13 +49,23 @@ function JobLauncherTab({push,tick}){
         const subtopic=(row.Sub_topic||row.sub_topic||"").toString().trim();
         const audRaw=(row.AudienceTags||row.audienceTags||row.audience_tags||"").toString().trim();
         const audienceList=audRaw.split(",").map(a=>a.trim()).filter(Boolean);
-        rows.push({sheet,subject,subtopic,audienceList,hasExp:!!exp});
+        const qtype=(row.qtype||row.Qtype||row.QType||row.Type||"").toString().trim().toUpperCase();
+        const correct=(row.correct||row.Correct||"").toString().trim();
+        const filledOpts=[1,2,3,4].filter(n=>readOptField(row,n)).length;
+        // MCQ-Options queue-এর শর্ত ঠিক scripts/generate-mcq-options.mjs-এর সাথে
+        // মিলিয়ে: qtype==="MCQ", question+correct থাকা আবশ্যক, ৪টা অপশনের
+        // কোনোটাই ভরা না (partially-filled হলে স্ক্রিপ্ট নিজেও স্কিপ করে — ডেটা
+        // নষ্ট এড়াতে — তাই এখানেও সেটাকে "needsOptions" ধরা হচ্ছে না)।
+        const needsOptions=(qtype==="MCQ"&&!!correct&&filledOpts===0);
+        rows.push({sheet,subject,subtopic,audienceList,hasExp:!!exp,qtype,needsOptions});
       });
     });
     return rows;
   },[quiz,qbank,study]);
 
-  const missing=useMemo(()=>allRows.filter(r=>!r.hasExp),[allRows]);
+  const missing=useMemo(()=>
+    jobType==="mcqoptions" ? allRows.filter(r=>r.needsOptions) : allRows.filter(r=>!r.hasExp)
+  ,[allRows,jobType]);
 
   const[selAud,setSelAud]=useState([]);
   const[selSubj,setSelSubj]=useState([]);
@@ -140,10 +170,12 @@ function JobLauncherTab({push,tick}){
   const trigger=async()=>{
     if(!cfg.token){ setStatus({type:"err",msg:"❌ প্রথমে GitHub Token বসিয়ে সেভ করো।"}); return; }
     if(!cfg.repo||!cfg.repo.includes("/")){ setStatus({type:"err",msg:"❌ Repo ফরম্যাট: owner/name"}); return; }
+    const workflowFile=jobType==="mcqoptions"?cfg.workflowMcqOptions:cfg.workflowExplain;
+    if(!workflowFile){ setStatus({type:"err",msg:"❌ Workflow ফাইলের নাম ফাঁকা"}); return; }
     setBusy(true);
     setStatus({type:"info",msg:"পাঠানো হচ্ছে..."});
     try{
-      const resp=await fetch(`https://api.github.com/repos/${cfg.repo}/actions/workflows/${cfg.workflowExplain}/dispatches`,{
+      const resp=await fetch(`https://api.github.com/repos/${cfg.repo}/actions/workflows/${workflowFile}/dispatches`,{
         method:"POST",
         headers:{"Accept":"application/vnd.github+json","Authorization":"Bearer "+cfg.token,"Content-Type":"application/json"},
         body:JSON.stringify({ref:"main",inputs:{
@@ -167,11 +199,35 @@ function JobLauncherTab({push,tick}){
 
   return(
     <div style={{paddingBottom:24}}>
+      {/* 🆕 জব-টাইপ টগল — "ব্যাখ্যা" বনাম "MCQ অপশন" জেনারেট, দুটোই নিচের
+          Audience/Subject/Sub-topic ফিল্টার শেয়ার করে, শুধু "কোন রো-গুলো বাকি
+          আছে" আর "কোন workflow ট্রিগার হবে" তার লজিক আলাদা। ── */}
+      <div style={{display:"flex",gap:8,marginBottom:12}}>
+        <button onClick={()=>setJobType("explain")}
+          style={{flex:1,padding:"11px 0",borderRadius:11,fontSize:12.5,fontWeight:700,cursor:"pointer",
+            border:`1.5px solid ${jobType==="explain"?C.accent:C.border}`,
+            background:jobType==="explain"?C.accent:C.card,color:jobType==="explain"?"#fff":C.muted}}>
+          📖 ব্যাখ্যা জেনারেট
+        </button>
+        <button onClick={()=>setJobType("mcqoptions")}
+          style={{flex:1,padding:"11px 0",borderRadius:11,fontSize:12.5,fontWeight:700,cursor:"pointer",
+            border:`1.5px solid ${jobType==="mcqoptions"?"#7c3aed":C.border}`,
+            background:jobType==="mcqoptions"?"#7c3aed":C.card,color:jobType==="mcqoptions"?"#fff":C.muted}}>
+          🎲 MCQ অপশন জেনারেট
+        </button>
+      </div>
+      {jobType==="mcqoptions" && (
+        <div style={{background:"#3b0764",border:"1px solid #7c3aed55",borderRadius:12,padding:"10px 13px",marginBottom:12,fontSize:11.5,color:"#ddd6fe",lineHeight:1.6}}>
+          🎲 যেসব MCQ-তে সঠিক উত্তর আছে কিন্তু ৪টা অপশনের কোনোটাই ভরা নেই — সেগুলোর জন্য AI ৩টা কাছাকাছি ভুল অপশন বানাবে, আসল উত্তরসহ ৪টা এলোমেলো ক্রমে বসাবে (সঠিক উত্তরের অবস্থান প্রতিবার সত্যিকারের র‍্যান্ডম — কোনো ফিক্সড প্যাটার্ন থাকবে না)। আংশিক-ভরা MCQ (১-৩টা অপশন আছে) নিরাপত্তার জন্য ছোঁয়া হয় না।
+        </div>
+      )}
+
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:12}}>
         <div style={{fontSize:11,textTransform:"uppercase",letterSpacing:.6,color:C.muted,fontWeight:700,marginBottom:10}}>🎯 ফিল্টার বেছে নাও (একাধিক বাছাই করা যায়)</div>
 
         <div className="fld"><label>Audience Tag</label>
-          <JobCheckList options={audienceOptions} selected={selAud} onToggle={v=>toggle(selAud,setSelAud,v)} emptyText={missing.length?"লোড হচ্ছে বা কোনো ট্যাগ নেই":"🎉 সব প্রশ্নেই ব্যাখ্যা আছে, কোনো কাজ বাকি নেই!"}/>
+          <JobCheckList options={audienceOptions} selected={selAud} onToggle={v=>toggle(selAud,setSelAud,v)}
+            emptyText={missing.length?"লোড হচ্ছে বা কোনো ট্যাগ নেই":(jobType==="mcqoptions"?"🎉 সব MCQ-তেই অপশন আছে, কোনো কাজ বাকি নেই!":"🎉 সব প্রশ্নেই ব্যাখ্যা আছে, কোনো কাজ বাকি নেই!")}/>
         </div>
 
         <div className="fld"><label>Subject</label>
@@ -183,7 +239,7 @@ function JobLauncherTab({push,tick}){
         </div>
 
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginTop:8}}>
-          <span style={{fontSize:12,color:C.muted}}>এই ফিল্টারে ব্যাখ্যা-নেই প্রশ্ন</span>
+          <span style={{fontSize:12,color:C.muted}}>{jobType==="mcqoptions"?"এই ফিল্টারে অপশন-নেই MCQ":"এই ফিল্টারে ব্যাখ্যা-নেই প্রশ্ন"}</span>
           <span style={{fontSize:22,fontWeight:800,color:C.yellow}}>{finalRows.length}</span>
         </div>
       </div>
@@ -195,7 +251,9 @@ function JobLauncherTab({push,tick}){
           <input className="inp" value={cfg.repo} onChange={e=>setCfg({...cfg,repo:e.target.value})}/>
         </div>
         <div className="fld"><label>Workflow ফাইলের নাম</label>
-          <input className="inp" value={cfg.workflowExplain} onChange={e=>setCfg({...cfg,workflowExplain:e.target.value})}/>
+          <input className="inp"
+            value={jobType==="mcqoptions"?cfg.workflowMcqOptions:cfg.workflowExplain}
+            onChange={e=>setCfg(jobType==="mcqoptions"?{...cfg,workflowMcqOptions:e.target.value}:{...cfg,workflowExplain:e.target.value})}/>
         </div>
         <div className="fld"><label>GitHub Personal Access Token</label>
           {editingToken ? (
@@ -210,8 +268,8 @@ function JobLauncherTab({push,tick}){
         <button className="btn" style={{width:"100%",justifyContent:"center",background:C.accent,color:"#fff",padding:11,fontSize:13,marginTop:2}} onClick={saveCfg}>💾 সেটিংস সেভ করো</button>
       </div>
 
-      <button className="btn" disabled={busy} style={{width:"100%",justifyContent:"center",background:C.green,color:"#04180a",padding:13,fontSize:14,fontWeight:700}} onClick={trigger}>
-        {busy?"⏳ পাঠানো হচ্ছে...":"🚀 এই ফিল্টারে Action চালু করো"}
+      <button className="btn" disabled={busy} style={{width:"100%",justifyContent:"center",background:jobType==="mcqoptions"?"#7c3aed":C.green,color:jobType==="mcqoptions"?"#fff":"#04180a",padding:13,fontSize:14,fontWeight:700}} onClick={trigger}>
+        {busy?"⏳ পাঠানো হচ্ছে...":(jobType==="mcqoptions"?"🎲 এই ফিল্টারে MCQ অপশন জেনারেট চালু করো":"🚀 এই ফিল্টারে Action চালু করো")}
       </button>
 
       {status && (
