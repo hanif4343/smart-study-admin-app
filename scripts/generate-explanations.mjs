@@ -38,10 +38,10 @@ if (!GAS_URL || !GAS_SECRET) {
 
 // ══ প্রোভাইডার সংজ্ঞা — qbank-to-quiz.mjs এর সাথে হুবহু মিলিয়ে রাখা হয়েছে ══
 const PROVIDER_DEFS = [
-  { id: "groq", kind: "openai", envKey: "GROQ_KEYS", apiBase: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" },
+  { id: "groq", kind: "openai", envKey: "GROQ_KEYS", apiBase: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-120b" },
   { id: "mistral", kind: "openai", envKey: "MISTRAL_KEYS", apiBase: "https://api.mistral.ai/v1", model: "mistral-small-latest" },
   { id: "gemini", kind: "gemini", envKey: "GEMINI_KEYS", model: "gemini-2.5-flash-lite" },
-  { id: "openrouter", kind: "openai", envKey: "OPENROUTER_KEYS", apiBase: "https://openrouter.ai/api/v1", model: "mistralai/mistral-7b-instruct:free" },
+  { id: "openrouter", kind: "openai", envKey: "OPENROUTER_KEYS", apiBase: "https://openrouter.ai/api/v1", model: "meta-llama/llama-3.3-70b-instruct:free" },
   { id: "cerebras", kind: "openai", envKey: "CEREBRAS_KEYS", apiBase: "https://api.cerebras.ai/v1", model: "gpt-oss-120b" },
   { id: "together", kind: "openai", envKey: "TOGETHER_KEYS", apiBase: "https://api.together.xyz/v1", model: "meta-llama/Llama-3.3-70B-Instruct-Turbo-Free" },
   { id: "fireworks", kind: "openai", envKey: "FIREWORKS_KEYS", apiBase: "https://api.fireworks.ai/inference/v1", model: "accounts/fireworks/models/llama-v3p3-70b-instruct" },
@@ -67,7 +67,13 @@ function buildPrompt(question, correct) {
 শুধু ব্যাখ্যাটাই লিখবে, অন্য কিছু বলবে না।`;
 }
 
-async function callProvider(cfg, question, correct) {
+function sleepMs(ms) { return new Promise(res => setTimeout(res, ms)); }
+
+// 429 হলে একবার/দুবার ছোট backoff দিয়ে রিট্রাই করে, তারপর ছেড়ে দেয়
+// (Mistral free-tier প্রায়ই সাময়িক rate-limit দেয়, key/model খারাপ না)
+const MAX_429_RETRIES = 2;
+
+async function callProviderOnce(cfg, question, correct) {
   const prompt = buildPrompt(question, correct);
   if (cfg.kind === "gemini") {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(cfg.model)}:generateContent`;
@@ -77,7 +83,11 @@ async function callProvider(cfg, question, correct) {
       body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
     });
     const data = await resp.json();
-    if (!resp.ok) throw new Error(`[${cfg.id}] ${data?.error?.message || `HTTP ${resp.status}`}`);
+    if (!resp.ok) {
+      const err = new Error(`[${cfg.id}] ${data?.error?.message || `HTTP ${resp.status}`}`);
+      err.status = resp.status;
+      throw err;
+    }
     const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!text) throw new Error(`[${cfg.id}] খালি উত্তর`);
     return text.trim();
@@ -88,10 +98,31 @@ async function callProvider(cfg, question, correct) {
     body: JSON.stringify({ model: cfg.model, messages: [{ role: "user", content: prompt }], max_tokens: 400 }),
   });
   const data = await resp.json();
-  if (!resp.ok) throw new Error(`[${cfg.id}] ${data?.error?.message || `HTTP ${resp.status}`}`);
+  if (!resp.ok) {
+    const err = new Error(`[${cfg.id}] ${data?.error?.message || `HTTP ${resp.status}`}`);
+    err.status = resp.status;
+    throw err;
+  }
   const text = data?.choices?.[0]?.message?.content;
   if (!text) throw new Error(`[${cfg.id}] খালি উত্তর`);
   return text.trim();
+}
+
+async function callProvider(cfg, question, correct) {
+  let lastErr;
+  for (let attempt = 0; attempt <= MAX_429_RETRIES; attempt++) {
+    try {
+      return await callProviderOnce(cfg, question, correct);
+    } catch (e) {
+      lastErr = e;
+      if (e.status === 429 && attempt < MAX_429_RETRIES) {
+        await sleepMs(800 * (attempt + 1)); // 800ms, 1600ms
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr;
 }
 
 async function callRotating(pool, startIdx, question, correct) {
