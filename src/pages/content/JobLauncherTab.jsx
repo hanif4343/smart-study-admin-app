@@ -49,14 +49,24 @@ function JobLauncherTab({push,tick}){
         const subtopic=(row.Sub_topic||row.sub_topic||"").toString().trim();
         const audRaw=(row.AudienceTags||row.audienceTags||row.audience_tags||"").toString().trim();
         const audienceList=audRaw.split(",").map(a=>a.trim()).filter(Boolean);
-        const qtype=(row.qtype||row.Qtype||row.QType||row.Type||"").toString().trim().toUpperCase();
+        // 🐛 রিয়েল ফিক্স: আসল শিটের হেডার হলো "Question Type" (স্পেসসহ) — আগে
+        // qtype/Qtype/QType/Type-ই চেক হতো, "Question Type" ছিল না, তাই qtype
+        // সবসময় "" হতো আর নিচের qtype==="MCQ" শর্তে প্রতিটা রো (MCQ হলেও)
+        // বাদ পড়ে যেত — queue সবসময় 0 দেখাতো। এখন scripts/generate-mcq-options.mjs
+        // -এর সাথে হুবহু মিলিয়ে ফিক্স করা হলো: সব সম্ভাব্য alias চেক করা হয়, আর
+        // কলাম খালি থাকলে (পুরনো MCQ রো-গুলোয় যা কমন) সেটাকে MCQ-ই ধরা হয় —
+        // শুধু স্পষ্টভাবে "WRITTEN" লেখা থাকলে বাদ দেওয়া হয়।
+        const qtypeRaw=(row.qtype||row.Qtype||row.QType||row.Type||row["Question Type"]||row["question type"]||row.QuestionType||"").toString().trim().toUpperCase();
+        const isWritten=qtypeRaw==="WRITTEN";
         const correct=(row.correct||row.Correct||"").toString().trim();
         const filledOpts=[1,2,3,4].filter(n=>readOptField(row,n)).length;
         // MCQ-Options queue-এর শর্ত ঠিক scripts/generate-mcq-options.mjs-এর সাথে
-        // মিলিয়ে: qtype==="MCQ", question+correct থাকা আবশ্যক, ৪টা অপশনের
-        // কোনোটাই ভরা না (partially-filled হলে স্ক্রিপ্ট নিজেও স্কিপ করে — ডেটা
-        // নষ্ট এড়াতে — তাই এখানেও সেটাকে "needsOptions" ধরা হচ্ছে না)।
-        const needsOptions=(qtype==="MCQ"&&!!correct&&filledOpts===0);
+        // মিলিয়ে: "WRITTEN" না হওয়া (খালি কলাম = MCQ ধরা হয়), question+correct
+        // থাকা আবশ্যক, ৪টা অপশনের কোনোটাই ভরা না (partially-filled হলে স্ক্রিপ্ট
+        // নিজেও স্কিপ করে — ডেটা নষ্ট এড়াতে — তাই এখানেও সেটাকে "needsOptions"
+        // ধরা হচ্ছে না)।
+        const needsOptions=(!isWritten&&!!correct&&filledOpts===0);
+        const qtype=isWritten?"WRITTEN":"MCQ";
         rows.push({sheet,subject,subtopic,audienceList,hasExp:!!exp,qtype,needsOptions});
       });
     });
