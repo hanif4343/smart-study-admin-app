@@ -161,14 +161,33 @@ async function callRotating(pool, startIdx, question, correct) {
 }
 
 // ── Sheet সরাসরি GAS-এর getSheetRows অ্যাকশন দিয়ে পড়া (generate-explanations.mjs-এর হুবহু কপি) ──
-async function gasGetSheetRows(tab) {
+// 🐛 ডায়াগনস্টিক ফিক্স: আগে resp.json() fail করলে চুপচাপ {} ধরে নিয়ে সবসময়
+// "unknown error" দেখাতো — আসল কারণ (timeout/HTML error page/HTTP status)
+// কখনো দেখা যেত না। এখন raw body না পার্স হলে HTTP status + body-র প্রথম
+// ৩০০ ক্যারেক্টার লগ করা হয়, যাতে পরের রানে আসল সমস্যা (যেমন GAS execution
+// timeout বড় শিটে, বা ভুল deployment URL) সরাসরি বোঝা যায়।
+async function gasGetSheetRows(tab, retries = 2) {
   const url = `${GAS_URL}?action=getSheetRows&tab=${encodeURIComponent(tab)}&secret=${encodeURIComponent(GAS_SECRET)}`;
-  const resp = await fetch(url);
-  const data = await resp.json().catch(() => ({}));
-  if (data?.status !== "success" || !Array.isArray(data.rows)) {
-    throw new Error(`GAS getSheetRows(${tab}) ব্যর্থ: ${data?.message || "unknown error"}`);
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const resp = await fetch(url);
+    const rawText = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      const preview = rawText.slice(0, 300).replace(/\s+/g, " ").trim();
+      if (attempt < retries) {
+        console.log(`⚠️ getSheetRows(${tab}) attempt ${attempt + 1} — HTTP ${resp.status}, JSON পার্স ব্যর্থ (সম্ভবত GAS timeout, শিট বড় হলে হয়) — retry করছি... raw: "${preview}"`);
+        await sleep(3000);
+        continue;
+      }
+      throw new Error(`GAS getSheetRows(${tab}) ব্যর্থ: HTTP ${resp.status}, JSON না — সম্ভবত execution timeout (শিট বড় হলে ৬-মিনিট Apps Script লিমিট ছুঁতে পারে) অথবা ভুল URL/deployment। raw (প্রথম ৩০০ অক্ষর): "${preview}"`);
+    }
+    if (data?.status !== "success" || !Array.isArray(data.rows)) {
+      throw new Error(`GAS getSheetRows(${tab}) ব্যর্থ: ${data?.message || `unknown error (HTTP ${resp.status})`}`);
+    }
+    return data.rows;
   }
-  return data.rows;
 }
 
 // ── generate-explanations.mjs-এর gasUpdateExplanation-এর মতোই, কিন্তু field নাম প্যারামিটার
