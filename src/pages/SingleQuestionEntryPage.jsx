@@ -132,6 +132,11 @@ function SingleQuestionEntryPage({push}){
   // subject বদলালে আগের topic নতুন subject-এর আন্ডারে না-ও থাকতে পারে, তাই রিসেট
   useEffect(()=>{ setTopicSel({id:"",name:""}); },[subjectSel.id]);
 
+  // 🆕 নামসহ খসড়ার "কোনটা এখন এডিট হচ্ছে" — এটা এখানে (উপরে) আনা হলো কারণ নিচের
+  // অটোসেভ useEffect-টা এটা পড়ে/সেভ করে (restoreDraft-এ ডুপ্লিকেট-প্রতিরোধ ফিক্সের
+  // অংশ — আগে এটা নিচে ঘোষণা হতো, TDZ এড়াতে উপরে আনা হলো)।
+  const[activeDraftId,setActiveDraftId]=useState(null);
+
   // ── ড্রাফট অটোসেভ (নিঃশব্দ, ১টা "চলতি সেশন" স্লট) — টাইপ করে যাওয়া প্রশ্ন/
   // Subject/পদ-প্রতিষ্ঠান-সাল ভুলে ব্যাক চাপা বা রিলোডে হারিয়ে যাওয়া ঠেকাতে। ──
   const draftCheckedRef=useRef(false);
@@ -158,6 +163,14 @@ function SingleQuestionEntryPage({push}){
     if(d.opt1!==undefined)setOpt1(d.opt1); if(d.opt2!==undefined)setOpt2(d.opt2);
     if(d.opt3!==undefined)setOpt3(d.opt3); if(d.opt4!==undefined)setOpt4(d.opt4);
     if(d.explanation!==undefined)setExplanation(d.explanation);
+    // 🐛 ফিক্স: আগে এখানে activeDraftId রিস্টোর হতো না — ফলে কোনো নামসহ খসড়া লোড
+    // করে এডিট করার পর পেজ রিলোড হলে (autosave থেকে) "ফিরিয়ে আনো" চাপলে ফিল্ডগুলো
+    // ফিরে আসতো ঠিকই, কিন্তু activeDraftId খালি (null) থেকে যেত — তারপর "খসড়া
+    // আপডেট করো" চাপলে saveNamedDraft() পুরনো এন্ট্রি আপডেট না করে নতুন একটা
+    // ডুপ্লিকেট এন্ট্রি বানাতো। এখন autosave-এ activeDraftId-ও সেভ হয় (নিচের
+    // useEffect দেখো) আর এখানে রিস্টোর করা হচ্ছে, তাই "ফিরিয়ে আনো"-র পর সেভ করলে
+    // ঠিক আগের খসড়াটাই আপডেট হবে, ডুপ্লিকেট হবে না।
+    if(d.activeDraftId!==undefined)setActiveDraftId(d.activeDraftId);
     setDraftBanner(null);
     push("success","♻️ আগের ড্রাফট ফিরিয়ে আনা হলো","");
   };
@@ -167,11 +180,14 @@ function SingleQuestionEntryPage({push}){
     if(saving) return;
     const t=setTimeout(()=>{
       const hasContent=question.trim()||subjectSel.name.trim()||pendingParts.length>0;
-      if(hasContent) saveDraft(LS_DRAFT_SINGLE,{targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,groupHeadingText,pendingParts,question,correct,opt1,opt2,opt3,opt4,explanation});
+      // 🐛 ফিক্স: activeDraftId-ও autosave-এর সাথে সেভ করা হচ্ছে (আগে হতো না) —
+      // যাতে রিলোডের পর "ফিরিয়ে আনো" চাপলে জানা যায় এটা কোন নামসহ খসড়ার সাথে
+      // যুক্ত ছিল, আর পরে সেভ করলে ডুপ্লিকেট না হয়ে আপডেট হয় (দেখো restoreDraft)।
+      if(hasContent) saveDraft(LS_DRAFT_SINGLE,{targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,groupHeadingText,pendingParts,question,correct,opt1,opt2,opt3,opt4,explanation,activeDraftId});
       else clearDraft(LS_DRAFT_SINGLE);
     },800);
     return ()=>clearTimeout(t);
-  },[targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,groupHeadingText,pendingParts,question,correct,opt1,opt2,opt3,opt4,explanation,saving,draftBanner]);
+  },[targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,groupHeadingText,pendingParts,question,correct,opt1,opt2,opt3,opt4,explanation,saving,draftBanner,activeDraftId]);
 
   // ── 🆕 নামসহ একাধিক খসড়া (Save as Draft + ড্রাফট লিস্ট) — উপরের অটো-ড্রাফট
   // থেকে আলাদা: এটা একটা লিস্ট (localStorage: LS_DRAFT_SINGLE_LIST), প্রতিটা
@@ -183,16 +199,35 @@ function SingleQuestionEntryPage({push}){
     try{ const raw=localStorage.getItem(LS_DRAFT_SINGLE_LIST); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; }catch{ return []; }
   });
   const[showDraftList,setShowDraftList]=useState(false);
-  const[activeDraftId,setActiveDraftId]=useState(null);
   const persistDraftList=(list)=>{
     setDraftList(list);
     try{ localStorage.setItem(LS_DRAFT_SINGLE_LIST,JSON.stringify(list)); }catch{}
   };
+  // 🆕 প্রথম ২টা শব্দ বের করার হেল্পার — draftHeadline-এ ব্যবহার হয়
+  function firstTwoWords(str){
+    const t=(str||"").toString().trim();
+    if(!t) return "";
+    return t.split(/\s+/).slice(0,2).join(" ");
+  }
+  // 🐛 ফিক্স: আগে হেডলাইন শুধু Subject — Topic দেখাতো, যেটা একই সাবজেক্টের
+  // অনেকগুলো খসড়ার মধ্যে আলাদা করা কঠিন করে তুলতো (সব কটাই একই রকম দেখাতো)।
+  // এখন বদলে আসল প্রশ্নের প্রথম ২ শব্দ + "..." + প্রতিষ্ঠানের প্রথম ২ শব্দ
+  // দেখানো হয় — যা দিয়ে কোন খসড়া কোনটা তা সহজে চেনা যায়। প্রশ্ন/প্রতিষ্ঠান
+  // কোনোটা না থাকলে (যেমন Quiz মোডে প্রতিষ্ঠান থাকে না) আগের Subject/Topic
+  // ফলব্যাক হিসেবে থেকে যায়।
   function draftHeadline(d){
-    const s=((d.subjectSel&&d.subjectSel.name)||"").trim();
-    const t=((d.topicSel&&d.topicSel.name)||"").trim();
-    const parts=[s,t].filter(Boolean);
-    let label=parts.length?parts.join(" — "):"নাম-ছাড়া খসড়া";
+    const firstQ=(d.pendingParts&&d.pendingParts.length?d.pendingParts[0].question:"")||d.question||"";
+    const qWords=firstTwoWords(firstQ);
+    const instWords=firstTwoWords(d.instSel&&d.instSel.name);
+    let label;
+    if(qWords&&instWords) label=`${qWords} ... ${instWords}`;
+    else if(qWords) label=`${qWords} ...`;
+    else{
+      const s=((d.subjectSel&&d.subjectSel.name)||"").trim();
+      const t=((d.topicSel&&d.topicSel.name)||"").trim();
+      const parts=[s,t].filter(Boolean);
+      label=parts.length?parts.join(" — "):"নাম-ছাড়া খসড়া";
+    }
     const qn=(d.pendingParts?d.pendingParts.length:0)+((d.question||"").trim()?1:0);
     if(qn) label+=` (${qn}টা প্রশ্ন)`;
     return label;
@@ -329,6 +364,19 @@ function SingleQuestionEntryPage({push}){
     activeInputRef.current="q";
     requestAnimationFrame(()=>qRef.current?.focus());
   },[question,correct,opt1,opt2,opt3,opt4,explanation,push]);
+
+  // 🆕 সারি (pendingParts) লিস্টের স্ক্রলেবল কন্টেইনার — নতুন প্রশ্ন যোগ হলে (idx বাড়লে)
+  // স্বয়ংক্রিয়ভাবে নিচে স্ক্রল করে, যাতে শেষে যোগ করা প্রশ্নটাই সবসময় নিচে দেখা যায় আর
+  // আগেরগুলো স্বাভাবিকভাবে উপরে (স্ক্রল-আউট) সরে যায় — ম্যানুয়ালি স্ক্রল করতে হয় না।
+  const pendingListRef=useRef(null);
+  const prevPendingLenRef=useRef(0);
+  useEffect(()=>{
+    if(pendingParts.length>prevPendingLenRef.current && pendingListRef.current){
+      const el=pendingListRef.current;
+      requestAnimationFrame(()=>{ el.scrollTop=el.scrollHeight; });
+    }
+    prevPendingLenRef.current=pendingParts.length;
+  },[pendingParts.length]);
 
   const removePending=useCallback((id)=>setPendingParts(p=>p.filter(x=>x.id!==id)),[]);
   /* ── ✏️ সারিতে জমা থাকা কোনো একটা প্রশ্ন এডিট করতে চাইলে — সারি থেকে সরিয়ে
@@ -595,7 +643,7 @@ function SingleQuestionEntryPage({push}){
           <div style={{fontSize:10,fontWeight:800,color:"#facc15",marginBottom:6}}>
             🔗 সারিতে জমা আছে (এখনো সাবমিট হয়নি): {pendingParts.length}টা প্রশ্ন
           </div>
-          <div style={{maxHeight:180,overflowY:"auto"}}>
+          <div ref={pendingListRef} style={{maxHeight:180,overflowY:"auto"}}>
             {pendingParts.map((p,idx)=>(
               <div key={p.id} style={{display:"flex",alignItems:"center",gap:6,fontSize:10,color:C.muted,padding:"4px 0",borderBottom:idx<pendingParts.length-1?`1px dashed ${C.border}55`:"none"}}>
                 <span style={{flexShrink:0,fontWeight:700,color:C.text}}>{idx+1}.</span>
