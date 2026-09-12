@@ -52,7 +52,10 @@ function SingleQuestionEntryPage({push}){
   // ── এই ফিল্ডগুলো একবার সেট হলে সেশনজুড়ে থাকে ──
   const[subjectSel,setSubjectSel]=useState({id:"",name:""});
   const[topicSel,setTopicSel]=useState({id:"",name:""});
-  const[audienceTags,setAudienceTags]=useState("");
+  // 🐛 ফিক্স: আগে ডিফল্ট "" (খালি) ছিল, তাই প্রতিটা নতুন সেশনে/পেজ রিলোডে হাতে
+  // "Job" টাইপ করতে হতো। এখন ডিফল্ট "Job" — সেশনজুড়ে এই ফিল্ড এমনিতেই অক্ষত
+  // থাকে (নিচে কোথাও রিসেট হয় না), শুধু প্রথম লোডে প্রি-ফিলড থাকার জন্য এই বদল।
+  const[audienceTags,setAudienceTags]=useState("Job");
 
   // ── Subjects/Topics/Posts/Institutions রেফারেন্স টেবিল ──
   const[refData,setRefData]=useState(null);
@@ -649,10 +652,16 @@ function SingleQuestionEntryPage({push}){
 
       {isMCQ&&!optionsHidden&&(
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-          {[["ক",opt1,setOpt1],["খ",opt2,setOpt2],["গ",opt3,setOpt3],["ঘ",opt4,setOpt4]].map(([lbl,val,setter])=>(
+          {/* 🐛 ফিক্স: আগে এই ৪টা ইনপুটেই tabIndex={-1} হার্ডকোড করা ছিল, তাই
+              অপশন বক্স আনহাইড করলেও Tab চেপে এক বক্স থেকে আরেক বক্সে যাওয়া যেতো
+              না (ব্রাউজার -1 tabIndex-ওয়ালা এলিমেন্ট Tab-এ স্কিপ করে দেয়)।
+              এখন Answer বক্সের (tabIndex=2) ঠিক পরে ক্রমিক tabIndex={3,4,5,6}
+              বসানো হলো — এই ব্লক শুধু optionsHidden===false হলেই রেন্ডার হয়,
+              তাই হাইড অবস্থায় প্রভাব নেই। ── */}
+          {[["ক",opt1,setOpt1],["খ",opt2,setOpt2],["গ",opt3,setOpt3],["ঘ",opt4,setOpt4]].map(([lbl,val,setter],idx)=>(
             <div key={lbl} className="fld" style={{marginBottom:0}}>
               <label>{lbl}. অপশন (ঐচ্ছিক){val&&val===correct.trim()&&val.trim()?" ✅":""}</label>
-              <input className="inp" value={val} onChange={e=>setter(e.target.value)} onKeyDown={e=>applyRichTextShortcut(e,setter)} placeholder={`অপশন ${lbl}`} tabIndex={-1}/>
+              <input className="inp" value={val} onChange={e=>setter(e.target.value)} onKeyDown={e=>applyRichTextShortcut(e,setter)} placeholder={`অপশন ${lbl}`} tabIndex={3+idx}/>
             </div>
           ))}
         </div>
