@@ -36,20 +36,20 @@ const MAX_RUNTIME_MS = (parseInt(process.env.MAX_RUNTIME_MIN || "330", 10)) * 60
 const START_TIME = Date.now();
 
 // ── Sheet-এর কলাম নাম ──
-// 🐛 ফিক্স (real bug — আগে এই স্ক্রিপ্ট option1-4 পড়তো/লিখতো, কিন্তু GAS-এর
-// bFieldMap/buildSheetRow যেই আসল কলাম নাম ব্যবহার করে সেটা opt1-4 — মিসম্যাচের
-// কারণে readField()-এর কেস-ইনসেনসিটিভ চেষ্টাতেও ("option1"/"Option1") কখনো
-// "opt1" কলাম খুঁজে পেতো না, তাই ইতিমধ্যে ৪টা অপশন ভরা MCQ-ও "খালি" ধরে নিয়ে
-// queue-তে ঢুকে যেত, আর gasUpdateField("option1",...) কল করলেও GAS-সাইড কলাম
-// রিজলভ ব্যর্থ হয়ে লেখাই হতো না। এখন আসল কনভেনশন (opt1-4) ব্যবহার করা হচ্ছে,
-// readField-এ এখনো "option1"/"Option1" ফলব্যাক হিসেবে রাখা হলো — যদি কোনো
-// পুরনো শিটে সত্যিই লম্বা নাম থাকে, সেটাও কাজ করবে। ──
-const OPTION_FIELDS = ["opt1", "opt2", "opt3", "opt4"];
+// 🐛 রিয়েল ফিক্স: আসল Quiz/QBank শিটের হেডার হলো "option1".."option4" (স্ক্রিনশট
+// অনুযায়ী রপ্তানি করা Study_Database দেখে যাচাই করা), "opt1".."opt4" না। আগের
+// ভার্সনে এই কনস্ট্যান্ট ভুলভাবে "opt1"-এ পাল্টানো হয়েছিল — তাতে লেখার সময়
+// gasUpdateField("opt1",...) কল হতো, কিন্তু GAS-এর update_explanation হ্যান্ডলার
+// (code_updated__finall_.gs) হেডারে exact/substring ম্যাচ খোঁজে আর "option1"
+// স্ট্রিং-এ "opt1" সাবস্ট্রিং হিসেবে নেই — ফলে GAS "Column not found" রিটার্ন
+// করে লেখাই হতো না। এখন আসল হেডার নাম (option1-4) ব্যবহার হচ্ছে; পুরনো "opt1"
+// কনভেনশনের শিট থাকলে সেটাও read-fallback হিসেবে ধরা থাকলো। ──
+const OPTION_FIELDS = ["option1", "option2", "option3", "option4"];
 const OPTION_FIELD_ALIASES = {
-  opt1: ["opt1", "Opt1", "option1", "Option1"],
-  opt2: ["opt2", "Opt2", "option2", "Option2"],
-  opt3: ["opt3", "Opt3", "option3", "Option3"],
-  opt4: ["opt4", "Opt4", "option4", "Option4"],
+  option1: ["option1", "Option1", "opt1", "Opt1"],
+  option2: ["option2", "Option2", "opt2", "Opt2"],
+  option3: ["option3", "Option3", "opt3", "Opt3"],
+  option4: ["option4", "Option4", "opt4", "Opt4"],
 };
 const EXPLANATION_FIELD = "explanation";
 
@@ -214,8 +214,19 @@ async function main() {
   for (const sheet of SHEETS) {
     const rows = await gasGetSheetRows(sheet);
     rows.forEach(row => {
-      const qtype = readField(row, "qtype", "Qtype", "QType", "Type").toUpperCase();
-      if (qtype !== "MCQ") return;
+      // 🐛 রিয়েল ফিক্স: আসল শিটে এই কলামের হেডার হলো "Question Type" (স্পেসসহ),
+      // "qtype"/"Type" না — আগে এই অ্যালিয়াস লিস্টে "Question Type" ছিলই না,
+      // তাই readField() কখনো কিছু খুঁজে পেতো না, qtype সবসময় "" হতো, আর
+      // qtype !== "MCQ" শর্তে প্রতিটা রো (আসলেই MCQ হলেও) স্কিপ হয়ে যেত —
+      // ফলে queue সবসময় খালি থাকতো এবং "সব MCQ-তেই অপশন আছে" মেসেজ দেখাতো,
+      // যদিও Quiz/QBank-এ অনেক MCQ-তে অপশন খালি ছিল। ──
+      const qtypeRaw = readField(row, "qtype", "Qtype", "QType", "Type", "Question Type", "question type", "QuestionType");
+      const qtype = qtypeRaw.toUpperCase();
+      // "MCQ" ছাড়াও Question Type কলাম খালি থাকা রো-কে ডিফল্ট MCQ ধরা হয় (GAS-এর
+      // getStats-এও একই কনভেনশন: qtyp = ... || "MCQ"), যেহেতু "Written" প্রশ্নেই
+      // শুধু এই কলামে স্পষ্ট মান বসানো হয়, বাকি সব পুরনো MCQ রো-তে খালিই থাকে।
+      const isWritten = qtype === "WRITTEN";
+      if (isWritten) return;
 
       const q = readField(row, "question", "Question");
       const correct = readField(row, "correct", "Correct");
