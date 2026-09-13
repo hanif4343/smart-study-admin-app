@@ -697,6 +697,46 @@ function ghPutFile_(owner, repo, branch, path, contentStr, token, message, known
   return { success: false, error: "HTTP " + code + ": " + resp.getContentText() };
 }
 
+// ── Image/CDN Hosting Phase — বাইনারি (ছবি) ফাইল GitHub-এ commit করার জন্য
+// ghPutFile_-এর আলাদা ভার্সন। ghPutFile_ টেক্সট/JSON কন্টেন্টের জন্য বানানো —
+// `Utilities.base64Encode(contentStr, UTF_8)` একটা STRING-কে UTF-8 হিসেবে ধরে
+// এনকোড করে, যেটা বাইনারি ছবির bytes-এর জন্য ব্যবহার করলে ডেটা corrupt হয়ে
+// যাবে (UTF-8 charset conversion বাইনারি bytes-কে বদলে দেয়)। তাই এখানে সরাসরি
+// base64-encoded string (client থেকেই base64 হিসেবে আসে) নিয়ে charset ছাড়াই
+// raw bytes-এ ডিকোড করে GitHub-এ পাঠানো হয় — কোনো টেক্সট-এনকোডিং-এর মধ্যস্থতা নেই। ──
+function ghPutBinaryFile_(owner, repo, branch, path, base64Content, token, message, knownSha) {
+  var sha = knownSha;
+  if (sha === undefined) {
+    var existing = ghGetFile_(owner, repo, branch, path, token);
+    sha = existing.exists ? existing.sha : null;
+  }
+  var url = "https://api.github.com/repos/" + owner + "/" + repo + "/contents/" + path;
+  var payload = {
+    message: message || ("Upload " + path),
+    content: base64Content, // ── ইতিমধ্যে base64 — কোনো re-encode লাগবে না ──
+    branch: branch
+  };
+  if (sha) payload.sha = sha;
+
+  var resp = fetchWithRetry_(url, {
+    method: "put",
+    contentType: "application/json",
+    headers: {
+      "Authorization": "Bearer " + token,
+      "Accept": "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28"
+    },
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+  var code = resp.getResponseCode();
+  if (code === 200 || code === 201) {
+    var body = JSON.parse(resp.getContentText());
+    return { success: true, sha: body.content ? body.content.sha : null };
+  }
+  return { success: false, error: "HTTP " + code + ": " + resp.getContentText() };
+}
+
 function ghDeleteFile_(owner, repo, branch, path, token, knownSha) {
   var sha = knownSha;
   if (sha === undefined) {
@@ -3923,6 +3963,49 @@ function doPost(e) {
       var searchPhone=params.phone.toString().trim().replace(/^'+/,'');
       for(var pr=1;pr<pRows.length;pr++){var rowPhone=pRows[pr][pPhCol].toString().trim().replace(/^'+/,'');if(rowPhone.replace(/^0+/,'')===searchPhone.replace(/^0+/,'')){pSh.getRange(pr+1,pPicCol+1).setValue(params.picture_url);syncToFirebase("Users","Users");return txt("Picture Updated");}}
       return txt("User not found");
+    }
+
+    // ── Image/CDN Hosting Phase — ImgBB-এর বদলে ছবি এখন এই একটা GAS action দিয়েই
+    // GitHub-এ commit হয়ে jsDelivr CDN URL হিসেবে ফেরত আসে। Admin App ও Student
+    // App দুটোই এই একই action ব্যবহার করে — GitHub টোকেন কখনো client-এ যায় না,
+    // শুধু GAS-এর Script Properties-এ (GITHUB_WRITE_TOKEN) নিরাপদে থাকে।
+    // params: { type:"upload_image", imageBase64 (data-URI প্রিফিক্স ছাড়া/সহ
+    // দুটোই চলবে), folder ("questions"/"users"/ইত্যাদি — path-এ subfolder হিসেবে
+    // বসে), fileName (এক্সটেনশনসহ, না দিলে .jpg ধরে নেওয়া হয়) }
+    // রিটার্ন: { status:"success", url: "<jsDelivr CDN URL>" } অথবা error ──
+    if (params.type === "upload_image") {
+      var imgProps = PropertiesService.getScriptProperties();
+      var imgOwner = imgProps.getProperty("GH_OWNER");
+      var imgRepo  = imgProps.getProperty("GH_MEDIA_REPO") || imgProps.getProperty("GH_REPO");
+      var imgBranch = imgProps.getProperty("GH_BRANCH") || "main";
+      var imgToken = imgProps.getProperty("GITHUB_WRITE_TOKEN");
+      if (!imgOwner || !imgRepo || !imgToken) {
+        return json({ status: "error", message: "GitHub config (GH_OWNER/GH_REPO/GITHUB_WRITE_TOKEN) সেট করা নেই" });
+      }
+      if (!params.imageBase64) {
+        return json({ status: "error", message: "imageBase64 পাঠানো হয়নি" });
+      }
+      // ── data-URI প্রিফিক্স (যেমন "data:image/jpeg;base64,") থাকলে ছেঁটে ফেলা —
+      // ক্লায়েন্ট Canvas.toDataURL()/Base64 এনকোডার যেভাবেই পাঠাক, দুটোই কাজ করবে ──
+      var b64 = params.imageBase64.toString();
+      var commaIdx = b64.indexOf(",");
+      if (b64.substring(0, 5) === "data:" && commaIdx !== -1) b64 = b64.substring(commaIdx + 1);
+      // ── আনুমানিক সাইজ চেক (base64 আসল বাইটের ~1.33 গুণ) — GitHub Contents API-র
+      // ~1MB ফাইল-সাইজ সীমার আগেই স্পষ্ট এরর দেখানো, নাহলে GitHub থেকে অস্পষ্ট
+      // এরর আসত এবং client বুঝতে পারত না কেন ব্যর্থ হলো ──
+      var approxBytes = Math.floor(b64.length * 0.75);
+      if (approxBytes > 1500000) {
+        return json({ status: "error", message: "ছবি অনেক বড় (~" + Math.round(approxBytes/1024) + "KB) — আপলোডের আগে কমপ্রেস/রিসাইজ করে ছোট করুন (সর্বোচ্চ ~1.4MB)" });
+      }
+      var folder = (params.folder || "misc").toString().replace(/[^a-zA-Z0-9_-]/g, "");
+      var fileName = (params.fileName || (Utilities.getUuid() + ".jpg")).toString().replace(/[^a-zA-Z0-9_.-]/g, "");
+      var filePath = "media/" + folder + "/" + fileName;
+      var putResult = ghPutBinaryFile_(imgOwner, imgRepo, imgBranch, filePath, b64, imgToken, "Upload image: " + filePath);
+      if (!putResult.success) {
+        return json({ status: "error", message: "GitHub আপলোড ব্যর্থ: " + putResult.error });
+      }
+      var cdnUrl = "https://cdn.jsdelivr.net/gh/" + imgOwner + "/" + imgRepo + "@" + imgBranch + "/" + filePath;
+      return json({ status: "success", url: cdnUrl });
     }
 
     // ── update_fields — একসাথে একাধিক কলাম (Question/Opt1-4/Correct/Explanation/
