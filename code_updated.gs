@@ -3978,9 +3978,15 @@ function doPost(e) {
       var imgOwner = imgProps.getProperty("GH_OWNER");
       var imgRepo  = imgProps.getProperty("GH_MEDIA_REPO") || imgProps.getProperty("GH_REPO");
       var imgBranch = imgProps.getProperty("GH_BRANCH") || "main";
-      var imgToken = imgProps.getProperty("GITHUB_WRITE_TOKEN");
+      // 🐛 ফিক্স: আগে শুধু GITHUB_WRITE_TOKEN (content-repo-র জন্য) খোঁজা হতো —
+      // কিন্তু media রিপোর জন্য আলাদা, কম-পারমিশনের একটা টোকেন বানিয়ে
+      // GITHUB_MEDIA_WRITE_TOKEN নামে সেভ করাই বেশি নিরাপদ (least-privilege —
+      // content আর media টোকেন আলাদা থাকলে একটা leak হলেও অন্যটা সেফ থাকে)।
+      // তাই আগে GITHUB_MEDIA_WRITE_TOKEN খোঁজা হচ্ছে, না পেলে পুরনো
+      // GITHUB_WRITE_TOKEN-এ fallback করে (যারা আলাদা টোকেন বানাননি তাদের জন্য)।
+      var imgToken = imgProps.getProperty("GITHUB_MEDIA_WRITE_TOKEN") || imgProps.getProperty("GITHUB_WRITE_TOKEN");
       if (!imgOwner || !imgRepo || !imgToken) {
-        return json({ status: "error", message: "GitHub config (GH_OWNER/GH_REPO/GITHUB_WRITE_TOKEN) সেট করা নেই" });
+        return json({ status: "error", message: "GitHub config (GH_OWNER/GH_MEDIA_REPO/GITHUB_MEDIA_WRITE_TOKEN) সেট করা নেই" });
       }
       if (!params.imageBase64) {
         return json({ status: "error", message: "imageBase64 পাঠানো হয়নি" });
