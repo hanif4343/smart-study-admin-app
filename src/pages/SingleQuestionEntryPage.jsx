@@ -21,27 +21,10 @@ import { resolveOrCreateReference, norm } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 import { PaperComposer, buildMcqGenPrompt, buildExplGenPrompt, parseGenResponse, shuffle4 } from "../components/shared/PaperComposer.jsx";
-
-/* ── ImgBB API key — রিপোর secret থেকে বিল্ড-টাইমে ইনজেক্ট হয় (Vite env var)। ── */
-const IMGBB_API_KEY = import.meta.env.VITE_IMGBB_API_KEY || "";
+import { uploadImg } from "../core/utils.js";
 
 /* ── MCQ অপশন বক্স ডিফল্ট-হাইড প্রেফারেন্স — লোকালস্টোরেজে মনে রাখা হয় ── */
 const LS_OPTIONS_HIDDEN = "ss_single_options_hidden_v1";
-
-/* ── ছবি ImgBB-তে আপলোড করে সরাসরি লিংক (url) রিটার্ন করে ── */
-async function uploadImageToImgbb(file, apiKey){
-  const fd = new FormData();
-  fd.append("image", file);
-  const res = await fetch(`[https://api.imgbb.com/1/upload?key=$](https://api.imgbb.com/1/upload?key=$){encodeURIComponent(apiKey)}`, {
-    method: "POST",
-    body: fd,
-  });
-  const data = await res.json().catch(()=>null);
-  if(!res.ok || !data || !data.success) {
-    throw new Error(data?.error?.message || "ImgBB আপলোড ব্যর্থ");
-  }
-  return data.data.url;
-}
 
 function SingleQuestionEntryPage({push}){
   const[targetMode,setTargetMode]=useState("Quiz"); // Quiz | QBank | Study
@@ -309,13 +292,23 @@ function SingleQuestionEntryPage({push}){
     e.target.value=""; // একই ছবি আবার সিলেক্ট করলেও onChange ফায়ার হবে
     if(!files.length) return;
 
-    if(!IMGBB_API_KEY){ push("error","ImgBB key পাওয়া যায়নি","VITE_IMGBB_API_KEY env var সেট আছে কিনা চেক করো"); return; }
-
+    // ── Image/CDN Hosting Phase: ImgBB বাদ — এখন utils.js-এর uploadImg() দিয়ে
+    // GAS-proxy হয়ে GitHub CDN-এ যায় (resize+compress সহ)। এখানে প্রতিটা আপলোডের
+    // ফলাফল আলাদাভাবে চেক করা হচ্ছে — কোনোটা ব্যর্থ হলে (খালি স্ট্রিং ফেরত এলে)
+    // স্পষ্ট এরর দেখানো হয়, আগের মতো নীরবে হারিয়ে যায় না। ──
     setImgUploading(true);
     try{
-      const urls=await Promise.all(files.map(f=>uploadImageToImgbb(f,IMGBB_API_KEY)));
-      insertAtCursor(urls.join(", "));
-      push("success",`🖼️ ${urls.length}টা ছবি আপলোড হয়েছে`,"লিংক কার্সরে বসানো হয়েছে");
+      const urls=await Promise.all(files.map(f=>uploadImg(f,"questions")));
+      const failedCount = urls.filter(u=>!u).length;
+      const okUrls = urls.filter(Boolean);
+      if(okUrls.length) insertAtCursor(okUrls.join(", "));
+      if(failedCount && okUrls.length){
+        push("error",`⚠️ ${failedCount}টা ছবি আপলোড ব্যর্থ হয়েছে`,`${okUrls.length}টা সফল হয়েছে — বাকিগুলো আবার চেষ্টা করুন`);
+      } else if(failedCount){
+        push("error","ছবি আপলোড ব্যর্থ","GAS/GitHub কনফিগারেশন চেক করো (console দেখো বিস্তারিত এররের জন্য)");
+      } else {
+        push("success",`🖼️ ${okUrls.length}টা ছবি আপলোড হয়েছে`,"লিংক কার্সরে বসানো হয়েছে");
+      }
     }catch(err){
       push("error","ছবি আপলোড ব্যর্থ",err.message);
     }
