@@ -1,5 +1,5 @@
 /* ══════════ HELPERS ══════════ */
-import { IMGBB } from "./config.js";
+import { GAS } from "./config.js";
 
 const fmt=n=>(n||0).toLocaleString();
 const pct=(a,b)=>b?Math.round(a/b*100):0;
@@ -31,24 +31,82 @@ const matchPhone=(key,phone)=>{
   const p=(phone||"").replace(/[.#$\[\]\s]/g,"");
   return k===p||k===p.replace(/^0+/,"")||k.replace(/^0+/,"")===p.replace(/^0+/,"");
 };
-const uploadImg=async file=>{
-  const fd=new FormData();fd.append("image",file);
-  const r=await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB}`,{method:"POST",body:fd});
-  return(await r.json())?.data?.url||"";
+// ── Image/CDN Hosting Phase ── ImgBB সম্পূর্ণ বাদ (আগে এখানে সরাসরি
+// api.imgbb.com-এ আপলোড হতো)। এখন GAS-এর "upload_image" action দিয়ে GitHub-এ
+// কমিট হয়ে jsDelivr CDN URL ফেরত আসে — GitHub টোকেন কখনো browser-এ থাকে না,
+// শুধু GAS-এর Script Properties-এ নিরাপদে থাকে (দেখো code_updated.gs)।
+// আপলোডের আগে ক্যানভাস দিয়ে resize+compress এখন বাধ্যতামূলক — শুধু স্পিড/
+// স্টোরেজের জন্যই না, GitHub Contents API-র ~1MB ফাইল-সাইজ সীমার কারণেও জরুরি।
+async function resizeAndCompressImage(blob, maxDim = 1000, quality = 0.82) {
+  try {
+    const bitmap = await createImageBitmap(blob);
+    let { width, height } = bitmap;
+    if (width > maxDim || height > maxDim) {
+      const scale = maxDim / Math.max(width, height);
+      width = Math.round(width * scale);
+      height = Math.round(height * scale);
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = width; canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    const outBlob = await new Promise(resolve => canvas.toBlob(resolve, "image/jpeg", quality));
+    return outBlob || blob; // toBlob ব্যর্থ হলে (খুব পুরনো ব্রাউজার) আসল blob-ই পাঠাও
+  } catch (e) {
+    console.error("resizeAndCompressImage failed, ব্যবহার হবে আসল ছবি:", e);
+    return blob; // resize ব্যর্থ হলেও আপলোড থেমে না গিয়ে আসল ছবিটাই যাক
+  }
+}
+
+function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result).split(",")[1] || "");
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * @param file আপলোড করার ছবি (File/Blob)
+ * @param folder GitHub media রিপোতে subfolder ("questions"/"users"/"attachments") —
+ *        না দিলে "questions" ধরা হয় (এই ফাংশনের সবচেয়ে বেশি ব্যবহার প্রশ্নের ছবিতেই)
+ */
+const uploadImg = async (file, folder = "questions") => {
+  if (!GAS) {
+    console.error("uploadImg: GAS URL সেট করা নেই (VITE_GAS_URL)");
+    return "";
+  }
+  try {
+    const compressed = await resizeAndCompressImage(file);
+    const base64 = await blobToBase64(compressed);
+    const secret = loadSharedGasSecret();
+    const fileName = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`;
+    const r = await fetch(GAS, {
+      method: "POST",
+      body: JSON.stringify({ secret, type: "upload_image", imageBase64: base64, folder, fileName })
+    });
+    const j = await r.json().catch(() => null);
+    if (j?.status === "success" && j.url) return j.url;
+    console.error("uploadImg: GAS upload_image ব্যর্থ —", j?.message || "unknown error");
+    return "";
+  } catch (e) {
+    console.error("uploadImg error:", e);
+    return "";
+  }
 };
-/* ── OCR-এর সময় স্ক্যান করা পাতার ছবিটা imgbb-তে আপলোড করে সেই লিংক পাওয়ার জন্য
+/* ── OCR-এর সময় স্ক্যান করা পাতার ছবিটা CDN-এ আপলোড করে সেই লিংক পাওয়ার জন্য
    (Question Paper কলাম — টেক্সট আকারে প্রশ্ন থাকার পাশাপাশি আসল ছবিও যেন থাকে,
    পরে ইউজার অ্যাপ এই লিংক দিয়ে মূল প্রশ্নপত্রের পাতা দেখাতে পারবে)।
    src হতে পারে: blob: URL, capacitor file src, অথবা data:...;base64 URL — যেকোনোটা
-   থেকেই fetch() দিয়ে raw bytes বের করে সরাসরি imgbb-তে ফাইল হিসেবে আপলোড করা হয়
-   (মাঝখানে base64 string বানানোর দরকার নেই, তাই মেমরি সাশ্রয়ী)। */
-const uploadImageSrcToImgbb=async src=>{
+   থেকেই fetch() দিয়ে raw bytes বের করে uploadImg()-এ পাঠানো হয়। */
+const uploadImageSrcToImgbb=async (src, folder = "questions") => {
   if(!src)return "";
   try{
     const fetched=await fetch(src);
     const blob=await fetched.blob();
-    return await uploadImg(blob);
-  }catch(e){ return ""; } // একটা পাতা আপলোড ব্যর্থ হলেও বাকি কাজ যেন থেমে না যায়
+    return await uploadImg(blob, folder);
+  }catch(e){ console.error("uploadImageSrcToImgbb error:", e); return ""; } // একটা পাতা আপলোড ব্যর্থ হলেও বাকি কাজ যেন থেমে না যায়
 };
 
 // Legacy GAS no-ops — backend আর call হয় না, শুধু পুরনো call-site গুলো ভাঙা এড়াতে রাখা
