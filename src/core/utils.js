@@ -67,6 +67,12 @@ function blobToBase64(blob) {
   });
 }
 
+// 🆕 ফোনে console দেখার উপায় না থাকলেও যেন আসল এরর মেসেজ জানা যায় — শেষ ব্যর্থ
+// uploadImg কলের আসল কারণ এখানে জমা থাকে, getLastUploadError() দিয়ে পড়া যায়
+// (দেখো SingleQuestionEntryPage.jsx-এর push("error", ...) কল)।
+let _lastUploadError = "";
+const getLastUploadError = () => _lastUploadError;
+
 /**
  * @param file আপলোড করার ছবি (File/Blob)
  * @param folder GitHub media রিপোতে subfolder ("questions"/"users"/"attachments") —
@@ -74,7 +80,8 @@ function blobToBase64(blob) {
  */
 const uploadImg = async (file, folder = "questions") => {
   if (!GAS) {
-    console.error("uploadImg: GAS URL সেট করা নেই (VITE_GAS_URL)");
+    _lastUploadError = "GAS URL সেট করা নেই (VITE_GAS_URL)";
+    console.error("uploadImg:", _lastUploadError);
     return "";
   }
   try {
@@ -88,9 +95,11 @@ const uploadImg = async (file, folder = "questions") => {
     });
     const j = await r.json().catch(() => null);
     if (j?.status === "success" && j.url) return j.url;
-    console.error("uploadImg: GAS upload_image ব্যর্থ —", j?.message || "unknown error");
+    _lastUploadError = j?.message || `HTTP ${r.status} — GAS থেকে বৈধ JSON রেসপন্স আসেনি`;
+    console.error("uploadImg: GAS upload_image ব্যর্থ —", _lastUploadError);
     return "";
   } catch (e) {
+    _lastUploadError = (e && e.message) || String(e);
     console.error("uploadImg error:", e);
     return "";
   }
@@ -140,4 +149,4 @@ function buildSubjectMap(arr){
   return map;
 }
 
-export { fmt, pct, initials, nowTs, timeAgo, toArr, phoneKey, matchPhone, uploadImg, uploadImageSrcToImgbb, gasBg, gasPost, gasCall, loadSharedGasSecret, saveSharedGasSecret, buildSubjectMap };
+export { fmt, pct, initials, nowTs, timeAgo, toArr, phoneKey, matchPhone, uploadImg, uploadImageSrcToImgbb, gasBg, gasPost, gasCall, loadSharedGasSecret, saveSharedGasSecret, buildSubjectMap, getLastUploadError };
