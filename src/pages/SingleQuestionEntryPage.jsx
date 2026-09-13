@@ -21,7 +21,7 @@ import { resolveOrCreateReference, norm } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 import { PaperComposer, buildMcqGenPrompt, buildExplGenPrompt, parseGenResponse, shuffle4 } from "../components/shared/PaperComposer.jsx";
-import { uploadImg } from "../core/utils.js";
+import { uploadImg, getLastUploadError } from "../core/utils.js";
 
 /* ── MCQ অপশন বক্স ডিফল্ট-হাইড প্রেফারেন্স — লোকালস্টোরেজে মনে রাখা হয় ── */
 const LS_OPTIONS_HIDDEN = "ss_single_options_hidden_v1";
@@ -305,7 +305,9 @@ function SingleQuestionEntryPage({push}){
       if(failedCount && okUrls.length){
         push("error",`⚠️ ${failedCount}টা ছবি আপলোড ব্যর্থ হয়েছে`,`${okUrls.length}টা সফল হয়েছে — বাকিগুলো আবার চেষ্টা করুন`);
       } else if(failedCount){
-        push("error","ছবি আপলোড ব্যর্থ","GAS/GitHub কনফিগারেশন চেক করো (console দেখো বিস্তারিত এররের জন্য)");
+        // 🆕 PC/console ছাড়াই ফোনে আসল এরর কারণটা দেখানোর জন্য — GAS/GitHub এর
+        // আসল মেসেজ (যেমন "GitHub config সেট করা নেই" বা "HTTP 403") টোস্টেই দেখায়।
+        push("error","ছবি আপলোড ব্যর্থ",getLastUploadError()||"অজানা কারণ — আবার চেষ্টা করো");
       } else {
         push("success",`🖼️ ${okUrls.length}টা ছবি আপলোড হয়েছে`,"লিংক কার্সরে বসানো হয়েছে");
       }
