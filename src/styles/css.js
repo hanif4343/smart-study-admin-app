@@ -148,6 +148,11 @@ html,body,#root{background:${C.bg};color:${C.text};font-family:'Noto Sans Bengal
 @keyframes ti{from{transform:translateY(-16px);opacity:0}to{transform:translateY(0);opacity:1}}
 @keyframes bgm-pulse{0%,100%{box-shadow:0 0 0 0 #3b82f644}50%{box-shadow:0 0 0 5px #3b82f611}}
 @keyframes bgm-dot{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.7)}}
+/* ── 🆕 Topic Tracker — ফাঁকা (0 প্রশ্ন) টপিকের জন্য ব্লিংক অ্যানিমেশন ── */
+@keyframes topic-blink{0%,100%{opacity:1}50%{opacity:.35}}
+.topic-empty-dot{animation:topic-blink 1.1s ease-in-out infinite}
+.topic-empty-row{background:${C.danger}0d;border:1px solid ${C.danger}30}
+.topic-pinned-row{background:${C.warning}15;border:1px solid ${C.warning}40}
 `;
 
 
