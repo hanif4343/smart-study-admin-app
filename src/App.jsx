@@ -103,6 +103,14 @@ export default function App(){
     return !!(savedEmail&&savedPass);
   });
 
+  // 🐛 ফিক্স: _saveAdminFcmToken() আগে শুধু LoginScreen-এর onLogin কলব্যাকে কল হতো —
+  // মানে "নতুন করে" লগইন করলেই শুধু চলতো। কিন্তু উপরের optimistic-login-এর কারণে
+  // রোজকার ব্যবহারে অ্যাপ খুললে সরাসরি already-logged-in ধরে নেওয়া হয় (LoginScreen-ই
+  // দেখা যায় না) — তাই এই কল কখনো ট্রিগারই হতো না, ফলে FCM টোকেন কখনো সেভ হয়নি।
+  // এখন loggedIn true হওয়া মাত্রই (fresh login বা optimistic-restore, দুটো ক্ষেত্রেই)
+  // এই effect চলবে — টোকেন সেভ idempotent (বারবার চললেও সমস্যা নেই, শুধু ওভাররাইট হয়)।
+  useEffect(()=>{ if(loggedIn) _saveAdminFcmToken(); },[loggedIn]);
+
   // ⚡ Optimistic লগইনের পর ব্যাকগ্রাউন্ডে token সচল আছে কিনা যাচাই — সত্যিই ব্যর্থ হলেই
   //    (refresh token + সেভ করা পাসওয়ার্ড দিয়ে re-login দুটোই ব্যর্থ) লগআউট দেখানো হয়।
   useEffect(()=>{
@@ -194,60 +202,71 @@ export default function App(){
     };
   },[loggedIn]);
 
+  // ── 🐛 ফিক্স: "ফোনের ব্যাক বাটন কাজ করে না" — যখন এই অ্যাপটা native Capacitor
+  // শেলের বদলে সাধারণ মোবাইল ব্রাউজার ট্যাবে (যেমন Chrome) খোলা হয়, তখন নিচের
+  // handleBack শুধু "backbutton"/"androidBackButton" ইভেন্টে বাঁধা ছিল — এই দুটোই
+  // Capacitor-এর নিজস্ব ইভেন্ট, প্লেইন ব্রাউজারে কখনো fire হয় না। ব্রাউজারে
+  // হার্ডওয়্যার ব্যাক চাপলে আসলে browser history-র "popstate" ইভেন্ট আসে, কিন্তু
+  // এই অ্যাপ কখনো history-তে কিছু push করে না (কমেন্টে "browser popstate" লেখা
+  // থাকলেও কোড আসলে সেটা যোগ করেনি) — তাই popstate-এর জন্য history-তে কিছুই
+  // থাকে না, ফলে ব্রাউজার সরাসরি ট্যাব থেকে বেরিয়ে যায়/পেজ ছেড়ে দেয়। এখন handleBack
+  // কে useCallback করে বাইরে আনা হলো, আর নিচে একটা আলাদা effect history-তে সবসময়
+  // একটা "বাফার" এন্ট্রি জমা রাখে + popstate শুনে ঠিক একই handleBack লজিক চালায় —
+  // তাই ব্রাউজার ট্যাবেও এখন হার্ডওয়্যার/জেসচার ব্যাক বাটন in-app back হিসেবেই কাজ করবে।
+  const handleBack=useCallback((e)=>{
+    if(e&&e.preventDefault) e.preventDefault();
+
+    // 1. SearchDetail (Student profile from search)
+    if(searchDetail){ setSearchDetail(null); return; }
+
+    // 2. Modal খোলা → modal close
+    if(modalOpen.current){
+      window.dispatchEvent(new Event("back-press"));
+      return;
+    }
+
+    // 3. Sub-layer stack এ কিছু আছে → pop
+    if(layerStack.current.length>0){
+      const top=layerStack.current[layerStack.current.length-1];
+      layerStack.current=layerStack.current.slice(0,-1);
+      try{ top.pop(); } catch(_){}
+      return;
+    }
+
+    // 3.5 Uploader hub-এর কোনো টুল (leaf page, যেমন Bulk Upload/OCR/AI Job) খোলা থাকলে সিস্টেম-ব্যাক
+    //     চাপলে আগে লঞ্চার-গ্রিডে (uploaderhub) ফিরে আসবে, সরাসরি dashboard/আগের পেজে চলে যাবে না —
+    //     ঠিক topbar-এর ← বাটনের মতোই আচরণ, শুধু hardware back button থেকে ট্রিগার হচ্ছে
+    if(UPLOADER_LEAF_PAGES.includes(page)){ goPage("uploaderhub"); return; }
+
+    // 4. Page back
+    if(page!=="dashboard"){
+      const stack=backStack.current;
+      if(stack.length>1){
+        const ns=stack.slice(0,-1);
+        backStack.current=ns;
+        setPage(ns[ns.length-1]);
+      } else {
+        setPage("dashboard");
+        backStack.current=["dashboard"];
+      }
+      return;
+    }
+
+    // 5. Dashboard এ → exit confirm (2 সেকেন্ড)
+    if(exitConfirm){
+      clearTimeout(exitTimer.current);
+      setExitConfirm(false);
+      if(window.Capacitor?.Plugins?.App) window.Capacitor.Plugins.App.exitApp();
+      else window.close();
+      return;
+    }
+    setExitConfirm(true);
+    exitTimer.current=setTimeout(()=>setExitConfirm(false),2000);
+  },[searchDetail,page,exitConfirm,goPage]);
+
   useEffect(()=>{
     if(!loggedIn) return;
-    const handleBack=(e)=>{
-      if(e&&e.preventDefault) e.preventDefault();
-
-      // 1. SearchDetail (Student profile from search)
-      if(searchDetail){ setSearchDetail(null); return; }
-
-      // 2. Modal খোলা → modal close
-      if(modalOpen.current){
-        window.dispatchEvent(new Event("back-press"));
-        return;
-      }
-
-      // 3. Sub-layer stack এ কিছু আছে → pop
-      if(layerStack.current.length>0){
-        const top=layerStack.current[layerStack.current.length-1];
-        layerStack.current=layerStack.current.slice(0,-1);
-        try{ top.pop(); } catch(_){}
-        return;
-      }
-
-      // 3.5 Uploader hub-এর কোনো টুল (leaf page, যেমন Bulk Upload/OCR/AI Job) খোলা থাকলে সিস্টেম-ব্যাক
-      //     চাপলে আগে লঞ্চার-গ্রিডে (uploaderhub) ফিরে আসবে, সরাসরি dashboard/আগের পেজে চলে যাবে না —
-      //     ঠিক topbar-এর ← বাটনের মতোই আচরণ, শুধু hardware back button থেকে ট্রিগার হচ্ছে
-      if(UPLOADER_LEAF_PAGES.includes(page)){ goPage("uploaderhub"); return; }
-
-      // 4. Page back
-      if(page!=="dashboard"){
-        const stack=backStack.current;
-        if(stack.length>1){
-          const ns=stack.slice(0,-1);
-          backStack.current=ns;
-          setPage(ns[ns.length-1]);
-        } else {
-          setPage("dashboard");
-          backStack.current=["dashboard"];
-        }
-        return;
-      }
-
-      // 5. Dashboard এ → exit confirm (2 সেকেন্ড)
-      if(exitConfirm){
-        clearTimeout(exitTimer.current);
-        setExitConfirm(false);
-        if(window.Capacitor?.Plugins?.App) window.Capacitor.Plugins.App.exitApp();
-        else window.close();
-        return;
-      }
-      setExitConfirm(true);
-      exitTimer.current=setTimeout(()=>setExitConfirm(false),2000);
-    };
-
-    // Capacitor back button + browser popstate
+    // Capacitor native shell → এই দুটো ইভেন্টেই ব্যাক ট্রিগার হয়
     document.addEventListener("backbutton",handleBack,false);
     window.addEventListener("androidBackButton",handleBack);
     return()=>{
@@ -255,7 +274,25 @@ export default function App(){
       window.removeEventListener("androidBackButton",handleBack);
       clearTimeout(exitTimer.current);
     };
-  },[loggedIn,page,searchDetail,exitConfirm,goPage]);
+  },[loggedIn,handleBack]);
+
+  // ── 🆕 প্লেইন ব্রাউজার ট্যাব সাপোর্ট — history-তে সবসময় একটা বাফার এন্ট্রি রেখে
+  // popstate-এ সেটা আবার পুশ করে দেওয়া (ক্লাসিক SPA "back-button trap" প্যাটার্ন),
+  // যাতে হার্ডওয়্যার/জেসচার ব্যাক কখনোই সরাসরি ট্যাব/পেজ ছেড়ে না যায় — বরং একই
+  // handleBack লজিক চলে (Capacitor বিল্ডে এই effect নিরীহ, কারণ Capacitor সাধারণত
+  // নিজের "backbutton" ইভেন্টেই ডিফল্ট WebView history আচরণ থামিয়ে দেয়)। ──
+  const handleBackRef=useRef(handleBack);
+  useEffect(()=>{ handleBackRef.current=handleBack; });
+  useEffect(()=>{
+    if(!loggedIn) return;
+    try{ window.history.pushState({ssTrap:true},""); }catch(_){}
+    const onPopState=(e)=>{
+      try{ window.history.pushState({ssTrap:true},""); }catch(_){}
+      handleBackRef.current(e);
+    };
+    window.addEventListener("popstate",onPopState);
+    return()=>window.removeEventListener("popstate",onPopState);
+  },[loggedIn]);
 
   const refresh=useCallback(()=>{
     setSpin(true);invalidateAll();setTick(t=>t+1);
@@ -378,7 +415,7 @@ export default function App(){
   if(!loggedIn) return(
     <ErrorBoundary>
       <style>{css}</style>
-      <LoginScreen onLogin={()=>{ _LC.lifecycle("App","User logged in — entering admin panel"); setLoggedIn(true); _saveAdminFcmToken(); }}/>
+      <LoginScreen onLogin={()=>{ _LC.lifecycle("App","User logged in — entering admin panel"); setLoggedIn(true); }}/>
     </ErrorBoundary>
   );
 
