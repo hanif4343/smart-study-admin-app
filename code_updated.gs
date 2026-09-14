@@ -899,6 +899,85 @@ function sendFCMToAll(title, body, extraData) {
   } catch(e) { return {error:e.toString()}; }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   🎯 TOPIC COVERAGE — ডেইলি রিমাইন্ডার
+   TopicPlan (Firebase, Admin App-এ in-app এডিটেবল) vs QBank+Quiz শিটে আসল
+   প্রশ্ন-সংখ্যা মিলিয়ে যেসব টপিক এখনো ফাঁকা (0 প্রশ্ন) তার জন্য অ্যাডমিনকে রোজ
+   একবার push notification পাঠায়। অ্যাডমিন ফোন হার্ডকোড না করে Users থেকে
+   Role==="Admin" খুঁজে বের করা হয় (একাধিক admin থাকলেও কাজ করবে — সবাইকে পাঠাবে)।
+   ══════════════════════════════════════════════════════════════════════════ */
+function dailyTopicReminderTrigger() {
+  try {
+    var cfg = getProps();
+    var dbSecret = PropertiesService.getScriptProperties().getProperty("FIREBASE_DB_SECRET") || cfg.SECRET_KEY;
+
+    var planResp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"TopicPlan.json?auth="+dbSecret,{muteHttpExceptions:true});
+    var plan = JSON.parse(planResp.getContentText())||{};
+    var planEntries = [];
+    Object.keys(plan).forEach(function(k){
+      var v=plan[k]||{};
+      if(v.subject&&v.topic) planEntries.push({id:k,subject:String(v.subject).trim(),topic:String(v.topic).trim()});
+    });
+    if(!planEntries.length) return; // কোনো প্ল্যান নেই — রিমাইন্ড করার কিছু নেই
+
+    var pickResp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"TopicTodayPick.json?auth="+dbSecret,{muteHttpExceptions:true});
+    var picks = JSON.parse(pickResp.getContentText())||{};
+    var pickedPlanIds = {};
+    Object.keys(picks).forEach(function(k){ if(picks[k]&&picks[k].planId) pickedPlanIds[picks[k].planId]=true; });
+
+    // QBank+Quiz সরাসরি শিট থেকে (Firebase mirror-এর বদলে — GAS-এর সবচেয়ে দ্রুত রাস্তা,
+    // getSheetRows action-এর মতো বড় শিটে timeout হওয়ার ঝুঁকি নেই কারণ এখানে raw
+    // getValues() ব্যবহার হচ্ছে, JSON round-trip বিল্ড করতে হচ্ছে না)
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var countMap = {};
+    ["QBank","Quiz"].forEach(function(name){
+      var sh = ss.getSheetByName(name);
+      if(!sh) return;
+      var data = sh.getDataRange().getValues();
+      if(data.length<2) return;
+      var hdr = data[0];
+      var subIdx = hdr.indexOf("subject"); if(subIdx<0) subIdx = hdr.indexOf("Subject");
+      var topIdx = hdr.indexOf("sub_topic"); if(topIdx<0) topIdx = hdr.indexOf("Sub_topic");
+      if(subIdx<0||topIdx<0) return;
+      for(var i=1;i<data.length;i++){
+        var key = String(data[i][subIdx]||"").trim()+"||"+String(data[i][topIdx]||"").trim();
+        countMap[key] = (countMap[key]||0)+1;
+      }
+    });
+
+    var emptyEntries = planEntries.filter(function(p){ return !(countMap[p.subject+"||"+p.topic]>0); });
+    if(!emptyEntries.length) return; // সব টপিক পূর্ণ — নোটিফাই করার দরকার নেই
+
+    var pickedEmpty = emptyEntries.filter(function(p){ return pickedPlanIds[p.id]; });
+
+    var usersResp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"Users.json?auth="+dbSecret,{muteHttpExceptions:true});
+    var users = JSON.parse(usersResp.getContentText())||{};
+    var adminPhones = [];
+    Object.keys(users).forEach(function(k){
+      var u=users[k];
+      if(u && String(u.Role||u.role||"").toLowerCase()==="admin") adminPhones.push(u.Phone||u.phone||k);
+    });
+    if(!adminPhones.length) return;
+
+    var title = "🎯 "+emptyEntries.length+"টা টপিক এখনো ফাঁকা";
+    var body = pickedEmpty.length
+      ? "আজকের টার্গেট থেকে বাকি: "+pickedEmpty.slice(0,3).map(function(p){return p.topic;}).join(", ")+(pickedEmpty.length>3?" +আরও "+(pickedEmpty.length-3)+"টা":"")
+      : "মোট "+emptyEntries.length+"টা টপিকে এখনো কোনো প্রশ্ন যোগ করা হয়নি।";
+
+    adminPhones.forEach(function(ph){ sendFCMToPhone(ph, title, body, {type:"topic_reminder"}); });
+  } catch(e) { logError_("dailyTopicReminderTrigger", String(e)); }
+}
+
+var TOPIC_REMINDER_TRIGGER_INSTALLED_KEY_ = "TOPIC_REMINDER_TRIGGER_INSTALLED_V1";
+function installTopicReminderTrigger_(hour) {
+  var triggers=ScriptApp.getProjectTriggers();
+  for (var i=0;i<triggers.length;i++){
+    if (triggers[i].getHandlerFunction()==="dailyTopicReminderTrigger") ScriptApp.deleteTrigger(triggers[i]);
+  }
+  ScriptApp.newTrigger("dailyTopicReminderTrigger").timeBased().atHour(hour==null?9:hour).everyDays(1).create();
+  Logger.log("✅ Topic reminder trigger installed — প্রতিদিন সকাল "+(hour==null?9:hour)+"টায় চেক করবে।");
+}
+
 /* ══ ATOMIC ID ══
    ⚠️ Phase 5: আগে এই ফাংশন পুরনো numeric id (1001, 1002...) জেনারেট করত। এখন থেকে
    নতুন প্রশ্নের id prefix-ভিত্তিক ("QZ-00001" স্টাইল) — RenameTab.jsx-এর
@@ -3931,6 +4010,23 @@ function doPost(e) {
         if(r&&!r.error) nbSent++; else nbFailed++;
       });
       return json({result:"success",sent:nbSent,failed:nbFailed});
+    }
+
+    // 🎯 Topic Tracker — ডেইলি রিমাইন্ডার ট্রিগার (idempotent — বারবার কল হলেও
+    // সমস্যা নেই, Script Property ফ্ল্যাগ চেক করে দ্বিতীয়বার ইনস্টল করে না)
+    if(params.type==="ensure_topic_reminder"){
+      try{
+        var trProps=PropertiesService.getScriptProperties();
+        if(trProps.getProperty(TOPIC_REMINDER_TRIGGER_INSTALLED_KEY_)!=="1"){
+          installTopicReminderTrigger_(9);
+          trProps.setProperty(TOPIC_REMINDER_TRIGGER_INSTALLED_KEY_,"1");
+          return json({result:"success",message:"✅ প্রতিদিন সকাল ৯টায় নোটিফিকেশন চালু হলো"});
+        }
+        return json({result:"success",message:"আগে থেকেই চালু আছে — প্রতিদিন সকাল ৯টায় চেক হয়"});
+      }catch(trErr){
+        logError_("ensure_topic_reminder",String(trErr));
+        return json({result:"error",error:String(trErr)});
+      }
     }
 
     if(params.type==="update_explanation"){
