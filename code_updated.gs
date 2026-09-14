@@ -901,11 +901,18 @@ function sendFCMToAll(title, body, extraData) {
 
 /* ══════════════════════════════════════════════════════════════════════════
    🎯 TOPIC COVERAGE — ডেইলি রিমাইন্ডার
-   TopicPlan (Firebase, Admin App-এ in-app এডিটেবল) vs QBank+Quiz শিটে আসল
-   প্রশ্ন-সংখ্যা মিলিয়ে যেসব টপিক এখনো ফাঁকা (0 প্রশ্ন) তার জন্য অ্যাডমিনকে রোজ
-   একবার push notification পাঠায়। অ্যাডমিন ফোন হার্ডকোড না করে Users থেকে
-   Role==="Admin" খুঁজে বের করা হয় (একাধিক admin থাকলেও কাজ করবে — সবাইকে পাঠাবে)।
-   ══════════════════════════════════════════════════════════════════════════ */
+   TopicPlan (Firebase, Admin App-এ in-app এডিটেবল) vs Subjects/Topics
+   রেফারেন্স-টেবিলের row_count মিলিয়ে যেসব টপিক এখনো ফাঁকা (0 প্রশ্ন) তার জন্য
+   অ্যাডমিনকে রোজ একবার push notification পাঠায়। অ্যাডমিন ফোন হার্ডকোড না করে
+   Users থেকে Role==="Admin" খুঁজে বের করা হয় (একাধিক admin থাকলেও কাজ করবে)।
+   🐛 ফিক্স (v2): আগে সরাসরি QBank/Quiz শিট স্ক্যান করে literal subject/sub_topic
+   কলাম গুনত — কিন্তু rename করলে (RenameTab.jsx) শুধু Subjects/Topics রেফারেন্স-
+   টেবিলের ১টা রো বদলায়, Quiz/QBank/Study-এর হাজার হাজার রো-র literal টেক্সট
+   কখনো টাচ হয় না। তাই সেই পুরনো পদ্ধতি rename-এর পর ভুল (স্টেল) কাউন্ট দিতো।
+   এখন getReferenceData action যা করে ঠিক সেটাই — Subjects+Topics শিট সরাসরি
+   পড়ে (row_count আগে থেকেই reindex করা, GAS-এর সবচেয়ে দ্রুত/নির্ভরযোগ্য রাস্তা,
+   বড় শিট স্ক্যান করতে হয় না) — subject_id→নাম রেজলভ করে গ্রুপ করা হয়, যাতে
+   একই নামের একাধিক subject_id (Quiz+QBank+Study আলাদা) ঠিকভাবে যোগ হয়ে যায়। ══ */
 function dailyTopicReminderTrigger() {
   try {
     var cfg = getProps();
@@ -925,25 +932,32 @@ function dailyTopicReminderTrigger() {
     var pickedPlanIds = {};
     Object.keys(picks).forEach(function(k){ if(picks[k]&&picks[k].planId) pickedPlanIds[picks[k].planId]=true; });
 
-    // QBank+Quiz সরাসরি শিট থেকে (Firebase mirror-এর বদলে — GAS-এর সবচেয়ে দ্রুত রাস্তা,
-    // getSheetRows action-এর মতো বড় শিটে timeout হওয়ার ঝুঁকি নেই কারণ এখানে raw
-    // getValues() ব্যবহার হচ্ছে, JSON round-trip বিল্ড করতে হচ্ছে না)
+    // Subjects+Topics রেফারেন্স-টেবিল থেকে subject_id→নাম রেজলভ করে row_count যোগ করা
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var countMap = {};
-    ["QBank","Quiz"].forEach(function(name){
-      var sh = ss.getSheetByName(name);
-      if(!sh) return;
-      var data = sh.getDataRange().getValues();
-      if(data.length<2) return;
-      var hdr = data[0];
-      var subIdx = hdr.indexOf("subject"); if(subIdx<0) subIdx = hdr.indexOf("Subject");
-      var topIdx = hdr.indexOf("sub_topic"); if(topIdx<0) topIdx = hdr.indexOf("Sub_topic");
-      if(subIdx<0||topIdx<0) return;
-      for(var i=1;i<data.length;i++){
-        var key = String(data[i][subIdx]||"").trim()+"||"+String(data[i][topIdx]||"").trim();
-        countMap[key] = (countMap[key]||0)+1;
+    var subjName = {};
+    var subjSh = ss.getSheetByName("Subjects");
+    if (subjSh && subjSh.getLastRow()>=2) {
+      var subjData = subjSh.getDataRange().getValues(), subjHdr = subjData[0];
+      var sidCol = subjHdr.indexOf("subject_id"), snameCol = subjHdr.indexOf("subject_name");
+      if (sidCol>=0 && snameCol>=0) {
+        for (var si=1; si<subjData.length; si++) subjName[subjData[si][sidCol]] = String(subjData[si][snameCol]||"").trim();
       }
-    });
+    }
+    var countMap = {};
+    var topicSh = ss.getSheetByName("Topics");
+    if (topicSh && topicSh.getLastRow()>=2) {
+      var topicData = topicSh.getDataRange().getValues(), topicHdr = topicData[0];
+      var tnameCol = topicHdr.indexOf("topic_name"), tsidCol = topicHdr.indexOf("subject_id"), trcCol = topicHdr.indexOf("row_count");
+      if (tnameCol>=0 && tsidCol>=0 && trcCol>=0) {
+        for (var ti=1; ti<topicData.length; ti++) {
+          var sName = subjName[topicData[ti][tsidCol]] || "অজানা";
+          var tName = String(topicData[ti][tnameCol]||"").trim();
+          var cnt = parseInt(topicData[ti][trcCol],10)||0;
+          var key = sName+"||"+tName;
+          countMap[key] = (countMap[key]||0)+cnt;
+        }
+      }
+    }
 
     var emptyEntries = planEntries.filter(function(p){ return !(countMap[p.subject+"||"+p.topic]>0); });
     if(!emptyEntries.length) return; // সব টপিক পূর্ণ — নোটিফাই করার দরকার নেই
