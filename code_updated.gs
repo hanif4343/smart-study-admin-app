@@ -3910,6 +3910,29 @@ function doPost(e) {
       return json({result:"success",fcm:sendFCMToAll(params.title||'Smart Study',params.body||'',{type:"broadcast"})});
     }
 
+    // 🔒 সিকিউরিটি ফিক্স: Admin App-এর src/core/fcm.js আগে ব্রাউজারেই Service Account
+    // প্রাইভেট কী দিয়ে JWT সাইন করে সরাসরি FCM-এ হিট করতো — সেই কী VITE_ প্রিফিক্সের
+    // কারণে পাবলিক JS বান্ডেলে ফাঁস হয়ে যেত (যে কেউ দেখে নিতে পারতো)। sendFCMToPhone/
+    // sendFCMToAll ফাংশন GAS-এ (সার্ভার-সাইড, কখনো ফাঁস হয় না) আগে থেকেই ছিল —
+    // শুধু এই দুটো doPost action আগে ছিল না যেটা দিয়ে client থেকে সেটা নিরাপদে কল
+    // করা যেত। এখন fcm.js পুরোপুরি এই দুটো action ব্যবহার করে, নিজে কোনো কী রাখে না।
+    if(params.type==="notify_phone"){
+      var npPhone=(params.phone||'').toString().trim();
+      if(!npPhone) return json({result:"error",error:"phone missing"});
+      return json({result:"success",fcm:sendFCMToPhone(npPhone,params.title||'Smart Study',params.body||'',params.data||{})});
+    }
+
+    if(params.type==="notify_bulk"){
+      var nbPhones=Array.isArray(params.phones)?params.phones:[];
+      var nbSent=0, nbFailed=0;
+      nbPhones.forEach(function(ph){
+        if(!ph) return;
+        var r=sendFCMToPhone(ph.toString().trim(),params.title||'Smart Study',params.body||'',params.data||{});
+        if(r&&!r.error) nbSent++; else nbFailed++;
+      });
+      return json({result:"success",sent:nbSent,failed:nbFailed});
+    }
+
     if(params.type==="update_explanation"){
       var sName=params.sheet, shMap2={qbank:"QBank",quiz:"Quiz",study:"Study",typing:"Typing"};
       sName=shMap2[sName.toLowerCase()]||sName;
