@@ -15,6 +15,52 @@ import { useFB } from "../../core/dataCache.js";
 import { fbPush, fbDelete } from "../../core/firebase.js";
 import { toArr, buildSubjectMap, loadSharedGasSecret } from "../../core/utils.js";
 
+/* ── ফাজি-ম্যাচ হেল্পার — বাল্ক-ইম্পোর্টে পেস্ট করা Subject/Topic নাম আসল
+   ডেটায় (qbank/quiz-এ ইতিমধ্যে থাকা নাম) সামান্য বানান/স্পেস-ভিন্নতায় আলাদা
+   হলেও ধরতে পারে — যেমন "পাটিগনিত" vs "পাটিগণিত", "বিষয়াবলি" vs "বিষয়াবলী"।
+   ছোট Levenshtein distance + substring-containment — দুটো মিলিয়ে চেক করা হয়। */
+function norm_(s){ return (s||"").toString().trim().replace(/\s+/g," ").toLowerCase(); }
+function levenshtein_(a,b){
+  a=norm_(a); b=norm_(b);
+  if(a===b) return 0;
+  const m=a.length, n=b.length;
+  if(!m) return n; if(!n) return m;
+  let prev=Array.from({length:n+1},(_,i)=>i);
+  for(let i=1;i<=m;i++){
+    const cur=[i];
+    for(let j=1;j<=n;j++){
+      cur[j]=a[i-1]===b[j-1] ? prev[j-1] : 1+Math.min(prev[j-1],prev[j],cur[j-1]);
+    }
+    prev=cur;
+  }
+  return prev[n];
+}
+function closeEnough_(a,b){
+  const na=norm_(a), nb=norm_(b);
+  if(!na||!nb) return false;
+  if(na===nb) return true;
+  if(na.includes(nb)||nb.includes(na)) return true; // যেমন "আন্তর্জাতিক" ⊂ "আন্তর্জাতিক বিষয়াবলি"
+  const maxLen=Math.max(na.length,nb.length);
+  if(maxLen<5) return false; // খুব ছোট শব্দে edit-distance ভিত্তিক ম্যাচ অবিশ্বাস্য — অনেক false positive দেয় (যেমন "গড়" vs "গতি")
+  const dist=levenshtein_(na,nb);
+  return dist<=Math.floor(maxLen*0.22);
+}
+// combinedMap-এর আসল Subject/Topic-এর সাথে (subject,topic) মিলিয়ে সবচেয়ে কাছের মিল খোঁজে
+function findFuzzyMatch_(subject,topic,combinedMap){
+  const subjKeys=Object.keys(combinedMap);
+  let bestSubject=null;
+  if(combinedMap[subject]) bestSubject=subject; // exact match আগে চেক
+  else bestSubject=subjKeys.find(k=>closeEnough_(k,subject))||null;
+  if(!bestSubject) return null;
+  const topicKeys=Object.keys(combinedMap[bestSubject]?.topics||{});
+  let bestTopic=null;
+  if(combinedMap[bestSubject].topics[topic]) bestTopic=topic;
+  else bestTopic=topicKeys.find(k=>closeEnough_(k,topic))||null;
+  if(bestSubject===subject && bestTopic===topic) return null; // পুরোপুরি এক্স্যাক্ট মিল, সাজেশনের দরকার নেই
+  if(bestSubject===subject && !bestTopic) return null; // সাবজেক্ট ঠিক আছে, টপিক সত্যিই নতুন
+  return {subject:bestSubject, topic:bestTopic};
+}
+
 /* ── বাল্ক-ইম্পোর্ট পার্সার — Subject/Topic কমা-লিস্ট ফরম্যাট পার্স করে ──
    নিয়ম: যে লাইনে কমা নেই সেটা "Subject" (শেষের >>, <>, : ছেঁটে ফেলা হয়),
    যে লাইনে কমা আছে সেটা সর্বশেষ Subject-এর Topic লিস্ট (কমা দিয়ে ভাগ করা)।
@@ -90,7 +136,19 @@ function TopicTracker({qbankArr,quizArr,push,tick}){
   const previewBulk=()=>{
     const parsed=parseBulkTopics(bulkText);
     if(!parsed.length){ push("warn","কিছু পার্স করা গেলো না","ফরম্যাট চেক করো"); return; }
-    setBulkPreview(parsed);
+    // 🆕 প্রতিটা এϵ্ট্রির জন্য আসল ডেটায় কাছাকাছি মিল আছে কিনা চেক করা হচ্ছে —
+    // থাকলে useMatch:false দিয়ে শুরু হয় (ডিফল্ট এখনো original নাম), প্রিভিউতে
+    // অ্যাডমিন চাইলে "এই নামটা ব্যবহার করো" চেপে matched নামে বদলে নিতে পারবে।
+    const withMatches=parsed.map(p=>({
+      ...p,
+      match: findFuzzyMatch_(p.subject,p.topic,combinedMap),
+      useMatch: false,
+    }));
+    setBulkPreview(withMatches);
+  };
+
+  const toggleUseMatch=(idx)=>{
+    setBulkPreview(prev=>prev.map((p,i)=>i===idx?{...p,useMatch:!p.useMatch}:p));
   };
 
   const confirmBulk=async()=>{
@@ -99,7 +157,10 @@ function TopicTracker({qbankArr,quizArr,push,tick}){
     try{
       // প্রতিটা এϵ্ট্রি আলাদা fbPush — Firebase-এর নিজস্ব push-key জেনারেশন
       // ব্যবহার হচ্ছে (সংঘর্ষ-মুক্ত ইউনিক আইডি), তাই সবগুলোর জন্য একই প্যাটার্ন।
-      for(const {subject,topic} of bulkPreview){
+      // useMatch চালু থাকলে ফাজি-ম্যাচড (আসল ডেটায় থাকা) নাম দিয়ে সেভ হয়।
+      for(const item of bulkPreview){
+        const subject=(item.useMatch&&item.match)?item.match.subject:item.subject;
+        const topic=(item.useMatch&&item.match&&item.match.topic)?item.match.topic:item.topic;
         await fbPush("TopicPlan",{subject,topic,addedAt:Date.now()});
       }
       push("success",`✅ ${bulkPreview.length}টা টপিক যোগ হয়েছে`,"");
@@ -172,6 +233,14 @@ function TopicTracker({qbankArr,quizArr,push,tick}){
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
             <input value={newSubject} onChange={e=>setNewSubject(e.target.value)} placeholder="Subject (যেমন: বাংলা সাহিত্য)" style={{padding:8,borderRadius:8,border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:12}}/>
             <input value={newTopic} onChange={e=>setNewTopic(e.target.value)} placeholder="Topic (যেমন: কবি পরিচিতি)" style={{padding:8,borderRadius:8,border:`1px solid ${C.border}`,background:C.bg,color:C.text,fontSize:12}}/>
+            {newSubject.trim()&&newTopic.trim()&&(()=>{
+              const m=findFuzzyMatch_(newSubject.trim(),newTopic.trim(),combinedMap);
+              return m ? (
+                <div style={{fontSize:10,color:C.warning,background:tint(C.warning,"10"),borderRadius:6,padding:"5px 7px"}}>
+                  ⚠️ সম্ভবত এটাই: <b>{m.subject}{m.topic?` — ${m.topic}`:""}</b> (ডেটায় আগে থেকেই আছে) — চাইলে ঠিক এই বানানেই লিখে যোগ করো।
+                </div>
+              ) : null;
+            })()}
             <button onClick={addSingle} disabled={busy} style={{padding:8,borderRadius:8,border:"none",background:C.accent,color:"#fff",fontSize:12,fontWeight:700}}>যোগ করো</button>
           </div>
         )}
@@ -184,12 +253,25 @@ function TopicTracker({qbankArr,quizArr,push,tick}){
               <button onClick={previewBulk} style={{padding:8,borderRadius:8,border:"none",background:C.accent,color:"#fff",fontSize:12,fontWeight:700}}>প্রিভিউ দেখাও</button>
             ) : (
               <>
-                <div style={{maxHeight:180,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8,padding:8}}>
+                <div style={{maxHeight:260,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8,padding:8}}>
                   {bulkPreview.map((p,i)=>(
-                    <div key={i} style={{fontSize:11,padding:"3px 0",color:C.text}}>{p.subject} — {p.topic}</div>
+                    <div key={i} style={{padding:"5px 0",borderBottom:i<bulkPreview.length-1?`1px solid ${C.border}`:"none"}}>
+                      <div style={{fontSize:11,color:C.text,textDecoration:p.useMatch?"line-through":"none",opacity:p.useMatch?.55:1}}>{p.subject} — {p.topic}</div>
+                      {p.match && (
+                        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:6,marginTop:2,background:tint(C.warning,"10"),borderRadius:6,padding:"4px 6px"}}>
+                          <div style={{fontSize:10,color:C.warning}}>
+                            ⚠️ সম্ভবত এটাই: <b>{p.match.subject}{p.match.topic?` — ${p.match.topic}`:""}</b> (ডেটায় আগে থেকেই আছে)
+                          </div>
+                          <button onClick={()=>toggleUseMatch(i)} style={{fontSize:9,fontWeight:700,padding:"3px 7px",borderRadius:6,border:`1px solid ${C.warning}`,background:p.useMatch?C.warning:"transparent",color:p.useMatch?"#fff":C.warning,whiteSpace:"nowrap"}}>
+                            {p.useMatch?"✓ এই নাম ব্যবহার হবে":"এই নাম ব্যবহার করো"}
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
-                <div style={{fontSize:11,color:C.muted}}>মোট {bulkPreview.length}টা টপিক — ঠিক আছে?</div>
+                <div style={{fontSize:11,color:C.muted}}>মোট {bulkPreview.length}টা টপিক — {bulkPreview.filter(p=>p.match).length>0?`${bulkPreview.filter(p=>p.match).length}টায় সম্ভাব্য মিল পাওয়া গেছে, চেক করে নাও। `:""}ঠিক আছে?</div>
+                <div style={{fontSize:9.5,color:C.muted}}>💡 "এই নাম ব্যবহার করো" না চাপলে, আপনার লেখা নামেই (নতুন এϵ্ট্রি হিসেবে) যোগ হবে — আসল ডেটায় থাকা প্রশ্নগুলো এর সাথে ম্যাচ নাও হতে পারে।</div>
                 <div style={{display:"flex",gap:8}}>
                   <button onClick={()=>setBulkPreview(null)} style={{flex:1,padding:8,borderRadius:8,border:`1px solid ${C.border}`,background:C.panel,color:C.text,fontSize:12}}>বাতিল</button>
                   <button onClick={confirmBulk} disabled={busy} style={{flex:1,padding:8,borderRadius:8,border:"none",background:C.success,color:"#fff",fontSize:12,fontWeight:700}}>যোগ করে দাও</button>
