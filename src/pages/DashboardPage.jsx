@@ -5,7 +5,6 @@ import { useFB, loadPath } from "../core/dataCache.js";
 import { fmt, toArr, buildSubjectMap, pct, loadSharedGasSecret } from "../core/utils.js";
 import { fetchDirtyTopicsCount, fetchOrphanStats } from "../core/sheetSave.js";
 import { Bar, Tree } from "../components/shared/MiniComponents.jsx";
-import { TopicTracker } from "../components/shared/TopicTracker.jsx";
 
 /* ── কনটেন্ট-লাইব্রেরি কার্ডের একটা সারি (Quiz/QBank/Study) — আগে এগুলো ৪টা আলাদা
    stat-card ছিল, এখন একটাই কার্ডে ব্রেকডাউন হিসেবে দেখানো হচ্ছে ── */
@@ -36,13 +35,6 @@ function DashboardPage({push,tick}){
       loadPath("Quiz").then(d=>setQuizData(d)).catch(()=>{});
     }
   },[atab,quizData]);
-
-  // 🆕 Topic Tracker-এর কাভারেজ-হিসাব QBank + Quiz দুটোই লাগে — কিন্তু Quiz
-  // উপরের effect-এ শুধু "বিস্তারিত ব্রাউজ" ট্যাবে ক্লিক করলে লোড হতো, তাই
-  // ট্র্যাকারে গিয়ে ক্লিক না করা পর্যন্ত Quiz-এর প্রশ্নগুলো "ফাঁকা" হিসেবে ভুল
-  // দেখাতো। তাই ব্যাকগ্রাউন্ডে একবার (mount-এ) আলাদাভাবে লোড করে নেওয়া হচ্ছে —
-  // এটাও async/non-blocking, শুধু ট্রিগার হওয়ার শর্তটাই বদলানো হয়েছে।
-  useEffect(()=>{ if(!quizData) loadPath("Quiz").then(d=>setQuizData(d)).catch(()=>{}); },[]);
 
   const userArr = useMemo(()=>toArr(users),[users]);
   const total   = userArr.length;
@@ -163,8 +155,6 @@ function DashboardPage({push,tick}){
         <div className="ct">📈 Daily Active (৭ দিন)</div>
         <Bar data={days} color={C.accent}/>
       </div>
-
-      <TopicTracker qbankArr={qbankArr} quizArr={toArr(quizData)} push={push} tick={tick}/>
 
       <div className="slb">বিস্তারিত ব্রাউজ</div>
       <div className="card">
