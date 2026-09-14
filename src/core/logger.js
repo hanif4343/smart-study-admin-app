@@ -3,7 +3,7 @@
    সব log, error, warn, API call, crash Firebase-এ জমা হবে
    Path: AdminAppLogcat/{sessionId}/{pushId}
    ══════════════════════════════════════════════════════════════ */
-import { FB, FB_PROJ, FCM_CLIENT_EMAIL } from "./config.js";
+import { FB, FB_PROJ } from "./config.js";
 
 const _LC = (() => {
   // Bangladesh time (UTC+6)
@@ -137,7 +137,9 @@ const _LC = (() => {
     device: _device,
     fbUrl: FB ? FB.replace(/https?:\/\//, "").slice(0,40) : "NOT_SET",
     fbProject: FB_PROJ || "NOT_SET",
-    fcmReady: !!(typeof FCM_CLIENT_EMAIL !== "undefined" && FCM_CLIENT_EMAIL),
+    // 🔒 FCM এখন সম্পূর্ণ GAS-এর মাধ্যমে (সার্ভার-সাইড) পাঠানো হয়, client কোনো
+    // ক্রেডেনশিয়াল রাখে না — তাই এই ফ্ল্যাগ এখন GAS_URL সেট আছে কিনা তার উপর নির্ভর করে।
+    fcmReady: !!FB,
     appVersion: "1.0",
   });
 
