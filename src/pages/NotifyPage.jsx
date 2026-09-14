@@ -1,7 +1,7 @@
 /* ══════════ NOTIFY PAGE ══════════ */
 import React, { useState, useEffect, useMemo } from "react";
 import { C } from "../core/config.js";
-import { useFB } from "../core/dataCache.js";
+import { useFB, loadPath } from "../core/dataCache.js";
 import { fbSet } from "../core/firebase.js";
 import { fcmBroadcast } from "../core/fcm.js";
 import { toArr, nowTs, phoneKey } from "../core/utils.js";
