@@ -5,16 +5,12 @@ const FB_PROJ  = import.meta.env.VITE_FB_PROJECT_ID||"";
 const GAS     = import.meta.env.VITE_GAS_URL;   // শুধু GAS standalone backup এ লাগবে — app আর call করে না
 const IMGBB   = import.meta.env.VITE_IMGBB_API_KEY;
 const SECRET  = import.meta.env.VITE_SECRET_KEY;    // GAS আর call নেই — legacy only
-// FCM v1 — Service Account credentials (GitHub Secrets থেকে build time এ inject হয়)
-const FCM_CLIENT_EMAIL = import.meta.env.VITE_FCM_CLIENT_EMAIL||"";
-const FCM_PRIVATE_KEY = (() => {
-  try {
-    // Vite build এ VITE_FCM_PRIVATE_KEY string হিসেবে inject হয়
-    // GitHub Secret এ \n (দুই char) থাকে — actual newline চাই
-    const raw = import.meta.env.VITE_FCM_PRIVATE_KEY || "";
-    return raw.split("\\n").join("\n");
-  } catch(_) { return ""; }
-})()
+// 🔒 সিকিউরিটি ফিক্স: FCM_CLIENT_EMAIL/FCM_PRIVATE_KEY (Google Service Account
+// প্রাইভেট কী) আগে এখানে VITE_ প্রিফিক্সে ছিল — মানে বিল্ড-টাইমে পাবলিক ব্রাউজার
+// বান্ডেলে বেক হয়ে যেত, যে কেউ View Source করে বের করতে পারতো। এখন সরিয়ে ফেলা
+// হলো — FCM পাঠানো এখন সম্পূর্ণ GAS-এর ভেতরে (Script Properties, সার্ভার-সাইড)
+// হয়, client কখনো এই ক্রেডেনশিয়াল দেখে না (দেখো core/fcm.js)। GitHub Secrets-এ
+// VITE_FCM_CLIENT_EMAIL/VITE_FCM_PRIVATE_KEY থাকলে সেগুলোও মুছে ফেলা উচিত।
 
 /* ══════ কালার টোকেন ══════
    মূল প্যালেট (bg/card/border/accent/green/red/yellow/purple/text/muted/panel/navBg)
@@ -69,4 +65,4 @@ function tint(colorVar, hexAlpha){
   return `color-mix(in srgb, ${colorVar} ${pct}%, transparent)`;
 }
 
-export { FB, FB_KEY, FB_PROJ, GAS, IMGBB, SECRET, FCM_CLIENT_EMAIL, FCM_PRIVATE_KEY, C, SPACE, RADIUS, tint };
+export { FB, FB_KEY, FB_PROJ, GAS, IMGBB, SECRET, C, SPACE, RADIUS, tint };
