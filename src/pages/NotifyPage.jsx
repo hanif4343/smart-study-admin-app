@@ -6,6 +6,7 @@ import { fbSet } from "../core/firebase.js";
 import { fcmBroadcast } from "../core/fcm.js";
 import { toArr, nowTs, phoneKey } from "../core/utils.js";
 import { NotifyModal } from "./NotifyModal.jsx";
+import { TopicTracker } from "../components/shared/TopicTracker.jsx";
 
 function NotifyPage({push,tick}){
   const[title,setTitle]=useState("");
@@ -16,6 +17,15 @@ function NotifyPage({push,tick}){
   const[selUser,setSelUser]=useState(null);
   const{data:usersRaw}=useFB("Users",tick);
   const userList=useMemo(()=>toArr(usersRaw),[usersRaw]);
+
+  // 🆕 Topic Tracker এখানে সরিয়ে আনা হলো (Dashboard থেকে) — এটার নিজস্ব কাভারেজ-হিসাবের
+  // জন্য QBank+Quiz দরকার, Dashboard-এর মতোই লোড করা হচ্ছে (Quiz eager, non-blocking)।
+  const{data:qbankRaw}=useFB("QBank",tick);
+  const[quizData,setQuizData]=useState(null);
+  useEffect(()=>{ if(!quizData) loadPath("Quiz").then(d=>setQuizData(d)).catch(()=>{}); },[]);
+  const qbankArr=useMemo(()=>toArr(qbankRaw),[qbankRaw]);
+  const quizArr=useMemo(()=>toArr(quizData),[quizData]);
+
   const results=useMemo(()=>{
     const s=q.trim().toLowerCase();
     if(!s)return[];
@@ -102,6 +112,8 @@ function NotifyPage({push,tick}){
           <div className="ntm">{h.time}</div>
         </div>
       ))}</div>}
+
+      <TopicTracker qbankArr={qbankArr} quizArr={quizArr} push={push} tick={tick}/>
     </div>
   );
 }
