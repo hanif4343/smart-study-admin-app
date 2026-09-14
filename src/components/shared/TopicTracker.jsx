@@ -148,6 +148,28 @@ function TopicTracker({push,tick}){
   },[plan]);
   const subjects = useMemo(()=>Object.keys(grouped).sort(),[grouped]);
 
+  // 🆕 প্রতিটা প্ল্যান-করা সাবজেক্টে আসল ডেটায় যেসব টপিক আছে কিন্তু প্ল্যানে নেই —
+  // এগুলো দেখা গেলে বোঝা যায় কোনো প্রশ্ন ভুল বানানে/ভুল নামে ঢুকে গেছে কিনা,
+  // সাথে সাথে ধরে Rename ট্যাব দিয়ে ঠিক করে ফেলা যায়।
+  const extraTopicsFor=(subject)=>{
+    const planned=new Set((grouped[subject]||[]).map(p=>p.topic));
+    const real=combinedMap[subject]?.topics||{};
+    return Object.entries(real).filter(([t])=>!planned.has(t)).sort((a,b)=>b[1]-a[1]);
+  };
+
+  // 🆕 যেসব সাবজেক্টে আসল ডেটায় প্রশ্ন আছে কিন্তু TopicPlan-এ একদমই নেই —
+  // যেমন কেউ ভুল করে নতুন/ভিন্ন-বানানের সাবজেক্ট নামে প্রশ্ন যোগ করে ফেললে এখানে ধরা পড়বে
+  const unplannedSubjects = useMemo(()=>{
+    return Object.keys(combinedMap)
+      .filter(s=>!grouped[s])
+      .map(s=>({subject:s, count:Object.values(combinedMap[s].topics).reduce((a,b)=>a+b,0)}))
+      .filter(s=>s.count>0)
+      .sort((a,b)=>b.count-a.count);
+  },[combinedMap,grouped]);
+  const[showUnplanned,setShowUnplanned]=useState(false);
+  const[showExtraFor,setShowExtraFor]=useState(()=>new Set());
+  const toggleExtra=(s)=>setShowExtraFor(prev=>{ const n=new Set(prev); n.has(s)?n.delete(s):n.add(s); return n; });
+
   const emptyEntries = useMemo(()=>plan.filter(p=>countFor(p.subject,p.topic)===0),[plan,combinedMap]);
   const emptyCount = emptyEntries.length;
 
@@ -369,11 +391,54 @@ function TopicTracker({push,tick}){
                     </div>
                   );
                 })}
+
+                {(()=>{ const extra=extraTopicsFor(subject); if(!extra.length) return null;
+                  const isShown=showExtraFor.has(subject);
+                  return(
+                    <div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed ${C.border}`}}>
+                      <div onClick={()=>toggleExtra(subject)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
+                        <span style={{fontSize:10.5,color:C.muted}}>🔍 প্ল্যানে নেই এমন আরও {extra.length}টা টপিক ডেটায় আছে</span>
+                        <span style={{fontSize:10,color:C.muted}}>{isShown?"▲":"▼"}</span>
+                      </div>
+                      {isShown && (
+                        <div style={{marginTop:6}}>
+                          <div style={{fontSize:9.5,color:C.muted,marginBottom:4}}>নিচেরগুলো হয়তো ভুল বানানে/ভুল নামে ঢুকে গেছে, বা সত্যিই নতুন টপিক — Rename ট্যাব দিয়ে চেক করে ঠিক করো।</div>
+                          {extra.map(([tname,cnt])=>(
+                            <div key={tname} style={{display:"flex",justifyContent:"space-between",padding:"4px 6px",fontSize:11,color:C.text,background:tint(C.muted,"08"),borderRadius:6,marginBottom:3}}>
+                              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{tname}</span>
+                              <span style={{fontWeight:700,color:C.muted,flexShrink:0,marginLeft:8}}>{cnt}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>
         );
       })}
+
+      {unplannedSubjects.length>0 && (
+        <div className="card" style={{marginBottom:8}}>
+          <div onClick={()=>setShowUnplanned(v=>!v)} style={{display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
+            <div style={{fontSize:11.5,fontWeight:700,color:C.muted}}>🗂️ প্ল্যানে নেই এমন সাবজেক্ট ({unplannedSubjects.length}টা) — ডেটায় প্রশ্ন আছে</div>
+            <span style={{fontSize:11,color:C.muted}}>{showUnplanned?"▲":"▼"}</span>
+          </div>
+          {showUnplanned && (
+            <div style={{marginTop:8}}>
+              <div style={{fontSize:9.5,color:C.muted,marginBottom:6}}>এই সাবজেক্টগুলোয় প্রশ্ন আছে কিন্তু কোনো টপিক-প্ল্যান যোগ করা হয়নি — ভুল বানানে নতুন সাবজেক্ট তৈরি হয়ে গেছে কিনা দেখো, নাহলে "+ নতুন টপিক"-এ যোগ করে নাও।</div>
+              {unplannedSubjects.map(u=>(
+                <div key={u.subject} style={{display:"flex",justifyContent:"space-between",padding:"5px 6px",fontSize:11.5,color:C.text,background:tint(C.muted,"08"),borderRadius:6,marginBottom:3}}>
+                  <span>{u.subject}</span>
+                  <span style={{fontWeight:700,color:C.muted}}>{u.count}টা</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </>
   );
 }
