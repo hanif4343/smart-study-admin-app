@@ -5,18 +5,45 @@
    - TopicPlan/{pushId}      = {subject, topic, addedAt}      — মাস্টার টপিক লিস্ট (in-app এডিটেবল)
    - TopicTodayPick/{pushId} = {planId, subject, topic, pickedAt} — "আজকে এটা করবো" পিন
 
-   পূর্ণ/ফাঁকা হিসাব: DashboardPage থেকে qbankArr+quizArr (Firebase থেকে আগে থেকেই
-   লোড করা, GAS-এর ধীর getSheetRows না) prop হিসেবে আসে, buildSubjectMap() দিয়ে
-   Subject→Topic→count ম্যাপ বানিয়ে TopicPlan-এর প্রতিটা এϵ্ট্রির সাথে মিলিয়ে দেখা হয়।
+   🐛 ফিক্স (v2): আগে পূর্ণ/ফাঁকা হিসাব qbankArr+quizArr (Quiz/QBank-এর প্রতিটা রো-র
+   literal subject/sub_topic টেক্সট) দিয়ে হতো। কিন্তু RenameTab.jsx-এর কমেন্ট
+   অনুযায়ী অ্যাপ এখন Phase 5-তে Subject/Topic-কে subject_id/topic_id দিয়ে
+   রেফারেন্স করে — rename করলে শুধু Subjects/Topics রেফারেন্স-টেবিলের ১টা রো
+   বদলায়, Quiz/QBank/Study-এর হাজার হাজার রো-র literal টেক্সট কখনো টাচ হয় না।
+   তাই literal টেক্সট রিনেমের পর স্টেল (পুরনো) থেকে যায়। এমনকি একই নামের Subject-ও
+   (যেমন "বাংলা ব্যাকরণ") একাধিক আলাদা subject_id-তে ছড়িয়ে থাকতে পারে (Quiz-এ ২টা
+   + QBank-এ ১টা + Study-এ ১টা — একসাথে ৪টা!)। এখন তাই RenameTab.jsx-এর মতোই
+   fetchReferenceData() (GAS-এর getReferenceData action, row_count আগে থেকেই
+   reindex করা — সবসময় সঠিক ও হালকা) ব্যবহার করা হচ্ছে, আর subject_id→নাম রেজলভ
+   করে নাম-ভিত্তিক গ্রুপিং করা হয় — তাই ভবিষ্যতে rename করলেও এই ট্র্যাকার
+   স্বয়ংক্রিয়ভাবে ঠিক থাকবে, আর কখনো qbankArr/quizArr লোড করতে হবে না (দ্রুতও)।
    ══════════════════════════════════════════════════════════════════════════ */
-import React, { useState, useMemo } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { C, tint, GAS } from "../../core/config.js";
-import { useFB } from "../../core/dataCache.js";
 import { fbPush, fbDelete } from "../../core/firebase.js";
-import { toArr, buildSubjectMap, loadSharedGasSecret } from "../../core/utils.js";
+import { useFB } from "../../core/dataCache.js";
+import { loadSharedGasSecret } from "../../core/utils.js";
+import { fetchReferenceData } from "../../core/sheetSave.js";
+
+/* subject_id/topic_id রেফারেন্স-টেবিল থেকে Subject-নাম → {topics:{Topic-নাম: count}}
+   ম্যাপ বানায় — একই নামের একাধিক subject_id/topic_id (ভিন্ন Sheet-এ) থাকলে যোগ হয়ে যায়। */
+function buildRefCountMap(refData){
+  const map={};
+  if(!refData) return map;
+  const subjName={};
+  (refData.subjects||[]).forEach(s=>{ subjName[s.subject_id]=(s.subject_name||"").trim(); });
+  (refData.topics||[]).forEach(t=>{
+    const sName=subjName[t.subject_id]||"অজানা";
+    const tName=(t.topic_name||"").trim()||"General";
+    const cnt=parseInt(t.row_count)||0;
+    if(!map[sName]) map[sName]={topics:{}};
+    map[sName].topics[tName]=(map[sName].topics[tName]||0)+cnt;
+  });
+  return map;
+}
 
 /* ── ফাজি-ম্যাচ হেল্পার — বাল্ক-ইম্পোর্টে পেস্ট করা Subject/Topic নাম আসল
-   ডেটায় (qbank/quiz-এ ইতিমধ্যে থাকা নাম) সামান্য বানান/স্পেস-ভিন্নতায় আলাদা
+   ডেটায় (reference-টেবিলে ইতিমধ্যে থাকা নাম) সামান্য বানান/স্পেস-ভিন্নতায় আলাদা
    হলেও ধরতে পারে — যেমন "পাটিগনিত" vs "পাটিগণিত", "বিষয়াবলি" vs "বিষয়াবলী"।
    ছোট Levenshtein distance + substring-containment — দুটো মিলিয়ে চেক করা হয়। */
 function norm_(s){ return (s||"").toString().trim().replace(/\s+/g," ").toLowerCase(); }
@@ -80,7 +107,7 @@ function parseBulkTopics(text){
   return out;
 }
 
-function TopicTracker({qbankArr,quizArr,push,tick}){
+function TopicTracker({push,tick}){
   const{data:planRaw}  = useFB("TopicPlan",tick);
   const{data:pickRaw}  = useFB("TopicTodayPick",tick);
   const plan  = useMemo(()=>{
@@ -93,9 +120,23 @@ function TopicTracker({qbankArr,quizArr,push,tick}){
   },[pickRaw]);
   const pickedPlanIds = useMemo(()=>new Set(picks.map(p=>p.planId)),[picks]);
 
-  const combinedMap = useMemo(()=>buildSubjectMap([...(qbankArr||[]),...(quizArr||[])]),[qbankArr,quizArr]);
+  // 🆕 RenameTab.jsx-এর মতোই GAS-এর getReferenceData action দিয়ে সবসময়-সঠিক
+  // subject_id→নাম, topic_id→নাম + row_count আনা হচ্ছে (qbankArr/quizArr স্ক্যান করার
+  // বদলে) — হালকা, দ্রুত, আর rename-প্রতিরোধী।
+  const gasSecret=loadSharedGasSecret();
+  const[refData,setRefData]=useState(null);
+  const[refLoading,setRefLoading]=useState(false);
+  useEffect(()=>{
+    if(!gasSecret) return;
+    let cancelled=false;
+    setRefLoading(true);
+    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled){ setRefData(d); setRefLoading(false); } });
+    return()=>{ cancelled=true; };
+  },[gasSecret,tick]);
 
-  const countFor=(subject,topic)=> combinedMap[subject]?.topics?.[topic]?.total || 0;
+  const combinedMap = useMemo(()=>buildRefCountMap(refData),[refData]);
+
+  const countFor=(subject,topic)=> combinedMap[subject]?.topics?.[topic] || 0;
 
   const grouped = useMemo(()=>{
     const g={};
@@ -200,6 +241,15 @@ function TopicTracker({qbankArr,quizArr,push,tick}){
   return(
     <>
       <div className="slb">🎯 টপিক কভারেজ ট্র্যাকার</div>
+
+      {!gasSecret && (
+        <div className="card" style={{marginBottom:12,borderColor:tint(C.warning,"40")}}>
+          <div style={{fontSize:11.5,color:C.warning}}>⚠️ GAS Secret Key সেট নেই — এই ট্র্যাকার সঠিক কাউন্ট দেখাতে GAS Secret লাগবে (ম্যানেজ করুন → Rename ট্যাবে একবার বসালে এখানেও কাজ করবে, সেভ করা থাকে)।</div>
+        </div>
+      )}
+      {gasSecret && refLoading && !refData && (
+        <div className="card" style={{marginBottom:12,textAlign:"center",color:C.muted,fontSize:11.5}}>⏳ ডেটা লোড হচ্ছে...</div>
+      )}
 
       {emptyCount>0 && (
         <div className="card" style={{borderColor:tint(C.danger,"40"),background:`linear-gradient(180deg,${tint(C.danger,"0d")},${C.card})`,marginBottom:12}}>
