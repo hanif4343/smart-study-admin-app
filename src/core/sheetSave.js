@@ -228,15 +228,33 @@ async function fetchReferenceData({gasSecret}){
 
 /* ── refType (subjects/topics/tags/posts/institutions) + id দিয়ে
    ঠিক ১টা রেফারেন্স-রো রিনেম — GAS-এর নতুন "renameReferenceItem" action। ── */
+// 🆕 ডায়াগনস্টিক ফিক্স: আগে resp.json() ব্যর্থ হলে চুপচাপ {} ধরে নিয়ে সবসময়
+// "অজানা error" দেখাতো — আসল কারণ (GAS-এর ভেতরের exception, timeout, ভুল
+// deployment) কখনো বোঝা যেত না। এখন raw body না পার্স হলে HTTP status + body-র
+// প্রথম ৩০০ ক্যারেক্টার এরর মেসেজে দেখানো হয়, যাতে সাথে সাথে আসল সমস্যাটা ধরা যায়।
+async function _gasFetchDiag(url){
+  const resp=await fetch(url);
+  const rawText=await resp.text();
+  try{
+    return {data:JSON.parse(rawText), rawFail:false};
+  }catch{
+    const preview=rawText.slice(0,300).replace(/\s+/g," ").trim();
+    return {data:{}, rawFail:true, status:resp.status, preview};
+  }
+}
+
 async function renameReferenceItem({refType,id,newName,gasSecret,push}){
   if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{ok:false}; }
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","উপরে Secret Key বসাও"); return{ok:false}; }
   try{
     const url=`${GAS}?action=renameReferenceItem&secret=${encodeURIComponent(gasSecret)}`+
       `&refType=${encodeURIComponent(refType)}&id=${encodeURIComponent(id)}&newName=${encodeURIComponent(newName)}`;
-    const resp=await fetch(url);
-    const data=await resp.json().catch(()=>({}));
-    if(data.status!=="success"){ push?.("error","❌ Rename ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    const{data,rawFail,status,preview}=await _gasFetchDiag(url);
+    if(data.status!=="success"){
+      const msg=rawFail?`HTTP ${status}, JSON না — GAS-এর ভেতরে এরর হয়েছে সম্ভবত। raw: "${preview}"`:(data.message||"অজানা error");
+      push?.("error","❌ Rename ব্যর্থ",msg);
+      return{ok:false};
+    }
     return{ok:true,rowsChanged:data.rowsChanged||1,firebaseSynced:data.firebaseSynced!==false};
   }catch(e){ push?.("error","❌ Rename ব্যর্থ",e.message); return{ok:false}; }
 }
@@ -251,9 +269,12 @@ async function addReferenceItem({refType,name,parentId,sheet,gasSecret,push}){
       `&refType=${encodeURIComponent(refType)}&name=${encodeURIComponent(name)}`;
     if(parentId) url+=`&parentId=${encodeURIComponent(parentId)}`;
     if(sheet) url+=`&sheet=${encodeURIComponent(sheet)}`;
-    const resp=await fetch(url);
-    const data=await resp.json().catch(()=>({}));
-    if(data.status!=="success"){ push?.("error","❌ যোগ ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    const{data,rawFail,status,preview}=await _gasFetchDiag(url);
+    if(data.status!=="success"){
+      const msg=rawFail?`HTTP ${status}, JSON না। raw: "${preview}"`:(data.message||"অজানা error");
+      push?.("error","❌ যোগ ব্যর্থ",msg);
+      return{ok:false};
+    }
     return{ok:true,id:data.id};
   }catch(e){ push?.("error","❌ যোগ ব্যর্থ",e.message); return{ok:false}; }
 }
@@ -266,9 +287,12 @@ async function deleteReferenceItem({refType,id,gasSecret,push}){
   try{
     const url=`${GAS}?action=deleteReferenceItem&secret=${encodeURIComponent(gasSecret)}`+
       `&refType=${encodeURIComponent(refType)}&id=${encodeURIComponent(id)}`;
-    const resp=await fetch(url);
-    const data=await resp.json().catch(()=>({}));
-    if(data.status!=="success"){ push?.("error","❌ ডিলিট ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    const{data,rawFail,status,preview}=await _gasFetchDiag(url);
+    if(data.status!=="success"){
+      const msg=rawFail?`HTTP ${status}, JSON না। raw: "${preview}"`:(data.message||"অজানা error");
+      push?.("error","❌ ডিলিট ব্যর্থ",msg);
+      return{ok:false};
+    }
     return{ok:true};
   }catch(e){ push?.("error","❌ ডিলিট ব্যর্থ",e.message); return{ok:false}; }
 }
