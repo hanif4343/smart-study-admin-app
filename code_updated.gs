@@ -905,34 +905,25 @@ function sendFCMToAll(title, body, extraData) {
    রেফারেন্স-টেবিলের row_count মিলিয়ে যেসব টপিক এখনো ফাঁকা (0 প্রশ্ন) তার জন্য
    অ্যাডমিনকে রোজ একবার push notification পাঠায়। অ্যাডমিন ফোন হার্ডকোড না করে
    Users থেকে Role==="Admin" খুঁজে বের করা হয় (একাধিক admin থাকলেও কাজ করবে)।
-   🐛 ফিক্স (v2): আগে সরাসরি QBank/Quiz শিট স্ক্যান করে literal subject/sub_topic
-   কলাম গুনত — কিন্তু rename করলে (RenameTab.jsx) শুধু Subjects/Topics রেফারেন্স-
-   টেবিলের ১টা রো বদলায়, Quiz/QBank/Study-এর হাজার হাজার রো-র literal টেক্সট
-   কখনো টাচ হয় না। তাই সেই পুরনো পদ্ধতি rename-এর পর ভুল (স্টেল) কাউন্ট দিতো।
-   এখন getReferenceData action যা করে ঠিক সেটাই — Subjects+Topics শিট সরাসরি
-   পড়ে (row_count আগে থেকেই reindex করা, GAS-এর সবচেয়ে দ্রুত/নির্ভরযোগ্য রাস্তা,
-   বড় শিট স্ক্যান করতে হয় না) — subject_id→নাম রেজলভ করে গ্রুপ করা হয়, যাতে
-   একই নামের একাধিক subject_id (Quiz+QBank+Study আলাদা) ঠিকভাবে যোগ হয়ে যায়। ══ */
+   🔄 ফিক্স (v3): আগে TopicPlan (Firebase, ম্যানুয়ালি টাইপ করা লিস্ট) vs Subjects/
+   Topics রেফারেন্স-টেবিল মিলিয়ে ফাঁকা টপিক বের করা হতো। এখন TopicPlan বাদ —
+   ডেটাবেজে যা Subject/Topic আছে (Subjects/Topics শিট) সেটাই সরাসরি "প্ল্যান"।
+   TopicTodayPick-ও এখন planId না, সরাসরি subject+topic নাম দিয়ে ম্যাচ করে। ══ */
 function dailyTopicReminderTrigger() {
   try {
     var cfg = getProps();
     var dbSecret = PropertiesService.getScriptProperties().getProperty("FIREBASE_DB_SECRET") || cfg.SECRET_KEY;
 
-    var planResp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"TopicPlan.json?auth="+dbSecret,{muteHttpExceptions:true});
-    var plan = JSON.parse(planResp.getContentText())||{};
-    var planEntries = [];
-    Object.keys(plan).forEach(function(k){
-      var v=plan[k]||{};
-      if(v.subject&&v.topic) planEntries.push({id:k,subject:String(v.subject).trim(),topic:String(v.topic).trim()});
-    });
-    if(!planEntries.length) return; // কোনো প্ল্যান নেই — রিমাইন্ড করার কিছু নেই
-
     var pickResp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"TopicTodayPick.json?auth="+dbSecret,{muteHttpExceptions:true});
     var picks = JSON.parse(pickResp.getContentText())||{};
-    var pickedPlanIds = {};
-    Object.keys(picks).forEach(function(k){ if(picks[k]&&picks[k].planId) pickedPlanIds[picks[k].planId]=true; });
+    var pickedKeys = {};
+    Object.keys(picks).forEach(function(k){
+      var v=picks[k];
+      if(v&&v.subject&&v.topic) pickedKeys[String(v.subject).trim()+"||"+String(v.topic).trim()]=true;
+    });
 
-    // Subjects+Topics রেফারেন্স-টেবিল থেকে subject_id→নাম রেজলভ করে row_count যোগ করা
+    // Subjects+Topics রেফারেন্স-টেবিল থেকে subject_id→নাম রেজলভ করে row_count যোগ করা —
+    // এটাই এখন পুরো "প্ল্যান" (ডেটাবেজে যা Subject/Topic হিসেবে তৈরি হয়ে আছে)
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var subjName = {};
     var subjSh = ss.getSheetByName("Subjects");
@@ -943,7 +934,9 @@ function dailyTopicReminderTrigger() {
         for (var si=1; si<subjData.length; si++) subjName[subjData[si][sidCol]] = String(subjData[si][snameCol]||"").trim();
       }
     }
-    var countMap = {};
+    var countMap = {}; // "subject||topic" -> count
+    var seenPairs = []; // [{subject,topic}]
+    var seenSet = {};
     var topicSh = ss.getSheetByName("Topics");
     if (topicSh && topicSh.getLastRow()>=2) {
       var topicData = topicSh.getDataRange().getValues(), topicHdr = topicData[0];
@@ -952,17 +945,19 @@ function dailyTopicReminderTrigger() {
         for (var ti=1; ti<topicData.length; ti++) {
           var sName = subjName[topicData[ti][tsidCol]] || "অজানা";
           var tName = String(topicData[ti][tnameCol]||"").trim();
+          if(!tName) continue;
           var cnt = parseInt(topicData[ti][trcCol],10)||0;
           var key = sName+"||"+tName;
           countMap[key] = (countMap[key]||0)+cnt;
+          if(!seenSet[key]){ seenSet[key]=true; seenPairs.push({subject:sName,topic:tName}); }
         }
       }
     }
 
-    var emptyEntries = planEntries.filter(function(p){ return !(countMap[p.subject+"||"+p.topic]>0); });
+    var emptyEntries = seenPairs.filter(function(p){ return !(countMap[p.subject+"||"+p.topic]>0); });
     if(!emptyEntries.length) return; // সব টপিক পূর্ণ — নোটিফাই করার দরকার নেই
 
-    var pickedEmpty = emptyEntries.filter(function(p){ return pickedPlanIds[p.id]; });
+    var pickedEmpty = emptyEntries.filter(function(p){ return pickedKeys[p.subject+"||"+p.topic]; });
 
     var usersResp = UrlFetchApp.fetch(cfg.FIREBASE_URL+"Users.json?auth="+dbSecret,{muteHttpExceptions:true});
     var users = JSON.parse(usersResp.getContentText())||{};
