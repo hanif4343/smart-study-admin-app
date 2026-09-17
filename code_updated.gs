@@ -13,7 +13,7 @@
 */
 
 // 🆕 ডিপ্লয়মেন্ট-ভেরিফিকেশন মার্কার — নিচে doGet()-এ ?action=version হ্যান্ডলার
-// এই ভ্যারিয়েবলটা  রিটার্ন করে। কোড আপডেট করার পর "Deploy → Manage deployments →
+// এই ভ্যারিয়েবলটা রিটার্ন করে। কোড আপডেট করার পর "Deploy → Manage deployments →
 // Edit (পেন্সিল আইকন) → Version: New version → Deploy" ঠিকভাবে করা হয়েছে কিনা
 // নিশ্চিত হতে চাইলে GAS_URL-এর শেষে ?action=version জুড়ে ব্রাউজারে খুললেই এই
 // build-নামটা দেখা যাবে (secret লাগবেনা) — যদি পুরনো মান দেখা যায় বা এরর আসে,
@@ -4349,19 +4349,20 @@ function doPost(e) {
 
         var bNewRows=[];
         var bNowMs=Date.now();
+        // 🆕 প্রতিটা ইনপুট row-এর জন্য (নতুন তৈরি হোক বা duplicate-matched বিদ্যমান হোক)
+        // ফলাফল id — client-কে ফেরত পাঠানো হয় (bRows.length-এর সাথে ইনডেক্স মিলিয়ে),
+        // যাতে সাবমিটের পরপরই client জানতে পারে কোন প্রশ্ন কোন id পেলো (single-entry
+        // MCQ সাবমিটের পর option/explanation-generator ওয়ার্কফ্লো নির্দিষ্ট id
+        // টার্গেট করে ট্রিগার করার জন্য এটা দরকার — দেখো SingleQuestionEntryPage)।
+        var bResultIds=new Array(bRows.length).fill("");
         for(var bi=0;bi<bRows.length;bi++){
           var row=bRows[bi]||{};
           try{
             var bKey=bNorm(row.question)+"|"+bNorm(row.sub_topic)+"|"+bNorm(row.subject);
-            // ── FIX (আসল সমস্যা): আগে ডুপ্লিকেট পেলে সাথে সাথে skip করে continue হতো —
-            // examAppearance দেওয়া থাকলেও সেটা হারিয়ে যেত, কারণ appearance-attach লজিক
-            // নিচে (নতুন রো তৈরির পরে) ছিল, যেটা duplicate-এর জন্য কখনো চলতোই না। এখন
-            // duplicate পেলে, যদি examAppearance দেওয়া থাকে (QBank-এই শুধু), তাহলে নতুন রো
-            // না বানিয়ে সেই বিদ্যমান প্রশ্নের id-তেই একটা নতুন Exam_Appearance জোড়া হয় —
-            // এটাই Admin App-এর "একই প্রশ্ন আবার এলে duplicate না বানিয়ে appearance যোগ
-            // করো" ফিচারের মূল সার্ভার-সাইড অংশ। ──
             if(row.question && bExisting[bKey]){
               bSkipped++;
+              var bExistingId0=bExisting[bKey];
+              if(bExistingId0 && bExistingId0!==true) bResultIds[bi]=bExistingId0.toString();
               if(params.examAppearance && bTab==="QBank"){
                 var bExistingId=bExisting[bKey];
                 if(bExistingId && bExistingId!==true){
@@ -4423,6 +4424,7 @@ function doPost(e) {
 
             if(!row.editId){ /* id বসানো হয়ে গেছে উপরেই */ }
             bNewRows.push(bLine);
+            bResultIds[bi]=bId.toString();
             bExisting[bKey]=bId; // একই ব্যাচে দুইবার একই প্রশ্ন থাকলে দ্বিতীয়টাও এখন bId পাবে (আগে শুধু true থাকতো, appearance জোড়া যেত না)
             bAdded++;
             if(params.examAppearance && bTab==="QBank"){
@@ -4464,7 +4466,7 @@ function doPost(e) {
       var bShouldSync = (params.sync!==undefined) ? !!params.sync : true; // পুরনো কলার (sync ফ্ল্যাগ ছাড়া) থাকলে আগের মতোই প্রতিবার সিঙ্ক হবে, নতুন ফ্রন্টএন্ড শুধু শেষ চাংকেই sync:true পাঠায়
       var bSyncOk = true;
       if(bShouldSync) bSyncOk = syncToFirebase(bTab,bTab);
-      return json({result:"success",added:bAdded,skipped:bSkipped,firebaseSynced:bSyncOk,examAppearancesAdded:bAppearanceRows.length,examAppearancesLinkedToExisting:bLinkedExistingCount});
+      return json({result:"success",added:bAdded,skipped:bSkipped,firebaseSynced:bSyncOk,examAppearancesAdded:bAppearanceRows.length,examAppearancesLinkedToExisting:bLinkedExistingCount,ids:bResultIds});
     }
 
     // ── নতুন User signup ──
