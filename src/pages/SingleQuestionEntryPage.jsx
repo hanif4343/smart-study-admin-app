@@ -22,6 +22,7 @@ import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx"
 import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 import { PaperComposer, buildMcqGenPrompt, buildExplGenPrompt, parseGenResponse, shuffle4 } from "../components/shared/PaperComposer.jsx";
 import { uploadImg, getLastUploadError } from "../core/utils.js";
+import { queueAutoGen } from "../core/autoGenTrigger.js";
 
 /* ── MCQ অপশন বক্স ডিফল্ট-হাইড প্রেফারেন্স — লোকালস্টোরেজে মনে রাখা হয় ── */
 const LS_OPTIONS_HIDDEN = "ss_single_options_hidden_v1";
@@ -305,8 +306,6 @@ function SingleQuestionEntryPage({push}){
       if(failedCount && okUrls.length){
         push("error",`⚠️ ${failedCount}টা ছবি আপলোড ব্যর্থ হয়েছে`,`${okUrls.length}টা সফল হয়েছে — বাকিগুলো আবার চেষ্টা করুন`);
       } else if(failedCount){
-        // 🆕 PC/console ছাড়াই ফোনে আসল এরর কারণটা দেখানোর জন্য — GAS/GitHub এর
-        // আসল মেসেজ (যেমন "GitHub config সেট করা নেই" বা "HTTP 403") টোস্টেই দেখায়।
         push("error","ছবি আপলোড ব্যর্থ",getLastUploadError()||"অজানা কারণ — আবার চেষ্টা করো");
       } else {
         push("success",`🖼️ ${okUrls.length}টা ছবি আপলোড হয়েছে`,"লিংক কার্সরে বসানো হয়েছে");
@@ -454,6 +453,18 @@ function SingleQuestionEntryPage({push}){
       if(res.added>0){
         push("success",`✅ ${rows.length>1?rows.length+"টা প্রশ্ন একসাথে":""} যোগ হয়েছে!`,`এই সেশনে মোট ${sessionCount+rows.length}টি`);
         if(res.examAppearancesLinkedToExisting>0) push("success","🔗 কিছু প্রশ্ন আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
+        // 🆕 MCQ + উত্তর ভরা + অপশন ফাঁকা হলে option-generator, আর ব্যাখ্যা ফাঁকা হলে
+        // explanation-generator — দুটোই স্বয়ংক্রিয়ভাবে (ডিবাউন্সড, একসাথে ব্যাচ
+        // হয়ে) ট্রিগার হয়। GitHub টোকেন সেট না থাকলে চুপচাপ স্কিপ হয় (এরর দেখায় না,
+        // কারণ এটা ঐচ্ছিক বোনাস ফিচার — মূল সাবমিট এর উপর নির্ভর করে না)।
+        allParts.forEach((part,idx)=>{
+          const id=res.ids?.[idx];
+          if(!id) return;
+          const optsFilled=[part.opt1,part.opt2,part.opt3,part.opt4].some(o=>(o||"").trim());
+          const needsOptions=effQtype==="MCQ" && !!part.correct?.trim() && !optsFilled;
+          const needsExplanation=!(part.explanation||"").trim();
+          if(needsOptions||needsExplanation) queueAutoGen({id,needsOptions,needsExplanation,push});
+        });
         setPendingParts([]);
         setSessionCount(c=>c+rows.length);
         resetForNext();
