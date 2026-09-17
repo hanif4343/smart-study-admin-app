@@ -23,6 +23,10 @@ on:
         description: "Sub-topic(s), কমা দিয়ে একাধিক দেওয়া যায় (খালি রাখলে সব)"
         required: false
         default: ""
+      target_ids:
+        description: "নির্দিষ্ট প্রশ্ন id(s), কমা দিয়ে একাধিক (দেওয়া থাকলে উপরের filter_* সব উপেক্ষা হবে — SingleQuestionEntryPage-এর অটো-ট্রিগার এভাবেই কল করে)"
+        required: false
+        default: ""
 
 jobs:
   generate:
@@ -56,5 +60,6 @@ jobs:
           FILTER_AUDIENCE: ${{ github.event.inputs.filter_audience }}
           FILTER_SUBJECT: ${{ github.event.inputs.filter_subject }}
           FILTER_SUBTOPIC: ${{ github.event.inputs.filter_subtopic }}
+          TARGET_IDS: ${{ github.event.inputs.target_ids }}
         run: node scripts/generate-explanations.mjs
 
