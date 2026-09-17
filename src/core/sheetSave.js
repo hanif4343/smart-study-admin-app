@@ -23,6 +23,11 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   const CHUNK=Math.max(1,chunkSize||100); // চাইলে ছোট চাংক (৫-১০, এমনকি ১) দিয়ে বেশি live প্রোগ্রেস আপডেট পাওয়া যায় — trade-off: ছোট চাংক = বেশি রিকোয়েস্ট = মোট সময় একটু বেশি
   const totalChunks=Math.ceil(rows.length/CHUNK);
   let added=0,skipped=0,firebaseSyncFailed=false,examAppearancesAdded=0,examAppearancesLinkedToExisting=0; const failedRows=[];
+  // 🆕 প্রতিটা ইনপুট row-এর ফলাফল id (নতুন তৈরি বা duplicate-matched বিদ্যমান) —
+  // chunk-অনুযায়ী GAS-এর bResultIds concat হয়ে rows.length-এর সমান লম্বা থাকে।
+  // SingleQuestionEntryPage-এ MCQ সাবমিটের পর option/explanation-generator
+  // ওয়ার্কফ্লো নির্দিষ্ট id টার্গেট করার জন্য এটা লাগে।
+  const resultIds=[];
   for(let i=0;i<rows.length;i+=CHUNK){
     const chunk=rows.slice(i,i+CHUNK);
     const isLast=(i+CHUNK>=rows.length);
@@ -46,14 +51,15 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
         if(attempt===2) push?.("warn","⏳ ধীর নেটওয়ার্ক, আবার চেষ্টা করা হচ্ছে...",`চাংক ${Math.floor(i/CHUNK)+1}/${totalChunks}`);
         const resp=await fetchWithTimeout(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)},timeoutMs);
         const data=await resp.json().catch(()=>({}));
-        if(data.result==="error"){ failedRows.push(...chunk); ok=true; break; } // সার্ভার-সাইড error — রিট্রাই করে লাভ নেই
+        if(data.result==="error"){ failedRows.push(...chunk); resultIds.push(...chunk.map(()=>"")); ok=true; break; } // সার্ভার-সাইড error — রিট্রাই করে লাভ নেই
         added+=(data.added||0); skipped+=(data.skipped||0);
         examAppearancesAdded+=(data.examAppearancesAdded||0);
         examAppearancesLinkedToExisting+=(data.examAppearancesLinkedToExisting||0);
+        resultIds.push(...(Array.isArray(data.ids)?data.ids:chunk.map(()=>"")));
         if(isLast && data.firebaseSynced===false) firebaseSyncFailed=true;
         ok=true;
       }catch(e){
-        if(attempt===2) failedRows.push(...chunk); // দুইবার চেষ্টার পরও ব্যর্থ — এই চাংক বাদ, বাকিগুলো চলতে থাকবে
+        if(attempt===2){ failedRows.push(...chunk); resultIds.push(...chunk.map(()=>"")); } // দুইবার চেষ্টার পরও ব্যর্থ — এই চাংক বাদ, বাকিগুলো চলতে থাকবে
       }
     }
     onProgress?.({done:Math.min(i+CHUNK,rows.length),total:rows.length,chunkIndex:Math.floor(i/CHUNK)+1,totalChunks});
@@ -61,7 +67,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   // ⚡ Sheet-এ সেভ ঠিকই হয়ে গেছে, কিন্তু GAS-এর Firebase mirror-sync ব্যর্থ হলে dedupe-এর
   // "Quiz-এ আছে" কাউন্ট আর existingQuizKeys পুরনো থেকে যাবে — সেটা এখন চুপচাপ না থেকে জানানো হয়।
   if(firebaseSyncFailed) push?.("error","⚠️ Sheet-এ সেভ হয়েছে কিন্তু Firebase sync ব্যর্থ","'Quiz-এ আছে' কাউন্ট পুরনো থাকতে পারে — একটু পরে আবার চেষ্টা করো, বা GAS Executions log চেক করো");
-  return{added,skipped,failedRows,examAppearancesAdded,examAppearancesLinkedToExisting};
+  return{added,skipped,failedRows,examAppearancesAdded,examAppearancesLinkedToExisting,ids:resultIds};
 }
 
 /* ── Firebase-এ bulk rows সেভ — প্রতিটা row আলাদা push, ব্যর্থগুলো ফেরত দেয় (retry-এর জন্য) ──
@@ -232,14 +238,21 @@ async function fetchReferenceData({gasSecret}){
 // "অজানা error" দেখাতো — আসল কারণ (GAS-এর ভেতরের exception, timeout, ভুল
 // deployment) কখনো বোঝা যেত না। এখন raw body না পার্স হলে HTTP status + body-র
 // প্রথম ৩০০ ক্যারেক্টার এরর মেসেজে দেখানো হয়, যাতে সাথে সাথে আসল সমস্যাটা ধরা যায়।
-async function _gasFetchDiag(url){
-  const resp=await fetch(url);
-  const rawText=await resp.text();
-  try{
-    return {data:JSON.parse(rawText), rawFail:false};
-  }catch{
-    const preview=rawText.slice(0,300).replace(/\s+/g," ").trim();
-    return {data:{}, rawFail:true, status:resp.status, preview};
+// 🆕 রিট্রাই যোগ করা হলো: HTML/non-JSON রেসপন্স (যেমন মোবাইল ক্যারিয়ার/প্রক্সির
+// সাময়িক ইন্টারসেপ্ট পেজ — GAS নিজে কখনো HTML পাঠায় না) পেলে ১ বার ৮০০ms পরে
+// আবার চেষ্টা করে, তারপরও ব্যর্থ হলেই শুধু এরর দেখায় — সাময়িক নেটওয়ার্ক গ্লিচে
+// বারবার ম্যানুয়ালি রিট্রাই করতে হবে না।
+async function _gasFetchDiag(url,retries=1){
+  for(let attempt=0;attempt<=retries;attempt++){
+    const resp=await fetch(url);
+    const rawText=await resp.text();
+    try{
+      return {data:JSON.parse(rawText), rawFail:false};
+    }catch{
+      if(attempt<retries){ await new Promise(r=>setTimeout(r,800)); continue; }
+      const preview=rawText.slice(0,300).replace(/\s+/g," ").trim();
+      return {data:{}, rawFail:true, status:resp.status, preview};
+    }
   }
 }
 
