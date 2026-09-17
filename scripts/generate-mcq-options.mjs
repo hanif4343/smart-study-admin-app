@@ -58,6 +58,9 @@ const parseList = v => (v || "").split(",").map(s => s.trim()).filter(Boolean);
 const FILTER_AUDIENCE = parseList(process.env.FILTER_AUDIENCE);
 const FILTER_SUBJECT = parseList(process.env.FILTER_SUBJECT);
 const FILTER_SUBTOPIC = parseList(process.env.FILTER_SUBTOPIC);
+// 🆕 নির্দিষ্ট প্রশ্ন id(s) (কমা দিয়ে একাধিক) — দেওয়া থাকলে FILTER_* সব উপেক্ষা করে
+// শুধু এই id(গুলো) প্রসেস হয় (SingleQuestionEntryPage-এর সাবমিট-পরবর্তী অটো-জেনারেট)।
+const TARGET_IDS = parseList(process.env.TARGET_IDS);
 
 if (!GAS_URL || !GAS_SECRET) {
   console.error("❌ GAS_URL / GAS_SECRET সেট করা নেই। GitHub Secrets চেক করো (অ্যাপের 'GAS Secret Key' এর মতোই)।");
@@ -190,7 +193,31 @@ async function gasGetSheetRows(tab, retries = 2) {
   }
 }
 
-// ── generate-explanations.mjs-এর gasUpdateExplanation-এর মতোই, কিন্তু field নাম প্যারামিটার
+// 🆕 নির্দিষ্ট id(s) দিয়ে টার্গেটেড আনা — GAS-এর "getQuestionsByIds" action (হালকা,
+// পুরো Sheet স্ক্যান করে না)। SingleQuestionEntryPage-এ একটা MCQ সাবমিট করার পরপরই
+// শুধু সেই একটা (বা কয়েকটা, batch করে পাঠালে) প্রশ্নের জন্য option/explanation
+// জেনারেট করতে TARGET_IDS ব্যবহার হয় — পুরো ব্যাচ-জব চালানোর দরকার পড়ে না।
+async function gasGetQuestionsByIds(tab, ids, retries = 2) {
+  const url = `${GAS_URL}?action=getQuestionsByIds&sheet=${encodeURIComponent(tab)}&ids=${encodeURIComponent(ids.join(","))}&secret=${encodeURIComponent(GAS_SECRET)}`;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const resp = await fetch(url);
+    const rawText = await resp.text();
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      if (attempt < retries) { await sleep(3000); continue; }
+      const preview = rawText.slice(0, 300).replace(/\s+/g, " ").trim();
+      throw new Error(`GAS getQuestionsByIds(${tab}) ব্যর্থ: HTTP ${resp.status}, JSON না। raw: "${preview}"`);
+    }
+    if (data?.status !== "success" || !Array.isArray(data.rows)) {
+      throw new Error(`GAS getQuestionsByIds(${tab}) ব্যর্থ: ${data?.message || `unknown error (HTTP ${resp.status})`}`);
+    }
+    return data.rows;
+  }
+}
+
+
 //    হিসেবে নেওয়া হয় যাতে option1..option4 আর explanation — সবগুলো একই ফাংশন দিয়ে লেখা যায়
 //    (GAS-এর দিক থেকে এটা type:"update_explanation" + field:<যেকোনো কলাম নাম> — জেনেরিক single-field
 //    updater হিসেবে আগে থেকেই কাজ করছে, তাই GAS-এ নতুন কিছু ডিপ্লয় করতে হচ্ছে না)।
@@ -231,7 +258,11 @@ async function main() {
   const queue = [];
   let partiallyFilledSkipped = 0;
   for (const sheet of SHEETS) {
-    const rows = await gasGetSheetRows(sheet);
+    // 🆕 TARGET_IDS দেওয়া থাকলে পুরো Sheet স্ক্যান না করে শুধু ওই id(গুলো)-ই আনা হয়
+    // (getQuestionsByIds — হালকা, দ্রুত) — নিচের FILTER_SUBJECT/SUBTOPIC/AUDIENCE
+    // চেকগুলোও তখন বাইপাস হয়ে যায় (নিচে দেখো), কারণ নির্দিষ্ট id মানেই সেটা
+    // প্রসেস করতে হবে, ফিল্টারে না মিললেও।
+    const rows = TARGET_IDS.length ? await gasGetQuestionsByIds(sheet, TARGET_IDS) : await gasGetSheetRows(sheet);
     rows.forEach(row => {
       // 🐛 রিয়েল ফিক্স: আসল শিটে এই কলামের হেডার হলো "Question Type" (স্পেসসহ),
       // "qtype"/"Type" না — আগে এই অ্যালিয়াস লিস্টে "Question Type" ছিলই না,
@@ -263,9 +294,9 @@ async function main() {
       const audienceRaw = readField(row, "audienceTags", "AudienceTags", "audience_tags");
       const audienceList = audienceRaw.split(",").map(a => a.trim()).filter(Boolean);
 
-      if (FILTER_SUBJECT.length && !FILTER_SUBJECT.includes(subject)) return;
-      if (FILTER_SUBTOPIC.length && !FILTER_SUBTOPIC.includes(subtopic)) return;
-      if (FILTER_AUDIENCE.length) {
+      if (FILTER_SUBJECT.length && !TARGET_IDS.length && !FILTER_SUBJECT.includes(subject)) return;
+      if (FILTER_SUBTOPIC.length && !TARGET_IDS.length && !FILTER_SUBTOPIC.includes(subtopic)) return;
+      if (FILTER_AUDIENCE.length && !TARGET_IDS.length) {
         const matches = FILTER_AUDIENCE.some(tag => tag === NONE_TAG ? audienceList.length === 0 : audienceList.includes(tag));
         if (!matches) return;
       }
@@ -273,7 +304,9 @@ async function main() {
       queue.push({ sheet, id, question: q, correct, needsExplanation: !explanation, subject, subtopic });
     });
   }
-  if (FILTER_AUDIENCE.length || FILTER_SUBJECT.length || FILTER_SUBTOPIC.length) {
+  if (TARGET_IDS.length) {
+    console.log(`🎯 TARGET_IDS মোড — শুধু ${TARGET_IDS.length}টা নির্দিষ্ট id প্রসেস হবে: ${TARGET_IDS.join(", ")}`);
+  } else if (FILTER_AUDIENCE.length || FILTER_SUBJECT.length || FILTER_SUBTOPIC.length) {
     console.log(`🔎 ফিল্টার সক্রিয় — Audience: [${FILTER_AUDIENCE.join(", ") || "সব"}], Subject: [${FILTER_SUBJECT.join(", ") || "সব"}], Sub-topic: [${FILTER_SUBTOPIC.join(", ") || "সব"}]`);
   }
   if (partiallyFilledSkipped > 0) {
