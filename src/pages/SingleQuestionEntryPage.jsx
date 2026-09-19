@@ -409,7 +409,16 @@ function SingleQuestionEntryPage({push}){
     if(targetMode==="QBank"&&!postSel.name.trim()){ push("warn","⚠️ QBank-এ পদ (Post) বাধ্যতামূলক","আগে পূরণ করো"); return; }
     if(targetMode==="QBank"&&!instSel.name.trim()){ push("warn","⚠️ QBank-এ প্রতিষ্ঠান (Institution) বাধ্যতামূলক","আগে পূরণ করো"); return; }
     if(targetMode==="QBank"&&!examYear.trim()){ push("warn","⚠️ QBank-এ সাল বাধ্যতামূলক","আগে পূরণ করো"); return; }
-    if(!refData){ push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো",""); return; }
+    // 🐛 ফিক্স: আগে refData না থাকলে শুধু প্যাসিভ ওয়ার্নিং দেখাতো — যদি আসল কারণ
+    // "এখনো লোড হচ্ছে" না হয়ে "আগের চেষ্টা ব্যর্থ হয়ে থেমে গেছে" হতো (নেটওয়ার্ক
+    // গ্লিচ), তাহলে বারবার সাবমিট চাপলেও কখনো আপনাআপনি ঠিক হতো না — ব্যবহারকারীকে
+    // অন্য কোথাও গিয়ে আলাদা "রিট্রাই" বাটন খুঁজে বের করতে হতো। এখন সাবমিট চাপলে
+    // refData না থাকলে নিজে থেকেই একবার আবার লোড করার চেষ্টা করে।
+    if(!refData){
+      push("warn","⏳ Reference data লোড করা হচ্ছে","আবার চেষ্টা করছি, একটু পর আবার সাবমিট চাপো");
+      loadRefData();
+      return;
+    }
 
     setSaving(true);
 
@@ -478,7 +487,7 @@ function SingleQuestionEntryPage({push}){
       else push("error","সেভ ব্যর্থ","Sheet-এ যোগ হয়নি — নেটওয়ার্ক সমস্যা হতে পারে, একটু পর আবার চেষ্টা করো");
     }catch(e){ push("error","সেভ ব্যর্থ",e.message); }
     setSaving(false);
-  },[saving,generating,question,correct,subjectSel,topicSel,subjectOptions,topicOptions,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,refData,postSel,instSel,examYear,postOptions,instOptions,groupHeadingText,pendingParts,sessionCount,push,activeDraftId,draftList]);
+  },[saving,generating,question,correct,subjectSel,topicSel,subjectOptions,topicOptions,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,refData,postSel,instSel,examYear,postOptions,instOptions,groupHeadingText,pendingParts,sessionCount,push,activeDraftId,draftList,loadRefData]);
 
   /* ── Enter (প্লেইন, Shift/Ctrl ছাড়া): প্রশ্ন বক্সে থাকলে → উত্তর বক্সে ফোকাস
      সরায়। উত্তর বক্সে থাকলে → বর্তমান প্রশ্ন-উত্তর সারিতে জমা করে (commit) পরের
