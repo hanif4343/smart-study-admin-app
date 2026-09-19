@@ -215,17 +215,30 @@ async function deleteIdsInSheet({sheet,ids,gasSecret}){
    এরর মেসেজও দেখা যেত না (তাই ডিবাগ করাও কঠিন ছিল)। এখন ব্যর্থতার আসল কারণ
    (error string) ফেরত আসে, উপরের কম্পোনেন্ট সেটা দেখিয়ে 🔁 রিট্রাই বাটন দেখাতে
    পারে। দেখো SingleQuestionEntryPage-এর loadRefData()/refDataError। ── */
+// 🐛 ফিক্স: আগে এখানে কোনো রিট্রাই ছিল না — পেজ খোলার সময় GAS-এর getReferenceData
+// কল একবার সাময়িক নেটওয়ার্ক গ্লিচে (মোবাইল ক্যারিয়ার/প্রক্সি) ব্যর্থ হলে refData
+// চিরতরে null থেকে যেত, আর সাবমিট চাপলেই বারবার "এখনো লোড হচ্ছে" দেখাতো — আসলে
+// লোড হচ্ছিল না, ব্যর্থ হয়ে থেমে গিয়েছিল, শুধু ব্যবহারকারীর কাছে সেটা স্পষ্ট ছিল
+// না। এখন non-JSON/network এরর পেলে ৮০০ms পর একবার নিজে থেকে আবার চেষ্টা করে।
 async function fetchReferenceDataVerbose({gasSecret}){
   if(!GAS) return{ok:false,data:null,error:"GAS URL সেট করা নেই (বিল্ডে VITE_GAS_URL env var চেক করো)"};
   if(!gasSecret) return{ok:false,data:null,error:"GAS Secret Key দেওয়া নেই — উপরে Save Location প্যানেলে বসাও"};
-  try{
-    const url=`${GAS}?action=getReferenceData&secret=${encodeURIComponent(gasSecret)}`;
-    const resp=await fetch(url);
-    const data=await resp.json().catch(()=>null);
-    if(!data) return{ok:false,data:null,error:"সার্ভার থেকে সঠিক JSON আসেনি (নেটওয়ার্ক সমস্যা বা GAS deploy ভাঙা থাকতে পারে)"};
-    if(data.status!=="success"||!data.data) return{ok:false,data:null,error:data.message||"getReferenceData ব্যর্থ — GAS Secret Key ভুল বা মেয়াদোত্তীর্ণ হতে পারে"};
-    return{ok:true,data:data.data,error:null};
-  }catch(e){ return{ok:false,data:null,error:e?.message||String(e)}; }
+  const url=`${GAS}?action=getReferenceData&secret=${encodeURIComponent(gasSecret)}`;
+  for(let attempt=0;attempt<=1;attempt++){
+    try{
+      const resp=await fetch(url);
+      const data=await resp.json().catch(()=>null);
+      if(!data){
+        if(attempt<1){ await new Promise(r=>setTimeout(r,800)); continue; }
+        return{ok:false,data:null,error:"সার্ভার থেকে সঠিক JSON আসেনি (নেটওয়ার্ক সমস্যা বা GAS deploy ভাঙা থাকতে পারে) — 'রিট্রাই' চাপো"};
+      }
+      if(data.status!=="success"||!data.data) return{ok:false,data:null,error:data.message||"getReferenceData ব্যর্থ — GAS Secret Key ভুল বা মেয়াদোত্তীর্ণ হতে পারে"};
+      return{ok:true,data:data.data,error:null};
+    }catch(e){
+      if(attempt<1){ await new Promise(r=>setTimeout(r,800)); continue; }
+      return{ok:false,data:null,error:e?.message||String(e)};
+    }
+  }
 }
 async function fetchReferenceData({gasSecret}){
   const res=await fetchReferenceDataVerbose({gasSecret});
