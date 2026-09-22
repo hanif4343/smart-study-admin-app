@@ -100,6 +100,17 @@ function SingleQuestionEntryPage({push}){
 
   const[generating,setGenerating]=useState(false);
   const[saving,setSaving]=useState(false);
+  // 🆕 নেট-সমস্যায় সম্পূর্ণ সাবমিট-ব্যর্থতা ট্র্যাক করে — auto-retry effect এটা
+  // দেখে বোঝে আবার চেষ্টা করা দরকার কিনা। রেফও রাখা হলো (savingRef/generatingRef-
+  // সহ) যাতে ৪৫-সেকেন্ড interval callback-এ প্রতিবার effect re-run না করেই
+  // সবসময় সর্বশেষ ভ্যালু পড়া যায়।
+  const[lastSubmitFailed,setLastSubmitFailed]=useState(false);
+  const lastSubmitFailedRef=useRef(false);
+  const savingRef=useRef(false);
+  const generatingRef=useRef(false);
+  useEffect(()=>{ lastSubmitFailedRef.current=lastSubmitFailed; },[lastSubmitFailed]);
+  useEffect(()=>{ savingRef.current=saving; },[saving]);
+  useEffect(()=>{ generatingRef.current=generating; },[generating]);
   const[sessionCount,setSessionCount]=useState(0);
   const[imgUploading,setImgUploading]=useState(false); // ছবি → imgbb আপলোড হচ্ছে কিনা
 
@@ -317,25 +328,46 @@ function SingleQuestionEntryPage({push}){
   },[insertAtCursor,push]);
 
   /* ── ✨ AI দিয়ে অপশন/ব্যাখ্যা জেনারেট ── */
+  // 🐛 ফিক্স: আগে Generate চাপলে ৪টা অপশনই (এমনকি আগে থেকে টাইপ করা থাকলেও) আর
+  // ব্যাখ্যাও unconditionally ওভাররাইট হয়ে যেত — ম্যানুয়ালি কিছু লিখে রাখলেও
+  // হারিয়ে যেত। এখন শুধু খালি অপশন-ঘরগুলো ভরা হয় (আগে থেকে ভরা ঘর কখনো ছোঁয়া
+  // হয় না), আর ব্যাখ্যাও শুধু তখনই বসে যখন সেটা আগে থেকে খালি থাকে। সঠিক উত্তর
+  // (correct) যদি আগে থেকেই কোনো ঘরে টাইপ করা থাকে সেটাও চেনা হয় — তাহলে সেটা
+  // আবার বসানো হয় না, শুধু বাকি খালি ঘরগুলোয় distractor বসে।
   const generate=useCallback(async()=>{
     if(!question.trim()||!correct.trim()){ push("warn","আগে প্রশ্ন ও উত্তর লিখো",""); return; }
+    const optsArr=[opt1,opt2,opt3,opt4];
+    const emptyIdx=[0,1,2,3].filter(i=>!(optsArr[i]||"").trim());
+    const correctAlreadyPresent=optsArr.some(o=>(o||"").trim().toLowerCase()===correct.trim().toLowerCase());
+    const needOptions=isMCQ && emptyIdx.length>0;
+    const needExplanation=!explanation.trim();
+    if(!needOptions && !needExplanation){
+      push("warn","ভরার কিছু নেই","সব ঘর আগে থেকেই ভরা আছে — কিছু বদলানো হয়নি");
+      return;
+    }
     if(!buildKeyPool().length){ push("warn","⚠️ কোনো AI provider active নেই","API Settings-এ গিয়ে অন্তত একটা key active করো"); return; }
     setGenerating(true);
     try{
       const raw=await callAiProviderRotatingRaw(isMCQ?buildMcqGenPrompt(question,correct):buildExplGenPrompt(question,correct));
       const parsed=parseGenResponse(raw);
-      if(isMCQ){
-        const distractors=(parsed.options||[]).slice(0,3);
-        while(distractors.length<3) distractors.push("");
-        const [a,b,c,d]=shuffle4([correct,...distractors]); 
-        setOpt1(a);setOpt2(b);setOpt3(c);setOpt4(d);
+      if(needOptions){
+        // কতগুলো distractor লাগবে — correct আগে থেকে কোনো ঘরে থাকলে সব খালি ঘরই
+        // distractor-র জন্য, না থাকলে একটা ঘর correct-এর জন্য বাঁচিয়ে রাখতে হবে
+        const distractorsNeeded=correctAlreadyPresent?emptyIdx.length:emptyIdx.length-1;
+        let distractors=(parsed.options||[]).filter(o=>(o||"").trim()).slice(0,Math.max(0,distractorsNeeded));
+        while(distractors.length<distractorsNeeded) distractors.push("");
+        const fillers=correctAlreadyPresent?[...distractors]:[correct,...distractors];
+        for(let i=fillers.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [fillers[i],fillers[j]]=[fillers[j],fillers[i]]; }
+        const newOpts=[...optsArr];
+        emptyIdx.forEach((slotIdx,k)=>{ newOpts[slotIdx]=fillers[k]||""; });
+        setOpt1(newOpts[0]);setOpt2(newOpts[1]);setOpt3(newOpts[2]);setOpt4(newOpts[3]);
         if(optionsHidden) toggleOptionsHidden(); // জেনারেট করলে দেখিয়ে দাও, না হলে চোখেই পড়বে না
       }
-      setExplanation(parsed.explanation||"");
-      push("success","✨ Generate হয়েছে","চেক করে দরকার হলে ঠিক করে নাও");
+      if(needExplanation) setExplanation(parsed.explanation||"");
+      push("success","✨ Generate হয়েছে",needOptions&&needExplanation?"খালি অপশনগুলো আর ব্যাখ্যা ভরা হয়েছে — আগে থেকে যা লেখা ছিল তা অক্ষত":needOptions?"শুধু খালি অপশনগুলো ভরা হয়েছে":"শুধু ব্যাখ্যা ভরা হয়েছে");
     }catch(e){ push("error","Generate ব্যর্থ",e.message); }
     setGenerating(false);
-  },[question,correct,isMCQ,push,optionsHidden,toggleOptionsHidden]);
+  },[question,correct,isMCQ,push,optionsHidden,toggleOptionsHidden,opt1,opt2,opt3,opt4,explanation]);
 
   const resetForNext=()=>{
     setQuestion("");setCorrect("");
@@ -460,6 +492,7 @@ function SingleQuestionEntryPage({push}){
       }));
       const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance,source:"Single_Text"});
       if(res.added>0){
+        setLastSubmitFailed(false);
         push("success",`✅ ${rows.length>1?rows.length+"টা প্রশ্ন একসাথে":""} যোগ হয়েছে!`,`এই সেশনে মোট ${sessionCount+rows.length}টি`);
         if(res.examAppearancesLinkedToExisting>0) push("success","🔗 কিছু প্রশ্ন আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
         // 🆕 MCQ + উত্তর ভরা + অপশন ফাঁকা হলে option-generator, আর ব্যাখ্যা ফাঁকা হলে
@@ -484,10 +517,30 @@ function SingleQuestionEntryPage({push}){
         }
       }
       else if(res.skipped>0) push("warn","⚠️ ইতিমধ্যে Sheet-এ আছে (duplicate)","একই প্রশ্ন আগে থেকেই আছে বলে যোগ হয়নি");
-      else push("error","সেভ ব্যর্থ","Sheet-এ যোগ হয়নি — নেটওয়ার্ক সমস্যা হতে পারে, একটু পর আবার চেষ্টা করো");
-    }catch(e){ push("error","সেভ ব্যর্থ",e.message); }
+      else {
+        // 🆕 নেটওয়ার্ক সমস্যায় (বা GAS সাময়িক ডাউন) সম্পূর্ণ ব্যর্থ — প্রশ্নগুলো
+        // pendingParts-এ থেকেই যাচ্ছে (এটা মোছা হয়নি, autosave draft-ও এগুলো ধরে
+        // রাখে), তাই হারিয়ে যায়নি। lastSubmitFailed=true সেট করা হলো, যাতে নিচের
+        // auto-retry effect নেট ফিরলে (বা প্রতি ৪৫ সেকেন্ডে) নিজে থেকেই আবার
+        // submit() ট্রাই করে — ম্যানুয়ালি মনে রেখে আবার চাপতে হবে না।
+        setLastSubmitFailed(true);
+        push("error","📵 নেট সমস্যায় সেভ হয়নি","প্রশ্নগুলো অপেক্ষায় আছে (হারায়নি) — নেট ফিরলেই অটোমেটিক আবার সাবমিট হবে, চাইলে ম্যানুয়ালি আবার Submit-ও চাপতে পারো");
+      }
+    }catch(e){ setLastSubmitFailed(true); push("error","📵 নেট সমস্যায় সেভ হয়নি",e.message+" — নেট ফিরলেই অটোমেটিক আবার সাবমিট হবে"); }
     setSaving(false);
   },[saving,generating,question,correct,subjectSel,topicSel,subjectOptions,topicOptions,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,refData,postSel,instSel,examYear,postOptions,instOptions,groupHeadingText,pendingParts,sessionCount,push,activeDraftId,draftList,loadRefData]);
+
+  // 🆕 অফলাইন/নেট-সমস্যা অটো-রিট্রাই — সম্পূর্ণ ব্যর্থ সাবমিটের পর pendingParts
+  // হারায় না, তাই নেট ফিরলেই (browser online ইভেন্ট) বা প্রতি ৪৫ সেকেন্ডে
+  // (কিছু ক্ষেত্রে browser ভুলভাবে "online" মনে করে যখন আসলে ক্যারিয়ার/প্রক্সি
+  // এখনো ঠিকমতো কাজ করছে না, তাই শুধু event-এর উপর নির্ভর করা নিরাপদ না) —
+  // নিজে থেকেই আবার submit() ট্রাই করে।
+  useEffect(()=>{
+    const tryResubmit=()=>{ if(lastSubmitFailedRef.current && !savingRef.current && !generatingRef.current) submit(); };
+    window.addEventListener("online",tryResubmit);
+    const iv=setInterval(tryResubmit,45000);
+    return()=>{ window.removeEventListener("online",tryResubmit); clearInterval(iv); };
+  },[submit]);
 
   /* ── Enter (প্লেইন, Shift/Ctrl ছাড়া): প্রশ্ন বক্সে থাকলে → উত্তর বক্সে ফোকাস
      সরায়। উত্তর বক্সে থাকলে → বর্তমান প্রশ্ন-উত্তর সারিতে জমা করে (commit) পরের
@@ -539,6 +592,13 @@ function SingleQuestionEntryPage({push}){
             <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={discardDraft} tabIndex={-1}>🗑 বাদ দাও</button>
             <button className="btn bp" style={{flex:2,justifyContent:"center"}} onClick={restoreDraft} tabIndex={-1}>♻️ ফিরিয়ে আনো</button>
           </div>
+        </div>
+      )}
+
+      {lastSubmitFailed&&(
+        <div style={{background:"#450a0a",border:"1px solid #dc262655",borderRadius:12,padding:"10px 14px",marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center",gap:10}}>
+          <div style={{fontSize:11,color:"#fca5a5",lineHeight:1.5}}>📵 নেট সমস্যায় সেভ হয়নি — প্রশ্ন অপেক্ষায় আছে, নেট ফিরলেই অটো-সাবমিট হবে (প্রতি ৪৫ সেকেন্ডে চেষ্টা চলছে)</div>
+          <button className="btn bp" style={{flexShrink:0,fontSize:11,padding:"6px 10px"}} onClick={submit} tabIndex={-1}>এখনই চেষ্টা করো</button>
         </div>
       )}
 
