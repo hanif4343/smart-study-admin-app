@@ -10,6 +10,7 @@ import {
   LS_DRAFT_BULK, loadDraft, saveDraft, clearDraft, applyRichTextShortcut
 } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
+import { queueAutoGen } from "../core/autoGenTrigger.js";
 import { resolveOrCreateReference, resolveSubjectTopicForEntries, norm } from "../core/referenceHelpers.js";
 import { archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
@@ -445,6 +446,18 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           groupHeading:batchGroupId?effGroupHeading:"",
         }));
     const result=await saveRowsToSheet({rows,targetTab:mode,gasSecret,push,examAppearance,source:"Bulk_Text"});
+    // 🆕 বাল্ক সাবমিটের পরও Single Entry-র মতোই — MCQ+উত্তর ভরা কিন্তু অপশন ফাঁকা
+    // হলে option-generator, ব্যাখ্যা ফাঁকা হলে explanation-generator ট্রিগার হয়
+    // (ডিবাউন্সড ব্যাচ — একসাথে সব id নিয়ে একটাই workflow_dispatch, একগাদা আলাদা
+    // GitHub Actions রান শুরু হয় না)।
+    rows.forEach((row,idx)=>{
+      const id=result.ids?.[idx];
+      if(!id) return;
+      const optsFilled=[row.opt1,row.opt2,row.opt3,row.opt4].some(o=>(o||"").trim());
+      const needsOptions=eff==="MCQ" && !!(row.correct||"").trim() && !optsFilled;
+      const needsExplanation=!(row.explanation||"").trim();
+      if(needsOptions||needsExplanation) queueAutoGen({id,needsOptions,needsExplanation,push});
+    });
     entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
     setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setRunning(false);setDone(true);
