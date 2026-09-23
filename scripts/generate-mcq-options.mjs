@@ -177,10 +177,21 @@ async function callRotating(pool, startIdx, question, correct, neededCount, exis
 // কখনো দেখা যেত না। এখন raw body না পার্স হলে HTTP status + body-র প্রথম
 // ৩০০ ক্যারেক্টার লগ করা হয়, যাতে পরের রানে আসল সমস্যা (যেমন GAS execution
 // timeout বড় শিটে, বা ভুল deployment URL) সরাসরি বোঝা যায়।
-async function gasGetSheetRows(tab, retries = 2) {
+// 🛠️ ফিক্স: আগে fetch() একদম bare (কোনো header ছাড়া) কল হতো, যেটা Google-এর
+// কাছে datacenter/CI ট্রাফিককে bot-এর মতো দেখাতে পারে আর মাঝেমাঝে
+// script.google.com script চালানোর আগেই একটা consent/challenge HTML পেজ
+// ফেরত দেয় (তাতেই আগের "attempt 1/2 — HTTP 404, JSON পার্স ব্যর্থ" এরর হচ্ছিল)।
+// একটা সাধারণ ব্রাউজারের মতো header পাঠিয়ে এটা এড়ানোর চেষ্টা করা হচ্ছে।
+const BROWSER_LIKE_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Accept": "application/json, text/plain, */*",
+  "Accept-Language": "en-US,en;q=0.9,bn;q=0.8",
+};
+
+async function gasGetSheetRows(tab, retries = 4) {
   const url = `${GAS_URL}?action=getSheetRows&tab=${encodeURIComponent(tab)}&secret=${encodeURIComponent(GAS_SECRET)}`;
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const resp = await fetch(url);
+    const resp = await fetch(url, { headers: BROWSER_LIKE_HEADERS });
     const rawText = await resp.text();
     let data;
     try {
@@ -188,11 +199,12 @@ async function gasGetSheetRows(tab, retries = 2) {
     } catch {
       const preview = rawText.slice(0, 300).replace(/\s+/g, " ").trim();
       if (attempt < retries) {
-        console.log(`⚠️ getSheetRows(${tab}) attempt ${attempt + 1} — HTTP ${resp.status}, JSON পার্স ব্যর্থ (সম্ভবত GAS timeout, শিট বড় হলে হয়) — retry করছি... raw: "${preview}"`);
-        await sleep(3000);
+        const waitMs = 3000 * (attempt + 1); // 3s, 6s, 9s, 12s — বাড়তে থাকা backoff
+        console.log(`⚠️ getSheetRows(${tab}) attempt ${attempt + 1} — HTTP ${resp.status}, JSON পার্স ব্যর্থ (সম্ভবত GAS timeout বা Google bot-check, শিট বড় হলে/CI IP হলে হয়) — ${waitMs / 1000}s পর retry করছি... raw: "${preview}"`);
+        await sleep(waitMs);
         continue;
       }
-      throw new Error(`GAS getSheetRows(${tab}) ব্যর্থ: HTTP ${resp.status}, JSON না — সম্ভবত execution timeout (শিট বড় হলে ৬-মিনিট Apps Script লিমিট ছুঁতে পারে) অথবা ভুল URL/deployment। raw (প্রথম ৩০০ অক্ষর): "${preview}"`);
+      throw new Error(`GAS getSheetRows(${tab}) ব্যর্থ: HTTP ${resp.status}, JSON না — সম্ভবত execution timeout (শিট বড় হলে ৬-মিনিট Apps Script লিমিট ছুঁতে পারে), Google-এর bot-check consent পেজ (CI-র IP থেকে), অথবা ভুল URL/deployment। raw (প্রথম ৩০০ অক্ষর): "${preview}"`);
     }
     if (data?.status !== "success" || !Array.isArray(data.rows)) {
       throw new Error(`GAS getSheetRows(${tab}) ব্যর্থ: ${data?.message || `unknown error (HTTP ${resp.status})`}`);
@@ -208,7 +220,7 @@ async function gasGetSheetRows(tab, retries = 2) {
 async function gasGetQuestionsByIds(tab, ids, retries = 2) {
   const url = `${GAS_URL}?action=getQuestionsByIds&sheet=${encodeURIComponent(tab)}&ids=${encodeURIComponent(ids.join(","))}&secret=${encodeURIComponent(GAS_SECRET)}`;
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const resp = await fetch(url);
+    const resp = await fetch(url, { headers: BROWSER_LIKE_HEADERS });
     const rawText = await resp.text();
     let data;
     try {
@@ -233,7 +245,7 @@ async function gasGetQuestionsByIds(tab, ids, retries = 2) {
 async function gasUpdateField(sheet, id, field, content) {
   const resp = await fetch(GAS_URL, {
     method: "POST",
-    headers: { "Content-Type": "text/plain" },
+    headers: { "Content-Type": "text/plain", ...BROWSER_LIKE_HEADERS },
     body: JSON.stringify({ secret: GAS_SECRET, type: "update_explanation", sheet, id, field, content }),
   });
   return resp.text().catch(() => "");
