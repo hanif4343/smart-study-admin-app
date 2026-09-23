@@ -60,14 +60,21 @@ function JobLauncherTab({push,tick}){
         const isWritten=qtypeRaw==="WRITTEN";
         const correct=(row.correct||row.Correct||"").toString().trim();
         const filledOpts=[1,2,3,4].filter(n=>readOptField(row,n)).length;
-        // MCQ-Options queue-এর শর্ত ঠিক scripts/generate-mcq-options.mjs-এর সাথে
-        // মিলিয়ে: "WRITTEN" না হওয়া (খালি কলাম = MCQ ধরা হয়), question+correct
-        // থাকা আবশ্যক, ৪টা অপশনের কোনোটাই ভরা না (partially-filled হলে স্ক্রিপ্ট
-        // নিজেও স্কিপ করে — ডেটা নষ্ট এড়াতে — তাই এখানেও সেটাকে "needsOptions"
-        // ধরা হচ্ছে না)।
-        const needsOptions=(!isWritten&&!!correct&&filledOpts===0);
+        // 🛠️ ফিক্স করা হলো (Study_Database দেখে যাচাই):
+        // ১) "Study" শিটে option1-4 কলামই নেই আর "Question Type"ও সবসময় খালি —
+        //    তাই আগের লজিকে Study-র প্রতিটা রো (৫৩৫টা, বেশিরভাগ "Masters 1"
+        //    ট্যাগ করা) ভুলভাবে "needsOptions" ধরা হতো, যদিও এগুলো আসলে MCQ-ই
+        //    না আর backend script (SHEETS ডিফল্ট "Quiz,QBank")-ও Study কখনো
+        //    ছোঁয় না। এখন Study এখান থেকে বাদ।
+        // ২) "Masters 1" অডিয়েন্স ট্যাগ এই MCQ-অপশন জেনারেটরের queue থেকে
+        //    সবসময় বাদ (উপরের Study বাগের কারণেই এই ট্যাগে ৫২৯-এর মতো বড় ভুল
+        //    সংখ্যা দেখাচ্ছিল)।
+        // ৩) আগে filledOpts===0 (৪টাই খালি) হলে তবেই ধরা হতো — এখন filledOpts<4,
+        //    মানে ১-৩টা অপশন ভরা থাকলেও (একটামাত্র অপশন খালি থাকলেও) queue-এ
+        //    দেখাবে, যাতে সেটা পূরণ করার জন্য তালিকায় আসে।
+        const needsOptions=(!isWritten&&!!correct&&filledOpts<4&&sheet!=="Study"&&!audienceList.includes("Masters 1"));
         const qtype=isWritten?"WRITTEN":"MCQ";
-        rows.push({sheet,subject,subtopic,audienceList,hasExp:!!exp,qtype,needsOptions});
+        rows.push({sheet,subject,subtopic,audienceList,hasExp:!!exp,qtype,needsOptions,filledOpts});
       });
     });
     return rows;
