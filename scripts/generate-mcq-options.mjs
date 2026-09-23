@@ -91,15 +91,23 @@ function buildKeyPool() {
 
 // ── Single প্রশ্ন এন্ট্রি পেজের buildMcqGenPrompt-এর হুবহু কপি — একই কোয়ালিটির
 //    distractor + ব্যাখ্যা যেন সবজায়গায় একইরকম আসে ──
-function buildPrompt(question, correct) {
+function buildPrompt(question, correct, neededCount, existingDistractors) {
+  const avoidLine = existingDistractors.length
+    ? `\nএই অপশনগুলো প্রশ্নে আগে থেকেই বসানো আছে, এগুলোর সাথে হুবহু/প্রায় একই রকম কিছু বানিও না: ${existingDistractors.map(o => `"${o}"`).join(", ")}`
+    : "";
+  const optionsTask = neededCount > 0
+    ? `১. আরও ${neededCount}টা যুক্তিসঙ্গত কিন্তু ভুল অপশন (distractor) বানাও — অবাস্তব/হাস্যকর না, পরীক্ষার্থীকে বিভ্রান্ত করার মতো বিশ্বাসযোগ্য হতে হবে, একই বিষয়শ্রেণির হতে হবে।\n২. `
+    : "";
+  const optionsField = neededCount > 0
+    ? `"options":["ভুল অপশন ১"${neededCount > 1 ? ',"ভুল অপশন ২"' : ""}${neededCount > 2 ? ',"ভুল অপশন ৩"' : ""}],`
+    : "";
   return `তুমি একজন বাংলা MCQ প্রশ্ন-প্রণেতা।
 নিচের প্রশ্ন আর তার সঠিক উত্তর দেওয়া আছে। এর জন্য:
-১. আরও ৩টা যুক্তিসঙ্গত কিন্তু ভুল অপশন (distractor) বানাও — অবাস্তব/হাস্যকর না, পরীক্ষার্থীকে বিভ্রান্ত করার মতো বিশ্বাসযোগ্য হতে হবে, একই বিষয়শ্রেণির হতে হবে।
-২. একটা সংক্ষিপ্ত (২-৩ বাক্যের) ব্যাখ্যা লিখো কেন এই উত্তরটাই সঠিক।
+${optionsTask}একটা সংক্ষিপ্ত (২-৩ বাক্যের) ব্যাখ্যা লিখো কেন এই উত্তরটাই সঠিক।
 প্রশ্ন: ${question}
-সঠিক উত্তর: ${correct}
-শুধু নিচের বিশুদ্ধ JSON ফরম্যাটে দাও — কোনো markdown code fence (\`\`\`), কোনো ব্যাখ্যা-বহির্ভূত টেক্সট ছাড়া:
-{"options":["ভুল অপশন ১","ভুল অপশন ২","ভুল অপশন ৩"],"explanation":"ব্যাখ্যা..."}`;
+সঠিক উত্তর: ${correct}${avoidLine}
+শুধু নিচের বিশুদ্ধ JSON ফরম্যাটে দাও — কোনো markdown code fence (\`\`\`), কোনো ব্যাখ্যা-বহির্ভূত টেক্সট ছাড়া${neededCount > 0 ? `, ঠিক ${neededCount}টা distractor` : ""}:
+{${optionsField}"explanation":"ব্যাখ্যা..."}`;
 }
 
 function parseGenResponse(text) {
@@ -147,8 +155,8 @@ async function callProvider(cfg, prompt) {
   return text.trim();
 }
 
-async function callRotating(pool, startIdx, question, correct) {
-  const prompt = buildPrompt(question, correct);
+async function callRotating(pool, startIdx, question, correct, neededCount, existingDistractors) {
+  const prompt = buildPrompt(question, correct, neededCount, existingDistractors);
   const errors = [];
   for (let i = 0; i < pool.length; i++) {
     const cfg = pool[(startIdx + i) % pool.length];
@@ -286,13 +294,16 @@ async function main() {
       const opts = OPTION_FIELDS.map(f => readField(row, ...OPTION_FIELD_ALIASES[f]));
       const filledCount = opts.filter(Boolean).length;
       if (filledCount === 4) return; // আগে থেকেই সব অপশন আছে — কিছু করার নেই
-      if (filledCount > 0) { partiallyFilledSkipped++; return; } // কিছু অপশন আংশিক ভরা — ডেটা নষ্ট এড়াতে স্কিপ, ম্যানুয়ালি দেখতে হবে
 
       const explanation = readField(row, EXPLANATION_FIELD, "Explanation");
       const subject = readField(row, "subject", "Subject");
       const subtopic = readField(row, "sub_topic", "Sub_topic", "subtopic", "Subtopic");
       const audienceRaw = readField(row, "audienceTags", "AudienceTags", "audience_tags");
       const audienceList = audienceRaw.split(",").map(a => a.trim()).filter(Boolean);
+
+      // 🛠️ ফিক্স: "Masters 1" ট্যাগের প্রশ্ন এই জেনারেটরে কখনো প্রসেস হবে না
+      // (admin-app-এর MCQ-Options ট্যাবের সাথে মিলিয়ে — ওখানেও এই ট্যাগ বাদ)।
+      if (audienceList.includes("Masters 1")) return;
 
       if (FILTER_SUBJECT.length && !TARGET_IDS.length && !FILTER_SUBJECT.includes(subject)) return;
       if (FILTER_SUBTOPIC.length && !TARGET_IDS.length && !FILTER_SUBTOPIC.includes(subtopic)) return;
@@ -301,7 +312,13 @@ async function main() {
         if (!matches) return;
       }
 
-      queue.push({ sheet, id, question: q, correct, needsExplanation: !explanation, subject, subtopic });
+      // 🛠️ ফিক্স: আগে ১-৩টা অপশন ভরা থাকলে পুরোপুরি স্কিপ করা হতো (ডেটা নষ্ট
+      // এড়াতে)। এখন সেগুলোও queue-তে ঢুকবে, কিন্তু নিচে (write-এর সময়) যা
+      // ইতিমধ্যে ভরা আছে তা অক্ষত রেখে শুধু খালি slot(গুলো)-ই AI দিয়ে ভরা হবে —
+      // আগে থেকে টাইপ করা অপশন কখনো মুছে/ওভাররাইট হবে না।
+      if (filledCount > 0) partiallyFilledSkipped++; // এখন শুধু লগ/ইনফোর জন্য গোনা হয়, স্কিপ করার জন্য না
+
+      queue.push({ sheet, id, question: q, correct, existingOpts: opts, needsExplanation: !explanation, subject, subtopic });
     });
   }
   if (TARGET_IDS.length) {
@@ -310,9 +327,9 @@ async function main() {
     console.log(`🔎 ফিল্টার সক্রিয় — Audience: [${FILTER_AUDIENCE.join(", ") || "সব"}], Subject: [${FILTER_SUBJECT.join(", ") || "সব"}], Sub-topic: [${FILTER_SUBTOPIC.join(", ") || "সব"}]`);
   }
   if (partiallyFilledSkipped > 0) {
-    console.log(`⚠️ ${partiallyFilledSkipped} টা MCQ প্রশ্নে অপশন আংশিক ভরা ছিল (১-৩টা) — নিরাপত্তার জন্য স্কিপ করা হলো, এগুলো ম্যানুয়ালি চেক করো।`);
+    console.log(`ℹ️ এর মধ্যে ${partiallyFilledSkipped} টা MCQ প্রশ্নে অপশন আংশিক ভরা ছিল (১-৩টা) — যা ভরা আছে তা অক্ষত রেখে শুধু খালি অপশন(গুলো)-ই AI দিয়ে ভরা হবে।`);
   }
-  console.log(`📋 মোট ${queue.length} টা MCQ প্রশ্নে ৪টা অপশনই ফাঁকা (ফিল্টারের পর)।`);
+  console.log(`📋 মোট ${queue.length} টা MCQ প্রশ্নে অন্তত ১টা অপশন খালি (ফিল্টারের পর)।`);
   if (!queue.length) { console.log("✅ সব MCQ-তে অপশন আছে, কোনো কাজ নেই।"); return; }
 
   let ok = 0, fail = 0, cursor = 0;
@@ -325,22 +342,44 @@ async function main() {
     const item = queue[i];
     const shortQ = item.question.length > 45 ? item.question.slice(0, 45) + "…" : item.question;
     try {
-      const { parsed, usedIdx, providerId } = await callRotating(pool, cursor, item.question, item.correct);
-      cursor = (usedIdx + 1) % pool.length;
+      // 🛠️ ফিক্স: existingOpts-এ যা যা আগে থেকেই ভরা আছে সেগুলো একদম অক্ষত
+      // রাখা হয় (position ও content দুটোই) — শুধু খালি slot(গুলো)-র জন্যই নতুন
+      // মান বসানো হয়। "সঠিক উত্তর" ইতিমধ্যে ভরা অপশনগুলোর মধ্যে আছে কিনা
+      // (কেস-ইনসেনসিটিভ/ট্রিম মিলিয়ে) চেক করে বোঝা হয় খালি slot(গুলো)-এ
+      // "সঠিক উত্তর" বসাতে হবে নাকি শুধু distractor।
+      const existing = item.existingOpts || ["", "", "", ""];
+      const emptyIdx = [0, 1, 2, 3].filter(i2 => !existing[i2]);
+      const correctNorm = item.correct.trim().toLowerCase();
+      const correctAlreadyPresent = existing.some(o => o && o.trim().toLowerCase() === correctNorm);
+      const needCorrectPlaced = !correctAlreadyPresent;
+      const neededDistractors = needCorrectPlaced ? emptyIdx.length - 1 : emptyIdx.length;
 
-      const distractors = (parsed.options || []).slice(0, 3);
-      while (distractors.length < 3) distractors.push("");
-      const [a, b, c, d] = shuffle4([item.correct, ...distractors]);
-      const values = [a, b, c, d];
+      let fillValues = [];
+      if (neededDistractors > 0 || item.needsExplanation) {
+        const { parsed, usedIdx } = await callRotating(
+          pool, cursor, item.question, item.correct, neededDistractors,
+          existing.filter(Boolean)
+        );
+        cursor = (usedIdx + 1) % pool.length;
+        fillValues = (parsed.options || []).slice(0, neededDistractors);
+        while (fillValues.length < neededDistractors) fillValues.push("");
+        if (item.needsExplanation && parsed.explanation) {
+          await gasUpdateField(item.sheet, item.id, EXPLANATION_FIELD, parsed.explanation);
+        }
+      }
+      const toPlace = needCorrectPlaced ? [item.correct, ...fillValues] : fillValues;
+      // শুধু নতুন করে বসানো slot(গুলো)-র মধ্যেই এলোমেলো করা হয় (আগে থেকে
+      // ভরা অপশনের position কখনো নড়ে না) — যাতে "সঠিক উত্তর" ঠিক কোন খালি
+      // slot-এ পড়বে তা প্রতিবার সত্যিকারের র‍্যান্ডম হয়।
+      const shuffledToPlace = shuffle4(toPlace);
+      const values = [...existing];
+      emptyIdx.forEach((idx, k) => { values[idx] = shuffledToPlace[k]; });
 
       for (let f = 0; f < OPTION_FIELDS.length; f++) {
-        await gasUpdateField(item.sheet, item.id, OPTION_FIELDS[f], values[f]);
-      }
-      if (item.needsExplanation && parsed.explanation) {
-        await gasUpdateField(item.sheet, item.id, EXPLANATION_FIELD, parsed.explanation);
+        if (emptyIdx.includes(f)) await gasUpdateField(item.sheet, item.id, OPTION_FIELDS[f], values[f]);
       }
       ok++;
-      console.log(`✅ [${ok + fail}/${queue.length}] (${item.sheet}) ${item.subject || "-"} / ${item.subtopic || "-"} — "${shortQ}" [${providerId}]`);
+      console.log(`✅ [${ok + fail}/${queue.length}] (${item.sheet}) ${item.subject || "-"} / ${item.subtopic || "-"} — "${shortQ}" [${emptyIdx.length} slot ভরা হলো]`);
     } catch (e) {
       fail++;
       console.log(`❌ [${ok + fail}/${queue.length}] স্কিপ (${item.sheet}) ${item.subject || "-"} / ${item.subtopic || "-"} — "${shortQ}": ${e.message}`);
