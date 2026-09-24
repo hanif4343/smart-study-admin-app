@@ -19,6 +19,7 @@ import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGL
 import { saveRowsToSheet, fetchReferenceData, fetchReferenceDataVerbose } from "../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
+import { GeometryDrawing } from "../components/shared/GeometryDrawing.jsx";
 import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 import { PaperComposer, buildMcqGenPrompt, buildExplGenPrompt, parseGenResponse, shuffle4 } from "../components/shared/PaperComposer.jsx";
 import { uploadImg, getLastUploadError } from "../core/utils.js";
@@ -298,6 +299,11 @@ function SingleQuestionEntryPage({push}){
 
   /* ── 🖼️ ইমেজ আইকনে ট্যাপ → ফাইল পিকার খোলে ── */
   const pickImage=useCallback(()=>{ imgInputRef.current?.click(); },[]);
+
+  /* ── ✏️ জ্যামিতি আঁকা — GeometryDrawing মডাল খোলে, শেষে PNG আপলোড হয়ে
+     কার্সরে বসে (ঠিক ছবি-আপলোডের মতোই, নিচের onImageSelected-এর পাশাপাশি) ── */
+  const[showDrawing,setShowDrawing]=useState(false);
+  const onDrawingInsert=useCallback((url)=>{ insertAtCursor(url); },[insertAtCursor]);
 
   const onImageSelected=useCallback(async(e)=>{
     const files=Array.from(e.target.files||[]);
@@ -740,6 +746,11 @@ function SingleQuestionEntryPage({push}){
               fontSize:18,lineHeight:1,padding:"2px 4px",opacity:imgUploading?.5:1}}>
             {imgUploading?"⏳":"🖼️"}
           </button>
+          <button type="button" onClick={()=>setShowDrawing(true)} tabIndex={-1} title="জ্যামিতির ডায়াগ্রাম আঁকো (পয়েন্ট/লাইন/বৃত্ত/কোণ...) — শেষে ছবি হয়ে কার্সরে বসবে"
+            style={{background:"transparent",border:"none",cursor:"pointer",
+              fontSize:18,lineHeight:1,padding:"2px 4px"}}>
+            ✏️
+          </button>
           <input ref={imgInputRef} type="file" accept="image/*" multiple onChange={onImageSelected} style={{display:"none"}}/>
         </div>
         <textarea ref={qRef} className="ta" value={question} 
@@ -859,6 +870,9 @@ function SingleQuestionEntryPage({push}){
         Tab শুধু প্রশ্ন↔উত্তর বক্সে কাজ করে · Ctrl+S দিয়ে যেকোনো সময় জমা হওয়া সবগুলো একসাথে সাবমিট
       </div>
       </>
+      )}
+      {showDrawing && (
+        <GeometryDrawing onClose={()=>setShowDrawing(false)} onInsert={onDrawingInsert} push={push}/>
       )}
     </div>
   );
