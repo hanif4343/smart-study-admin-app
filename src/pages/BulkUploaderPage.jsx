@@ -237,7 +237,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     let cancelled=false;
     const t=setTimeout(async()=>{
       setDupPreviewLoading(true);
-      const entries=getEntries(bulkText).map(e=>parseEntry(e,eff)).filter(r=>r.ok);
+      const entries=getEntries(bulkText).map(e=>({...parseEntry(e,eff),_raw:e})).filter(r=>r.ok);
       if(!entries.length){ if(!cancelled){ setDupPreview(null); setDupPreviewLoading(false);} return; }
       const res=await resolveSubjectTopicForEntries({
         entries, subjectOptions, topicsAll:refData?.topics||[], sheet:mode,
@@ -280,6 +280,28 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       el.scrollTop=Math.max(0,(linesBefore*lineHeight)-lineHeight*2);
     });
   };
+
+  // 🆕 "নতুন Subject/Topic তৈরি হবে" লিস্টের যেকোনো আইটেমে এক-ট্যাপে জাম্প —
+  // লাইনে থাকলে bulkText-এর ঠিক সেই লাইনটাই সিলেক্ট+হাইলাইট+স্ক্রল হয় (উপরের
+  // jumpToEntry পুনর্ব্যবহার করে — এটাই সেই একই টেক্সটবক্স বলে সরাসরি এডিটও
+  // করা যাবে সেখানেই)। Fallback ফিল্ড থেকে এসে থাকলে (লাইনে subject/topic
+  // টাইপই করা হয়নি) bulkText-এ জাম্প করার কিছু নেই — বরং সংশ্লিষ্ট Fallback
+  // ইনপুট বক্সটাই ফোকাস+সিলেক্ট করে দেওয়া হয়।
+  const fbSubjInputRef=useRef(null);
+  const fbTopicInputRef=useRef(null);
+  const[dupJumpIdx,setDupJumpIdx]=useState(0);
+  const jumpToWouldCreate=(w)=>{
+    setPendingCreateConfirm(false);
+    if(w.sourceEntry){ jumpToEntry(w.sourceEntry); return; }
+    const el=w.type==="subject"?fbSubjInputRef.current:fbTopicInputRef.current;
+    if(el){ el.focus(); el.select(); }
+  };
+  // dupPreview বদলালে (নতুন স্ক্যান/একটা ঠিক হয়ে লিস্ট ছোট হলে) index ভ্যালিড
+  // রেঞ্জে ক্ল্যাম্প করা — নাহলে ফিক্স করার পর "পরের ▶"-এ চাপলে undefined-এ গিয়ে আটকাতে পারে
+  useEffect(()=>{
+    const len=dupPreview?.wouldCreate?.length||0;
+    if(dupJumpIdx>=len) setDupJumpIdx(0);
+  },[dupPreview]);
 
   /* ── Shuffle MCQ Options ──
      প্রতিটি MCQ লাইনে অপশনগুলো (col 1-4) random করে সাজায়,
@@ -713,7 +735,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>যেসব লাইনে ;Subject;Topic দেওয়া নেই, সেগুলোর জন্য এটা ব্যবহার হবে — সব লাইনে বারবার লিখতে হবে না।</div>
           <div style={{display:"flex",gap:8}}>
             <div style={{position:"relative",flex:1}}>
-              <input className="inp" style={{width:"100%"}} placeholder="Fallback Subject" value={fallbackSubject}
+              <input ref={fbSubjInputRef} className="inp" style={{width:"100%"}} placeholder="Fallback Subject" value={fallbackSubject}
                 onChange={e=>handleFallbackSubject(e.target.value)}
                 onFocus={()=>setFbSubjFocus(true)} onBlur={()=>setFbSubjFocus(false)}/>
               {fbSubjFocus&&fbSubjSuggestions.length>0&&(
@@ -728,7 +750,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
               )}
             </div>
             <div style={{position:"relative",flex:1}}>
-              <input className="inp" style={{width:"100%"}} placeholder="Fallback Topic" value={fallbackTopic}
+              <input ref={fbTopicInputRef} className="inp" style={{width:"100%"}} placeholder="Fallback Topic" value={fallbackTopic}
                 onChange={e=>handleFallbackTopic(e.target.value)}
                 onFocus={()=>setFbTopicFocus(true)} onBlur={()=>setFbTopicFocus(false)}/>
               {fbTopicFocus&&fbTopicSuggestions.length>0&&(
@@ -775,14 +797,29 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           <div style={{fontSize:10.5,color:"#10b981",marginBottom:8}}>✅ সব Subject/Topic বিদ্যমান তালিকার সাথে মিলেছে — নতুন কিছু তৈরি হবে না</div>
         ) : (
           <div style={{background:"#1c1004",border:"1px solid #d9770644",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
-            <div style={{fontSize:11.5,fontWeight:800,color:"#f59e0b",marginBottom:6}}>
-              🆕 {dupPreview.wouldCreate.length}টা নতুন Subject/Topic তৈরি হবে
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,flexWrap:"wrap",gap:6}}>
+              <div style={{fontSize:11.5,fontWeight:800,color:"#f59e0b"}}>
+                🆕 {dupPreview.wouldCreate.length}টা নতুন Subject/Topic তৈরি হবে
+              </div>
+              {/* 🆕 Find Next-এর মতো — একটা ঠিক করে "পরের ▶" চাপলেই পরেরটার লাইনে জাম্প করে */}
+              {dupPreview.wouldCreate.length>1&&(
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <button type="button" className="btn" style={{fontSize:10,padding:"3px 9px"}}
+                    onClick={()=>setDupJumpIdx(i=>(i-1+dupPreview.wouldCreate.length)%dupPreview.wouldCreate.length)}>◀ আগের</button>
+                  <span style={{fontSize:10,color:C.muted}}>{dupJumpIdx+1}/{dupPreview.wouldCreate.length}</span>
+                  <button type="button" className="btn" style={{fontSize:10,padding:"3px 9px"}}
+                    onClick={()=>setDupJumpIdx(i=>(i+1)%dupPreview.wouldCreate.length)}>পরের ▶</button>
+                </div>
+              )}
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:5}}>
               {dupPreview.wouldCreate.map((w,i)=>(
-                <div key={i} style={{fontSize:10.5,color:C.text}}>
+                <div key={i} onClick={()=>{setDupJumpIdx(i);jumpToWouldCreate(w);}}
+                  style={{fontSize:10.5,color:C.text,cursor:"pointer",padding:"6px 8px",borderRadius:7,
+                    background:i===dupJumpIdx?"#f59e0b1a":"transparent",border:`1px solid ${i===dupJumpIdx?"#f59e0b55":"transparent"}`}}>
                   <span style={{fontWeight:700}}>{w.type==="subject"?"📚 Subject":"📌 Topic"}:</span> "{w.name}"
                   {w.parentSubjectName?<span style={{color:C.muted}}> ({w.parentSubjectName}-এর আন্ডারে)</span>:null}
+                  <span style={{color:"#3b82f6",marginLeft:6,fontWeight:700}}>{w.fromFallback?"📍 Fallback ফিল্ডে যাও":"👉 লাইনে যাও"}</span>
                   {w.similarTo&&(
                     <div style={{color:"#ef4444",marginTop:2}}>
                       ⚠️ কাছাকাছি বিদ্যমান নাম আছে: <b>"{w.similarTo}"</b> — এটাই বোঝাতে চেয়েছ? (টাইপো হলে লাইনে/Fallback ফিল্ডে ঠিক করে নাও)
@@ -808,9 +845,10 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
               {dupPreview.wouldCreate.map((w,i)=>(
-                <div key={i} style={{background:w.type==="subject"?"#3b82f611":"#a855f711",border:`1px solid ${w.type==="subject"?"#3b82f644":"#a855f744"}`,borderRadius:9,padding:"8px 10px",fontSize:11.5}}>
+                <div key={i} onClick={()=>jumpToWouldCreate(w)} style={{cursor:"pointer",background:w.type==="subject"?"#3b82f611":"#a855f711",border:`1px solid ${w.type==="subject"?"#3b82f644":"#a855f744"}`,borderRadius:9,padding:"8px 10px",fontSize:11.5}}>
                   <div style={{fontWeight:800,color:w.type==="subject"?"#3b82f6":"#a855f7"}}>{w.type==="subject"?"📚 নতুন SUBJECT":"📌 নতুন TOPIC"}</div>
                   <div style={{color:C.text,marginTop:2}}>"{w.name}"{w.parentSubjectName?<span style={{color:C.muted}}> — {w.parentSubjectName}-এর আন্ডারে</span>:null}</div>
+                  <div style={{color:"#3b82f6",marginTop:3,fontSize:10,fontWeight:700}}>{w.fromFallback?"📍 ঠিক করতে Fallback ফিল্ডে যাও":"👉 ঠিক করতে লাইনে যাও"}</div>
                   {w.similarTo&&<div style={{color:"#ef4444",marginTop:3,fontSize:10.5}}>⚠️ কাছাকাছি বিদ্যমান নাম: "{w.similarTo}" — এটাই বোঝাতে চাওনি তো?</div>}
                 </div>
               ))}
