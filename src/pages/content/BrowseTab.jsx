@@ -14,7 +14,7 @@
    ডিলিট ফ্লো এখন group-aware: কোনো প্রশ্নে group_id থাকলে (আর group-এ ১-এর বেশি
    সদস্য থাকলে), ডিলিট বাটনে চাপ দিলে সরাসরি ডিলিট না হয়ে একটা choice modal
    আসে — "শুধু এইটা" (group ভাঙার ঝুঁকি নিয়ে) বা "পুরো group একসাথে"। ── */
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C, tint } from "../../core/config.js";
 import { useSheetRows, invalidate } from "../../core/dataCache.js";
 import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
@@ -116,14 +116,19 @@ function BrowseTab({push,tick}){
   const[filterInstId,setFilterInstId]=useState("all");
   const[filterYear,setFilterYear]=useState("all");
   const[filterAudience,setFilterAudience]=useState("all");
-  const[viewMode,setViewMode]=useState("all"); // "all" | "duplicates" | "suspicious"
+  const[viewMode,setViewMode]=useState("all"); // "all" | "duplicates" | "fuzzy" | "suspicious"
+  // 🆕 Fuzzy/near-duplicate: এখনকার "duplicate" শুধু হুবহু-মিল ধরে। এটা বানান/শব্দ
+  // একটু বদলে লেখা প্রায়-একই প্রশ্নও ধরে (word-overlap ভিত্তিক)। ভারী compute বলে
+  // অটো না, বাটনে চাপলে তবেই স্ক্যান হয় আর state-এ ক্যাশ থাকে।
+  const[fuzzyGroups,setFuzzyGroups]=useState(null); // null = এখনো স্ক্যান হয়নি
+  const[fuzzyScanning,setFuzzyScanning]=useState(false);
   const[editing,setEditing]=useState(null);
   const[appearanceTarget,setAppearanceTarget]=useState(null); // 🧾 quick-appearance মডালের জন্য (শুধু QBank)
   const[delTarget,setDelTarget]=useState(null);
   const[delLoading,setDelLoading]=useState(false);
   const[groupDeleteCtx,setGroupDeleteCtx]=useState(null); // {target, group} — group-choice modal
   const[bulkDelTargets,setBulkDelTargets]=useState(null); // array of qs to bulk delete
-  const[bulkDelKind,setBulkDelKind]=useState("duplicate"); // "duplicate" | "suspicious" | "group"
+  const[bulkDelKind,setBulkDelKind]=useState("duplicate"); // "duplicate" | "fuzzy" | "suspicious" | "group"
   const[bulkDelLoading,setBulkDelLoading]=useState(false);
   const[page,setPage]=useState(0);
   const[expandedKeys,setExpandedKeys]=useState(()=>new Set()); // কোন কোন কার্ড "বিস্তারিত" খোলা আছে
@@ -261,14 +266,92 @@ function BrowseTab({push,tick}){
     return result;
   },[duplicateGroups]);
 
-  // "৬"-এর মতো stray/ভাঙা এন্ট্রি — প্রশ্নের টেক্সট থাকলেও ৩ অক্ষরের কম (বাজে OCR/parsing ইম্পোর্টের লক্ষণ)
+  // 🆕 Fuzzy near-duplicate: subject+sub_topic দিয়ে bucket করে (cross-subject তুলনা
+  // বাদ, দরকারও নেই), প্রতি bucket-এর ভেতর word-set Jaccard similarity দিয়ে
+  // কাছাকাছি-লেখা প্রশ্ন গ্রুপ করা হয় (union-find দিয়ে, চেইন-মিলও ধরার জন্য —
+  // A~B আর B~C মিললে A,B,C একই গ্রুপে আসবে)।
+  const normalizeWords=(text)=>(text||"").toLowerCase()
+    .replace(/[।,.?!;:()\[\]{}"'""''—\-–\/\\]/g," ")
+    .split(/\s+/).map(w=>w.trim()).filter(w=>w.length>1);
+  const jaccardSim=(a,b)=>{
+    if(!a.size||!b.size)return 0;
+    let inter=0; a.forEach(w=>{ if(b.has(w))inter++; });
+    const union=a.size+b.size-inter;
+    return union?inter/union:0;
+  };
+  const FUZZY_THRESHOLD=0.6; // ৬০%+ শব্দ মিললে "সম্ভাব্য near-duplicate" ধরা হয়
+  const runFuzzyScan=useCallback(()=>{
+    setFuzzyScanning(true);
+    // setTimeout দিয়ে এক টিক পরে চালানো — বাটনের ⏳ স্পিনার আগে রেন্ডার হওয়ার সুযোগ পায়
+    setTimeout(()=>{
+      const buckets={};
+      allQ.forEach(q=>{
+        const qtext=(q.Question||q.question||"").trim();
+        if(qtext.length<8)return; // খুব ছোট এন্ট্রি "সন্দেহজনক" ট্যাবেই ধরা পড়ে, এখানে দরকার নেই
+        const subj=(q.Subject||q.subject||"").trim().toLowerCase();
+        const subt=(q.Sub_topic||q.sub_topic||"").trim().toLowerCase();
+        const key=`${subj}|||${subt}`;
+        (buckets[key]=buckets[key]||[]).push({q,words:new Set(normalizeWords(qtext)),len:qtext.length});
+      });
+      const groupsOut=[];
+      Object.values(buckets).forEach(items=>{
+        const n=items.length;
+        if(n<2)return;
+        const parent=Array.from({length:n},(_,i)=>i);
+        const bestSim=Array(n).fill(0);
+        const find=(x)=>{ while(parent[x]!==x){ parent[x]=parent[parent[x]]; x=parent[x]; } return x; };
+        for(let i=0;i<n;i++){
+          for(let j=i+1;j<n;j++){
+            const a=items[i],b=items[j];
+            // দ্রুত রিজেক্ট: দৈর্ঘ্য খুব বেশি আলাদা হলে word-set মেলানোর আগেই বাদ (পারফরম্যান্স)
+            if(Math.min(a.len,b.len)/Math.max(a.len,b.len) < 0.5)continue;
+            const sim=jaccardSim(a.words,b.words);
+            if(sim>=FUZZY_THRESHOLD){
+              const ra=find(i),rb=find(j);
+              if(ra!==rb)parent[ra]=rb;
+              if(sim>bestSim[i])bestSim[i]=sim;
+              if(sim>bestSim[j])bestSim[j]=sim;
+            }
+          }
+        }
+        const groupsMap={};
+        items.forEach((it,i)=>{ const r=find(i); (groupsMap[r]=groupsMap[r]||{qs:[],sims:[]}); groupsMap[r].qs.push(it.q); groupsMap[r].sims.push(bestSim[i]); });
+        Object.values(groupsMap).forEach(g=>{
+          if(g.qs.length>1){
+            const avgSim=g.sims.reduce((a,b)=>a+b,0)/g.sims.length;
+            groupsOut.push({qs:g.qs,simPct:Math.round(avgSim*100)});
+          }
+        });
+      });
+      groupsOut.sort((a,b)=>b.simPct-a.simPct);
+      setFuzzyGroups(groupsOut);
+      setFuzzyScanning(false);
+      push("success","🔍 স্ক্যান শেষ",groupsOut.length?`${groupsOut.length}টা সম্ভাব্য near-duplicate গ্রুপ পাওয়া গেছে`:"কোনো near-duplicate পাওয়া যায়নি — সাফ!");
+    },30);
+  },[allQ,push]);
+  const fuzzyQs=useMemo(()=>{
+    if(!fuzzyGroups)return [];
+    const seen=new Set();
+    const result=[];
+    fuzzyGroups.forEach(({qs:group,simPct})=>{
+      group.forEach((q,idx)=>{
+        if(!seen.has(q._fbKey)){
+          seen.add(q._fbKey);
+          result.push({...q,_isDupOriginal:idx===0,_dupGroup:group.length,_fuzzySimPct:simPct});
+        }
+      });
+    });
+    return result;
+  },[fuzzyGroups]);
+
+
   const suspiciousQs=useMemo(()=>allQ.filter(q=>{
     const len=(q.Question||q.question||"").trim().length;
     return len>0&&len<4;
   }),[allQ]);
 
   const filtered=useMemo(()=>{
-    let arr=viewMode==="duplicates"?duplicateQs:viewMode==="suspicious"?suspiciousQs:allQ;
+    let arr=viewMode==="duplicates"?duplicateQs:viewMode==="fuzzy"?fuzzyQs:viewMode==="suspicious"?suspiciousQs:allQ;
     if(filterAudience!=="all"){
       arr=arr.filter(q=>{
         const tagRaw=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
@@ -302,7 +385,7 @@ function BrowseTab({push,tick}){
       arr=arr.filter(q=>[(q.Question||q.question||""),(q.Subject||q.subject||""),(q.Sub_topic||q.sub_topic||""),(q.Correct||q.correct||"")].join(" ").toLowerCase().includes(qlo));
     }
     return arr;
-  },[viewMode,duplicateQs,suspiciousQs,allQ,sheet,filterSubjectId,filterTopicId,matchingQuestionIds,subjectNameOf,topicNameOf,filterAudience,search]);
+  },[viewMode,duplicateQs,fuzzyQs,suspiciousQs,allQ,sheet,filterSubjectId,filterTopicId,matchingQuestionIds,subjectNameOf,topicNameOf,filterAudience,search]);
 
   useEffect(()=>setPage(0),[sheet,filterSubjectId,filterTopicId,filterPostId,filterInstId,filterYear,filterAudience,search]);
 
@@ -438,12 +521,17 @@ function BrowseTab({push,tick}){
       {/* Sheet tabs + Audience selector row */}
       <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center",flexWrap:"wrap"}}>
         {["Quiz","QBank","Study"].map(s=>(
-          <button key={s} className={`ftab${sheet===s&&viewMode==="all"?" on":""}`} onClick={()=>{setSheet(s);setFilterAudience("all");setSearch("");setViewMode("all");}}>{s}</button>
+          <button key={s} className={`ftab${sheet===s&&viewMode==="all"?" on":""}`} onClick={()=>{setSheet(s);setFilterAudience("all");setSearch("");setViewMode("all");setFuzzyGroups(null);}}>{s}</button>
         ))}
         <button
           onClick={()=>setViewMode(v=>v==="duplicates"?"all":"duplicates")}
           style={{marginLeft:"auto",fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="duplicates"?C.red:C.border}`,background:viewMode==="duplicates"?tint(C.red,"22"):"transparent",color:viewMode==="duplicates"?C.red:C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
           🔁 Duplicate {duplicateQs.length>0&&<span style={{fontSize:9,background:C.red,color:"#fff",borderRadius:10,padding:"1px 5px"}}>{duplicateQs.length}</span>}
+        </button>
+        <button
+          onClick={()=>setViewMode(v=>v==="fuzzy"?"all":"fuzzy")}
+          style={{fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="fuzzy"?"#a855f7":C.border}`,background:viewMode==="fuzzy"?"#a855f722":"transparent",color:viewMode==="fuzzy"?"#a855f7":C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
+          🔍 কাছাকাছি মিল {fuzzyGroups&&fuzzyQs.length>0&&<span style={{fontSize:9,background:"#a855f7",color:"#fff",borderRadius:10,padding:"1px 5px"}}>{fuzzyQs.length}</span>}
         </button>
         <button
           onClick={()=>setViewMode(v=>v==="suspicious"?"all":"suspicious")}
@@ -513,6 +601,48 @@ function BrowseTab({push,tick}){
               </button>
             )}
           </div>
+        </div>
+      )}
+      {/* 🆕 Fuzzy near-duplicate mode header — এটা probabilistic (হুবহু মিল না, শব্দ-মিল
+          ভিত্তিক), তাই "সব একসাথে ডিলিট" বাটন না রেখে প্রতিটা গ্রুপ আলাদা দেখিয়ে
+          per-group রিভিউ করে ডিলিট করানো হচ্ছে — ভুলে সঠিক প্রশ্ন মুছে যাওয়ার ঝুঁকি কমাতে। */}
+      {viewMode==="fuzzy"&&(
+        <div style={{background:"#a855f715",border:"1px solid #a855f733",borderRadius:10,padding:"8px 12px",marginBottom:8}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#a855f7"}}>🔍 কাছাকাছি মিলের প্রশ্ন (near-duplicate)</div>
+          <div style={{fontSize:10,color:C.muted,marginTop:2,marginBottom:8}}>
+            একই Subject+Sub-topic-এর মধ্যে ৬০%+ শব্দ মিললে "সম্ভাব্য" ধরা হয় — হুবহু না, তাই নিজে দেখে বুঝে ডিলিট করো। প্রতিটা গ্রুপে সবচেয়ে পুরনোটা (প্রথমে দেখানো) রেখে বাকিগুলো ডিলিট করার প্রস্তাব দেওয়া হচ্ছে।
+          </div>
+          {fuzzyGroups===null&&(
+            <button onClick={runFuzzyScan} disabled={fuzzyScanning}
+              style={{fontSize:11,padding:"7px 14px",borderRadius:8,background:"#a855f722",color:"#a855f7",border:"1px solid #a855f744",fontWeight:700,cursor:fuzzyScanning?"default":"pointer"}}>
+              {fuzzyScanning?"⏳ স্ক্যান হচ্ছে...":"🔍 স্ক্যান শুরু করো"}
+            </button>
+          )}
+          {fuzzyGroups!==null&&(
+            <>
+              <button onClick={runFuzzyScan} disabled={fuzzyScanning} style={{fontSize:10.5,padding:"5px 10px",borderRadius:8,background:"transparent",color:"#a855f7",border:"1px solid #a855f744",fontWeight:700,cursor:"pointer",marginBottom:8}}>
+                {fuzzyScanning?"⏳ আবার স্ক্যান হচ্ছে...":"♻️ আবার স্ক্যান করো"}
+              </button>
+              {fuzzyGroups.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>কোনো near-duplicate পাওয়া যায়নি — সাফ! ✅</div>}
+              {fuzzyGroups.map((g,gi)=>(
+                <div key={gi} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:8,marginBottom:6}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                    <span style={{fontSize:10,fontWeight:700,color:"#a855f7"}}>~{g.simPct}% মিল · {g.qs.length}টা প্রশ্ন</span>
+                    <button
+                      onClick={()=>{ setBulkDelKind("fuzzy"); setBulkDelTargets(g.qs.slice(1)); }}
+                      style={{fontSize:10,padding:"3px 9px",borderRadius:7,background:tint(C.red,"18"),color:C.red,border:`1px solid ${tint(C.red,"40")}`,fontWeight:700,cursor:"pointer"}}>
+                      🗑️ প্রথমটা রেখে বাকি {g.qs.length-1}টা ডিলিট
+                    </button>
+                  </div>
+                  {g.qs.map((q,qi)=>(
+                    <div key={q._fbKey||qi} style={{fontSize:10.5,color:qi===0?C.text:C.muted,padding:"3px 0",borderTop:qi>0?`1px dashed ${C.border}`:"none"}}>
+                      {qi===0?"✅ (রাখা হবে) ":"🗑️ "}{(q.Question||q.question||"").slice(0,90)}{(q.Question||q.question||"").length>90?"...":""}
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </>
+          )}
         </div>
       )}
       {/* Audience Tag filter */}
@@ -787,12 +917,14 @@ function BrowseTab({push,tick}){
         onConfirm={hardDelete} onCancel={()=>setDelTarget(null)} loading={delLoading}
       />}
       {bulkDelTargets&&<DeleteWarningModal
-        title={bulkDelKind==="group"?`🔗 পুরো group (${bulkDelTargets.length}টি sub-question) ডিলিট করবেন?`:`🗑️ ${bulkDelTargets.length}টি ${bulkDelKind==="suspicious"?"সন্দেহজনক":"Duplicate"} এন্ট্রি ডিলিট করবেন?`}
+        title={bulkDelKind==="group"?`🔗 পুরো group (${bulkDelTargets.length}টি sub-question) ডিলিট করবেন?`:`🗑️ ${bulkDelTargets.length}টি ${bulkDelKind==="suspicious"?"সন্দেহজনক":bulkDelKind==="fuzzy"?"কাছাকাছি-মিল":"Duplicate"} এন্ট্রি ডিলিট করবেন?`}
         description={
           bulkDelKind==="group"
             ?`একই instruction-এর সব (${bulkDelTargets.length}টি) sub-question একসাথে Firebase ও Google Sheet থেকে মুছে যাবে — group-এর কোনো অংশ বাদ থাকবে না।`
             :bulkDelKind==="suspicious"
             ?`এগুলোর প্রশ্নের টেক্সট ৩ অক্ষরের কম (ভাঙা/নয়েজ) — ${bulkDelTargets.length}টি Firebase ও Sheet থেকে মুছে যাবে।`
+            :bulkDelKind==="fuzzy"
+            ?`⚠️ এগুলো হুবহু-মিল না, শব্দের-মিল (৬০%+) দিয়ে সম্ভাব্য near-duplicate ধরা হয়েছে — একবার নিজে চোখে দেখে নিশ্চিত হও। প্রথমটা রেখে বাকি ${bulkDelTargets.length}টি Firebase ও Sheet থেকে মুছে যাবে।`
             :`এগুলো হলো duplicate কপি। Original গুলো রেখে বাকি ${bulkDelTargets.length}টি Firebase ও Sheet থেকে মুছে যাবে।`
         }
         onConfirm={()=>bulkDeleteMany(bulkDelTargets)} onCancel={()=>setBulkDelTargets(null)} loading={bulkDelLoading}
