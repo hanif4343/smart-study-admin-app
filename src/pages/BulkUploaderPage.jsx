@@ -1,5 +1,5 @@
 /* ══════════ BULK UPLOADER PAGE ══════════ */
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { C, tint } from "../core/config.js";
 import { invalidate } from "../core/dataCache.js";
 import { nowTs } from "../core/utils.js";
@@ -43,6 +43,13 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   // এখন AIImportPage-এর মতোই fallback সাপোর্ট করে) এই fallback ব্যবহার হয়। ──
   const[fallbackSubject,setFallbackSubject]=useState("");
   const[fallbackTopic,setFallbackTopic]=useState("");
+  // 🆕 Fallback Subject/Topic-এ dropdown suggestion — আগে এগুলো একদম plain
+  // টেক্সট ইনপুট ছিল, কোনো সাজেশন ছাড়াই টাইপো/নতুন বানান দিলে সেটাই নতুন
+  // Subject/Topic হয়ে যেত (তুমি Delete পেজে যেই দশ-বারোটা ডুপ্লিকেট "পাটিগণিত"
+  // ০-প্রশ্নের subject দেখেছিলে, এটাই তার মূল কারণ)। এখন টাইপ করলে বিদ্যমান
+  // Quiz/QBank Subject/Topic থেকে মিলে যাওয়া নাম সাজেশন হিসেবে দেখাবে।
+  const[fbSubjFocus,setFbSubjFocus]=useState(false);
+  const[fbTopicFocus,setFbTopicFocus]=useState(false);
   const[refData,setRefData]=useState(null);
   const[refLoading,setRefLoading]=useState(false);
   const[bulkText,setBulkText]=useState("");
@@ -219,6 +226,10 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   // শুধু "কোনগুলো নতুন হবে" + fuzzy "did you mean?" বের করে)। ──
   const[dupPreview,setDupPreview]=useState(null); // {wouldCreate:[...]} | null
   const[dupPreviewLoading,setDupPreviewLoading]=useState(false);
+  // 🆕 Submit করার আগে "আসলেই কি নতুন Subject/Topic তৈরি করতে চাও?" — blocking
+  // confirm। আগে dupPreview শুধু নিচে প্যাসিভ তথ্য হিসেবে দেখাতো, স্ক্রল করে
+  // মিস করা সহজ ছিল বলেই ভুলবশত অনেক ডুপ্লিকেট Subject তৈরি হয়ে গিয়েছিল।
+  const[pendingCreateConfirm,setPendingCreateConfirm]=useState(false);
   useEffect(()=>{
     const eff=getEffectiveType(mode,qtype);
     const isInlineEff=(eff==="MCQ"||eff==="Written");
@@ -326,6 +337,24 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const topicName=topicOptions.find(t=>t.topic_id===topicId)?.topic_name||"";
   const tagNames=tagIds.map(id=>tagOptions.find(t=>t.tag_id===id)?.tag_name).filter(Boolean);
 
+  // 🆕 Fallback Subject/Topic autocomplete সাজেশন — বর্তমান sheet (mode)-এর
+  // বিদ্যমান Subject/Topic নাম থেকে substring-ম্যাচ, সর্বোচ্চ ৬টা দেখানো হয়
+  const fbSubjSuggestions=useMemo(()=>{
+    const q=fallbackSubject.trim().toLowerCase();
+    if(!q)return[];
+    return subjectOptions.filter(s=>s.subject_name.toLowerCase().includes(q)).slice(0,6);
+  },[fallbackSubject,subjectOptions]);
+  const fbTopicSuggestions=useMemo(()=>{
+    const q=fallbackTopic.trim().toLowerCase();
+    if(!q)return[];
+    const subjIds=new Set(subjectOptions.map(s=>s.subject_id));
+    // fallbackSubject ইতিমধ্যে একটা বিদ্যমান Subject-এর সাথে হুবহু মিললে শুধু
+    // তার আন্ডারের Topic দেখানো হয় (বেশি প্রাসঙ্গিক), নাহলে এই sheet-এর সব Topic থেকে
+    const matchedSubj=subjectOptions.find(s=>s.subject_name.trim().toLowerCase()===fallbackSubject.trim().toLowerCase());
+    const pool=(refData?.topics||[]).filter(t=>subjIds.has(t.subject_id)&&(!matchedSubj||t.subject_id===matchedSubj.subject_id));
+    return pool.filter(t=>t.topic_name.toLowerCase().includes(q)).slice(0,6);
+  },[fallbackTopic,fallbackSubject,subjectOptions,refData]);
+
   /* Audience tag helpers — এখন id টগল করে (রেফারেন্স-টেবিল থেকে বাছাই, ফ্রি-টেক্সট না) */
   const toggleTag=(tagId)=>setTagIds(p=>p.includes(tagId)?p.filter(x=>x!==tagId):[...p,tagId]);
 
@@ -342,7 +371,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   });
 
   /* Main upload */
-  const startUpload=async()=>{
+  const startUpload=async(opts={})=>{
     // ── 🐛 ফিক্স: আগে setRunning(true) নিচে (async পদ/প্রতিষ্ঠান resolve-এর পরে)
     // বসতো, তাই সেই নেটওয়ার্ক-কল চলাকালীন বাটন ক্লিকযোগ্যই থেকে যেত আর "সাবমিট
     // হয়নি" ভেবে দ্বিতীয়বার চাপলে ডাবল-সাবমিট হয়ে যেত। এখন সবার আগে (কোনো await-এর
@@ -386,6 +415,16 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         push("warn","⚠️ পদ, প্রতিষ্ঠান ও সাল — একটা দিলে তিনটাই দিতে হবে (অথবা তিনটাই খালি রাখো)","");
         return;
       }
+    }
+
+    // 🆕 নতুন Subject/Topic তৈরি হওয়ার আগে বাধ্যতামূলক confirm — dupPreview
+    // (dryRun) যদি বলে কিছু নতুন তৈরি হবে, তাহলে সরাসরি সাবমিট না করে আগে
+    // "এগুলো কি Subject নাকি Topic হিসেবে তৈরি হচ্ছে" স্পষ্টভাবে দেখিয়ে
+    // confirm নেওয়া হয়। opts.skipCreateConfirm===true মানে মোডাল থেকে
+    // confirm করে আবার কল করা হয়েছে, তাই এবার সরাসরি এগিয়ে যাও।
+    if(!opts.skipCreateConfirm && dupPreview?.wouldCreate?.length>0){
+      setPendingCreateConfirm(true);
+      return;
     }
 
     setRunning(true);setDone(false);setStopped(false);
@@ -673,8 +712,39 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:6}}>📚 Fallback Subject/Topic (ঐচ্ছিক)</div>
           <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>যেসব লাইনে ;Subject;Topic দেওয়া নেই, সেগুলোর জন্য এটা ব্যবহার হবে — সব লাইনে বারবার লিখতে হবে না।</div>
           <div style={{display:"flex",gap:8}}>
-            <input className="inp" style={{flex:1}} placeholder="Fallback Subject" value={fallbackSubject} onChange={e=>handleFallbackSubject(e.target.value)}/>
-            <input className="inp" style={{flex:1}} placeholder="Fallback Topic" value={fallbackTopic} onChange={e=>handleFallbackTopic(e.target.value)}/>
+            <div style={{position:"relative",flex:1}}>
+              <input className="inp" style={{width:"100%"}} placeholder="Fallback Subject" value={fallbackSubject}
+                onChange={e=>handleFallbackSubject(e.target.value)}
+                onFocus={()=>setFbSubjFocus(true)} onBlur={()=>setFbSubjFocus(false)}/>
+              {fbSubjFocus&&fbSubjSuggestions.length>0&&(
+                <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:60,background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,marginTop:2,maxHeight:170,overflowY:"auto",boxShadow:"0 6px 16px #0006"}}>
+                  {fbSubjSuggestions.map(s=>(
+                    <div key={s.subject_id} onMouseDown={e=>{e.preventDefault();handleFallbackSubject(s.subject_name);}}
+                      style={{padding:"8px 10px",fontSize:11.5,cursor:"pointer",borderBottom:`1px solid ${C.border}`,color:C.text}}>
+                      📚 {s.subject_name}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div style={{position:"relative",flex:1}}>
+              <input className="inp" style={{width:"100%"}} placeholder="Fallback Topic" value={fallbackTopic}
+                onChange={e=>handleFallbackTopic(e.target.value)}
+                onFocus={()=>setFbTopicFocus(true)} onBlur={()=>setFbTopicFocus(false)}/>
+              {fbTopicFocus&&fbTopicSuggestions.length>0&&(
+                <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:60,background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,marginTop:2,maxHeight:170,overflowY:"auto",boxShadow:"0 6px 16px #0006"}}>
+                  {fbTopicSuggestions.map(t=>{
+                    const parentName=subjectOptions.find(s=>s.subject_id===t.subject_id)?.subject_name||"?";
+                    return (
+                      <div key={t.topic_id} onMouseDown={e=>{e.preventDefault();handleFallbackTopic(t.topic_name);}}
+                        style={{padding:"8px 10px",fontSize:11.5,cursor:"pointer",borderBottom:`1px solid ${C.border}`,color:C.text}}>
+                        📌 {t.topic_name} <span style={{color:C.muted,fontSize:10}}>({parentName})</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -723,6 +793,34 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
             </div>
           </div>
         )
+      )}
+
+      {/* 🆕 Subject/Topic তৈরি — বাধ্যতামূলক confirm মোডাল (submit চাপার পর, উপরের
+          প্যাসিভ প্রিভিউ স্ক্রল করে মিস করে ফেলা ঠেকাতে)। এখানে স্পষ্ট করে
+          Subject না Topic — তার লেবেল + কার আন্ডারে — সব দেখানো হয়, "হ্যাঁ" না
+          চাপলে আসল সাবমিট শুরুই হবে না। */}
+      {pendingCreateConfirm && dupPreview?.wouldCreate?.length>0 && (
+        <div style={{position:"fixed",inset:0,background:"#000000cc",zIndex:320,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setPendingCreateConfirm(false)}>
+          <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:14,padding:16,maxWidth:420,width:"100%",maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:14,fontWeight:900,color:"#f59e0b",marginBottom:4}}>🆕 নতুন Subject/Topic তৈরি হবে</div>
+            <div style={{fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.5}}>
+              সাবমিট করলে নিচেরগুলো আগে থেকে বিদ্যমান তালিকায় নেই বলে <b>নতুন</b> এন্ট্রি হিসেবে তৈরি হবে। ভালো করে দেখে নাও — টাইপো থাকলে "না, ফিরে যাই" চেপে Fallback ফিল্ড/লাইন ঠিক করো।
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+              {dupPreview.wouldCreate.map((w,i)=>(
+                <div key={i} style={{background:w.type==="subject"?"#3b82f611":"#a855f711",border:`1px solid ${w.type==="subject"?"#3b82f644":"#a855f744"}`,borderRadius:9,padding:"8px 10px",fontSize:11.5}}>
+                  <div style={{fontWeight:800,color:w.type==="subject"?"#3b82f6":"#a855f7"}}>{w.type==="subject"?"📚 নতুন SUBJECT":"📌 নতুন TOPIC"}</div>
+                  <div style={{color:C.text,marginTop:2}}>"{w.name}"{w.parentSubjectName?<span style={{color:C.muted}}> — {w.parentSubjectName}-এর আন্ডারে</span>:null}</div>
+                  {w.similarTo&&<div style={{color:"#ef4444",marginTop:3,fontSize:10.5}}>⚠️ কাছাকাছি বিদ্যমান নাম: "{w.similarTo}" — এটাই বোঝাতে চাওনি তো?</div>}
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button className="btn" style={{flex:1,justifyContent:"center"}} onClick={()=>setPendingCreateConfirm(false)}>✕ না, ফিরে যাই</button>
+              <button className="btn bp" style={{flex:1,justifyContent:"center"}} onClick={()=>{setPendingCreateConfirm(false);startUpload({skipCreateConfirm:true});}}>✅ হ্যাঁ, তৈরি করো</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Validation Detail Modal */}
