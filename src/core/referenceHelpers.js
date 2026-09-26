@@ -94,7 +94,13 @@ async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,g
       else if(dryRun){
         // 🆕 dry-run: কিছু তৈরি না করেই placeholder id, শুধু প্রিভিউ-লিস্টে যোগ করা
         const similar=fuzzyBestMatch(sName,curSubjects.map(s=>({id:s.subject_id,name:s.subject_name})));
-        wouldCreate.push({type:"subject",name:sName,sheet,similarTo:similar?similar.name:null});
+        // 🆕 জাম্প-টু-লাইন: item._raw থাকলে (bulkText-এ ঠিক এই লাইনটাই আছে) সেটা
+        // ধরে রাখা হচ্ছে, যাতে UI চাইলে bulkText-এ সরাসরি ওই লাইনে জাম্প+হাইলাইট
+        // করতে পারে। fromFallback:true মানে এই Subject লাইনে টাইপ করা হয়নি,
+        // ওপরের গ্লোবাল Fallback Subject ফিল্ড থেকে এসেছে — তখন bulkText-এ কোনো
+        // লাইন নেই জাম্প করার মতো, বরং Fallback ইনপুট বক্সটাই ফোকাস করা উচিত।
+        const fromFallback=!(item.subject&&item.subject.trim());
+        wouldCreate.push({type:"subject",name:sName,sheet,similarTo:similar?similar.name:null,sourceEntry:fromFallback?null:item._raw,fromFallback});
         sId="__NEW_SUBJECT__"+sKey;
         curSubjects=[...curSubjects,{subject_id:sId,subject_name:sName,sheet}];
       } else {
@@ -112,7 +118,8 @@ async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,g
       if(hit) tId=hit.topic_id;
       else if(dryRun){
         const similar=fuzzyBestMatch(tName,curTopics.filter(t=>t.subject_id===sId).map(t=>({id:t.topic_id,name:t.topic_name})));
-        wouldCreate.push({type:"topic",name:tName,parentSubjectName:sName,similarTo:similar?similar.name:null});
+        const fromFallback=!(item.topic&&item.topic.trim());
+        wouldCreate.push({type:"topic",name:tName,parentSubjectName:sName,similarTo:similar?similar.name:null,sourceEntry:fromFallback?null:item._raw,fromFallback});
         tId="__NEW_TOPIC__"+tKey;
         curTopics=[...curTopics,{topic_id:tId,topic_name:tName,subject_id:sId}];
       } else {
