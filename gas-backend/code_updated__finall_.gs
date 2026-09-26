@@ -9,6 +9,7 @@
     PRIVATE_KEY      → -----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n
     GEMINI_API_KEY   → AIza...
     ADMIN_PHONE      → 01XXXXXXXXX
+    EMPTY_TOPIC_NOTIFY_HOURS → 6   (ঐচ্ছিক — কত ঘন্টা পরপর খালি-টপিক চেক হবে, না দিলে ৬)
 ══════════════════════════════════════════════════════════
 */
 
@@ -1217,6 +1218,122 @@ function autoRebuildIndexTriggered() {
   }
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+   🆕 EMPTY-TOPIC NOTIFIER — "কোন টপিকে প্রশ্ন নাই" হলে সত্যিকারের FCM push
+   পাঠায় ADMIN_PHONE-এ (আগে শুধু Notify ট্যাবে TopicTracker-এর প্যাসিভ লাল
+   ব্যানার ছিল — অ্যাপ খুলে না দেখলে জানার উপায় ছিল না)।
+
+   ⚠️ ONE-TIME SETUP: installAutoReindexTrigger-এর মতোই, Apps Script এডিটরে
+   ফাংশন ড্রপডাউন থেকে "installEmptyTopicNotifyTrigger" বেছে ▶ Run — এরপর
+   থেকে প্রতি EMPTY_TOPIC_NOTIFY_HOURS (ডিফল্ট ৬) ঘন্টায় একবার অটো চেক হবে।
+   ADMIN_PHONE Script Property সেট না থাকলে (Publish-fail alert-এর জন্য আগে
+   থেকেই থাকার কথা) push যাবে না — কোনো এরর ছড়াবে না, শুধু চুপচাপ স্কিপ হবে।
+
+   ডিডুপ লজিক: প্রতিবার সব টপিক আবার notify করলে স্প্যাম হয়ে যাবে, তাই কোন
+   topic_id-গুলোর জন্য আগে notify করা হয়েছে সেটা Script Property-তে
+   (EMPTY_TOPIC_NOTIFIED_SET, JSON array) মনে রাখা হয় — শুধু *নতুন* খালি
+   টপিক পেলেই push যায়। কোনো টপিকে পরে প্রশ্ন যোগ হলে (আর খালি না থাকলে)
+   সেটা এই সেট থেকে বাদ পড়ে — তাই ভবিষ্যতে আবার খালি হয়ে গেলে (যেমন কেউ
+   প্রশ্ন ডিলিট করে দিলে) আবার notify হবে। ══════════════════════════════════ */
+function checkEmptyTopicsAndNotify() {
+  try {
+    // Topics-এর row_count_<sheet> কলামগুলো তাজা রাখতে আগে রিইনডেক্স —
+    // এতে ১৫-মিনিটের অটো-রিইনডেক্স ট্রিগার ইনস্টল করা না থাকলেও এই
+    // ফাংশনটা নিজে থেকেই সঠিক/আপ-টু-ডেট কাউন্ট নিয়ে কাজ করবে।
+    try { runRebuildIndexCore(); } catch (reErr) { logError_("checkEmptyTopicsAndNotify/reindex", reErr); }
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var topicsSh = ss.getSheetByName("Topics");
+    var subjectsSh = ss.getSheetByName("Subjects");
+    if (!topicsSh) { Logger.log("checkEmptyTopicsAndNotify: Topics sheet নেই"); return { status: "error", message: "Topics sheet নেই" }; }
+
+    // subject_id → subject_name ম্যাপ
+    var subjName = {};
+    if (subjectsSh && subjectsSh.getLastRow() >= 2) {
+      var sData = subjectsSh.getDataRange().getValues();
+      var sHdr = sData[0].map(function (h) { return h.toString().trim(); });
+      var sIdCol = sHdr.indexOf("subject_id"), sNameCol = sHdr.indexOf("subject_name");
+      for (var si = 1; si < sData.length; si++) {
+        if (sIdCol >= 0 && sNameCol >= 0) subjName[(sData[si][sIdCol] || "").toString().trim()] = (sData[si][sNameCol] || "").toString().trim();
+      }
+    }
+
+    var tData = topicsSh.getDataRange().getValues();
+    var tHdr = tData[0].map(function (h) { return h.toString().trim(); });
+    var tIdCol = tHdr.indexOf("topic_id"), tNameCol = tHdr.indexOf("topic_name"), tSubjCol = tHdr.indexOf("subject_id");
+    var rcQuizCol = tHdr.indexOf("row_count_quiz"), rcQbankCol = tHdr.indexOf("row_count_qbank"), rcStudyCol = tHdr.indexOf("row_count_study");
+    var rcLegacyCol = tHdr.indexOf("row_count");
+
+    // এখন কোন কোন topic_id সত্যিকারের খালি (per-sheet কলামের যোগফল দিয়ে —
+    // legacy একক row_count কলামের উপর নির্ভর করা হচ্ছে না, যাতে ভবিষ্যতে
+    // ওটা বাদ দেওয়া/না-থাকা হলেও এই ফিচার ঠিকই কাজ করে)
+    var currentEmpty = {}; // topic_id -> {name, subject}
+    for (var ti = 1; ti < tData.length; ti++) {
+      var topicId = (tData[ti][tIdCol] || "").toString().trim();
+      if (!topicId) continue;
+      var vq = rcQuizCol >= 0 ? (parseInt(tData[ti][rcQuizCol]) || 0) : 0;
+      var vb = rcQbankCol >= 0 ? (parseInt(tData[ti][rcQbankCol]) || 0) : 0;
+      var vs = rcStudyCol >= 0 ? (parseInt(tData[ti][rcStudyCol]) || 0) : 0;
+      var vLegacy = rcLegacyCol >= 0 ? (parseInt(tData[ti][rcLegacyCol]) || 0) : 0;
+      var total = vq + vb + vs + vLegacy; // legacy কলামেও যোগ করা হচ্ছে (কোনো পুরনো টপিকে এখনো শুধু ওখানেই মান থাকলে মিস না হয়)
+      if (total === 0) {
+        var topicName = (tData[ti][tNameCol] || "").toString().trim() || "(নাম নেই)";
+        var subjectId = (tData[ti][tSubjCol] || "").toString().trim();
+        currentEmpty[topicId] = { name: topicName, subject: subjName[subjectId] || subjectId || "অজানা" };
+      }
+    }
+
+    var props = PropertiesService.getScriptProperties();
+    var notifiedSet = {};
+    try { notifiedSet = JSON.parse(props.getProperty("EMPTY_TOPIC_NOTIFIED_SET") || "{}"); } catch (pe) { notifiedSet = {}; }
+
+    // নতুন খালি (আগে notify হয়নি) বের করা
+    var newlyEmpty = [];
+    for (var eid in currentEmpty) {
+      if (!notifiedSet[eid]) newlyEmpty.push({ id: eid, name: currentEmpty[eid].name, subject: currentEmpty[eid].subject });
+    }
+    // যেগুলো আগে notify হয়েছিল কিন্তু এখন আর খালি না — সেট থেকে বাদ (ভবিষ্যতে আবার খালি হলে আবার notify হবে)
+    var updatedNotifiedSet = {};
+    for (var nid in notifiedSet) { if (currentEmpty[nid]) updatedNotifiedSet[nid] = 1; }
+    newlyEmpty.forEach(function (t) { updatedNotifiedSet[t.id] = 1; });
+    props.setProperty("EMPTY_TOPIC_NOTIFIED_SET", JSON.stringify(updatedNotifiedSet));
+
+    var result = { status: "success", totalEmpty: Object.keys(currentEmpty).length, newlyEmpty: newlyEmpty.length, notified: false };
+
+    if (newlyEmpty.length > 0) {
+      var cfg = getProps();
+      var adminPhone = (cfg.ADMIN_PHONE || "").toString().replace(/^'+/, "").trim();
+      if (adminPhone) {
+        var maxList = 8;
+        var lines = newlyEmpty.slice(0, maxList).map(function (t) { return t.subject + " — " + t.name; });
+        var bodyText = lines.join("\n");
+        if (newlyEmpty.length > maxList) bodyText += "\n...আরও " + (newlyEmpty.length - maxList) + "টা";
+        var title = newlyEmpty.length === 1 ? "🔴 ১টা নতুন খালি টপিক!" : "🔴 " + newlyEmpty.length + "টা নতুন খালি টপিক!";
+        var fcmRes = sendFCMToPhone(adminPhone, title, bodyText.substring(0, 500), { type: "empty_topics", url: "notify", count: String(newlyEmpty.length) });
+        result.notified = !!(fcmRes && !fcmRes.error);
+        result.fcm = fcmRes;
+      } else {
+        Logger.log("checkEmptyTopicsAndNotify: " + newlyEmpty.length + " নতুন খালি টপিক পাওয়া গেছে কিন্তু ADMIN_PHONE সেট নেই — push যায়নি।");
+      }
+    }
+    Logger.log("checkEmptyTopicsAndNotify: " + JSON.stringify(result));
+    return result;
+  } catch (err) {
+    logError_("checkEmptyTopicsAndNotify", err);
+    return { status: "error", message: String(err) };
+  }
+}
+
+function installEmptyTopicNotifyTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "checkEmptyTopicsAndNotify") ScriptApp.deleteTrigger(triggers[i]);
+  }
+  var hours = parseInt(PropertiesService.getScriptProperties().getProperty("EMPTY_TOPIC_NOTIFY_HOURS")) || 6;
+  ScriptApp.newTrigger("checkEmptyTopicsAndNotify").timeBased().everyHours(hours).create();
+  Logger.log("✅ Empty-topic notify trigger installed — প্রতি " + hours + " ঘন্টায় চেক করবে, নতুন খালি টপিক পেলে ADMIN_PHONE-এ push পাঠাবে।");
+}
+
 function doGet(e) {
  try {
   var action = e.parameter.action;
@@ -1947,6 +2064,13 @@ function doGet(e) {
     return json({status:"success",result:"success",message:"Index rebuilt (per-sheet)",details:ribOut});
   }
 
+  // ── checkEmptyTopicsNow — TopicTracker.jsx-এর "এখনই চেক করো" বাটন থেকে —
+  // scheduled trigger-এর ৬ ঘন্টা অপেক্ষা না করে এখনই খালি-টপিক চেক করে দরকার
+  // হলে ADMIN_PHONE-এ push পাঠায় (checkEmptyTopicsAndNotify-এর হুবহু একই লজিক)। ──
+  if (action==="checkEmptyTopicsNow") {
+    return json(checkEmptyTopicsAndNotify());
+  }
+
   // ── getQuestionsPage — subject_id(+topic_id) অনুযায়ী ঠিক ৫০টা (বা limit)
   // প্রশ্ন ফেরত দেয়। rebuildIndex-এ বানানো row_start/row_count থাকলে সরাসরি সেই
   // row-range পড়ে (fast path, পুরো শিট স্ক্যান লাগে না)।
@@ -2282,39 +2406,52 @@ function doGet(e) {
 
     var driiStarts=driiAffectedTopicRows.map(function(i){return driiTData[i][driiRsCol];}).filter(Boolean);
     var driiEnds=driiAffectedTopicRows.map(function(i){return driiTData[i][driiRsCol]+driiTData[i][driiRcCol]-1;}).filter(function(v){return v;});
-    if (!driiStarts.length) return json({status:"success",result:"success",deleted:0,message:"এই এন্ট্রিতে কোনো প্রশ্ন নেই"});
-    var driiRangeStart=Math.min.apply(null,driiStarts);
-    var driiRangeEnd=Math.max.apply(null,driiEnds);
-    var driiRangeCount=driiRangeEnd-driiRangeStart+1;
 
-    // ── ডিলিট করার আগে ওই রেঞ্জের সব question id ধরে রাখা (Exam_Appearances cleanup-এর জন্য) ──
-    var driiHdr=driiSh.getRange(1,1,1,driiSh.getLastColumn()).getValues()[0];
-    var driiIdCol=driiHdr.indexOf("id");
-    var driiIdsInRange=driiSh.getRange(driiRangeStart,driiIdCol+1,driiRangeCount,1).getValues().map(function(r){return (r[0]||"").toString();});
+    // 🛠️ গুরুতর ফিক্স: ০ প্রশ্নের subject/topic-এ (row_start ফাঁকা/０ থাকায়
+    // driiStarts.length===0 হয়) আগে এখানেই early-return হয়ে যেত success সহ,
+    // কিন্তু তার ফলে নিচের Topics/Subjects রেফারেন্স-রো ডিলিট করার কোডটাই কখনো
+    // চলত না — তাই ০-প্রশ্নের subject/topic ডিলিট বাটনে চাপলে "সফল" দেখাত
+    // কিন্তু লিস্ট থেকে কখনো মুছত না (এটাই ইউজার-রিপোর্টেড বাগ)। এখন driiStarts
+    // ফাঁকা থাকলে শুধু Quiz/QBank/Study-তে রেঞ্জ-ডিলিট আর Exam_Appearances
+    // ক্লিনআপ স্কিপ হয় (যেহেতু ডিলিট করার মতো আসলে কোনো প্রশ্ন-রোই নেই),
+    // কিন্তু নিচের Topics/Subjects রেফারেন্স-রো রিমুভাল ব্লক সবসময় চলে।
+    var driiRangeStart=0, driiRangeEnd=0, driiRangeCount=0, driiEaDeleted=0, driiIdsInRange=[];
+    if (driiStarts.length) {
+      driiRangeStart=Math.min.apply(null,driiStarts);
+      driiRangeEnd=Math.max.apply(null,driiEnds);
+      driiRangeCount=driiRangeEnd-driiRangeStart+1;
 
-    driiSh.deleteRows(driiRangeStart,driiRangeCount);
+      // ── ডিলিট করার আগে ওই রেঞ্জের সব question id ধরে রাখা (Exam_Appearances cleanup-এর জন্য) ──
+      var driiHdr=driiSh.getRange(1,1,1,driiSh.getLastColumn()).getValues()[0];
+      var driiIdCol=driiHdr.indexOf("id");
+      driiIdsInRange=driiSh.getRange(driiRangeStart,driiIdCol+1,driiRangeCount,1).getValues().map(function(r){return (r[0]||"").toString();});
 
-    // ── Exam_Appearances cleanup ──
-    var driiEaSh=driiSs.getSheetByName("Exam_Appearances");
-    var driiEaDeleted=0;
-    if (driiEaSh && driiEaSh.getLastRow()>=2) {
-      var driiEaData=driiEaSh.getDataRange().getValues(), driiEaHdr=driiEaData[0];
-      var driiEaQCol=driiEaHdr.indexOf("question_id");
-      if (driiEaQCol>=0) {
-        for (var de=driiEaData.length-1;de>=1;de--){
-          if (driiIdsInRange.indexOf((driiEaData[de][driiEaQCol]||"").toString())>=0){ driiEaSh.deleteRow(de+1); driiEaDeleted++; }
+      driiSh.deleteRows(driiRangeStart,driiRangeCount);
+
+      // ── Exam_Appearances cleanup ──
+      var driiEaSh=driiSs.getSheetByName("Exam_Appearances");
+      if (driiEaSh && driiEaSh.getLastRow()>=2) {
+        var driiEaData=driiEaSh.getDataRange().getValues(), driiEaHdr=driiEaData[0];
+        var driiEaQCol=driiEaHdr.indexOf("question_id");
+        if (driiEaQCol>=0) {
+          for (var de=driiEaData.length-1;de>=1;de--){
+            if (driiIdsInRange.indexOf((driiEaData[de][driiEaQCol]||"").toString())>=0){ driiEaSh.deleteRow(de+1); driiEaDeleted++; }
+          }
         }
       }
     }
 
-    // ── Topics ইনডেক্স আপডেট: মুছে-যাওয়া topic-row(গুলো) বাদ, বাকিদের row_start শিফট
-    // (এখন driiRsCol/driiRcCol উপরে sheet-scoped resolve হয়েছে বলে এই শিফটও সঠিক sheet-এ হয়) ──
+    // ── Topics ইনডেক্স আপডেট: মুছে-যাওয়া topic-row(গুলো) বাদ (এটা সবসময় চলে,
+    // এমনকি ০-প্রশ্নের entry হলেও), বাকিদের row_start শিফট (শুধু আসলে রেঞ্জ
+    // ডিলিট হলেই দরকার, তাই driiStarts.length চেক-এর ভেতরে) ──
     var driiRemoveTopicIds={}; driiAffectedTopicRows.forEach(function(i){ driiRemoveTopicIds[driiTData[i][driiTIdCol]]=true; });
     for (var dr=driiTData.length-1;dr>=1;dr--){
       var dTid=(driiTData[dr][driiTIdCol]||"").toString();
       if (driiRemoveTopicIds[dTid]) { driiTopicsSh.deleteRow(dr+1); continue; }
-      var dStart=driiTData[dr][driiRsCol];
-      if (dStart && dStart>driiRangeEnd) driiTopicsSh.getRange(dr+1,driiRsCol+1).setValue(dStart-driiRangeCount);
+      if (driiStarts.length) {
+        var dStart=driiTData[dr][driiRsCol];
+        if (dStart && dStart>driiRangeEnd) driiTopicsSh.getRange(dr+1,driiRsCol+1).setValue(dStart-driiRangeCount);
+      }
     }
     // subject-level delete হলে Subjects ট্যাব থেকেও ওই subject-row বাদ
     if (driiType==="subject") {
