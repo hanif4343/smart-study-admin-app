@@ -195,6 +195,9 @@ function SingleQuestionEntryPage({push}){
     try{ const raw=localStorage.getItem(LS_DRAFT_SINGLE_LIST); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; }catch{ return []; }
   });
   const[showDraftList,setShowDraftList]=useState(false);
+  // 🆕 ড্রাফট প্রিভিউ পপআপ — লোড করার আগে পুরো বিষয়বস্তু (subject/topic/প্রশ্ন/
+  // অপশন/উত্তর/ব্যাখ্যা) দেখে নেওয়ার জন্য
+  const[previewDraft,setPreviewDraft]=useState(null);
   const persistDraftList=(list)=>{
     setDraftList(list);
     try{ localStorage.setItem(LS_DRAFT_SINGLE_LIST,JSON.stringify(list)); }catch{}
@@ -851,17 +854,86 @@ function SingleQuestionEntryPage({push}){
             [...draftList].sort((a,b)=>b.savedAt-a.savedAt).map(d=>(
               <div key={d.id} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderBottom:`1px dashed ${C.border}`,
                 background:d.id===activeDraftId?"#22c55e15":"transparent"}}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:11.5,fontWeight:800,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{draftHeadline(d)}</div>
+                <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>setPreviewDraft(d)} title="প্রিভিউ দেখতে ট্যাপ করো">
+                  <div style={{fontSize:11.5,fontWeight:800,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>👁️ {draftHeadline(d)}</div>
                   <div style={{fontSize:9.5,color:C.muted,marginTop:2}}>{fmtDraftTime(d.savedAt)}{d.id===activeDraftId?" · এখন এডিট হচ্ছে":""}</div>
                 </div>
+                {/* 🐛 ফিক্স: আগে background:C.text (থিম-টেক্সট-কালার) ব্যবহার হতো, যেটা
+                    লাইট থিমে গাঢ়/কালো হওয়ায় color:"#111"-এর সাথে মিশে টেক্সট পড়াই
+                    যেত না (কালো বাক্সের মতো দেখাতো)। এখন C.accent + সাদা টেক্সট। */}
                 <button type="button" tabIndex={-1} onClick={()=>loadNamedDraft(d)}
-                  style={{flexShrink:0,padding:"6px 10px",borderRadius:7,fontSize:10.5,fontWeight:700,background:C.text,color:"#111",border:"none",cursor:"pointer"}}>লোড করো</button>
+                  style={{flexShrink:0,padding:"6px 10px",borderRadius:7,fontSize:10.5,fontWeight:700,background:C.accent,color:"#fff",border:"none",cursor:"pointer"}}>লোড করো</button>
                 <button type="button" tabIndex={-1} onClick={()=>deleteNamedDraft(d.id)}
                   style={{flexShrink:0,background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>🗑</button>
               </div>
             ))
           )}
+        </div>
+      )}
+
+      {/* 🆕 ড্রাফট প্রিভিউ পপআপ — লোড করার আগে পুরো বিষয়বস্তু দেখে নেওয়ার জন্য */}
+      {previewDraft&&(
+        <div style={{position:"fixed",inset:0,zIndex:150,background:"#0008",display:"flex",alignItems:"flex-end"}} onClick={()=>setPreviewDraft(null)}>
+          <div style={{background:C.card||C.panel,width:"100%",maxHeight:"75vh",overflowY:"auto",borderRadius:"14px 14px 0 0",padding:16}} onClick={e=>e.stopPropagation()}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <div style={{fontWeight:800,fontSize:13}}>👁️ ড্রাফট প্রিভিউ</div>
+              <button onClick={()=>setPreviewDraft(null)} style={{background:"transparent",border:"none",fontSize:18,color:C.muted}}>✕</button>
+            </div>
+
+            <div style={{fontSize:10.5,color:C.muted,marginBottom:10}}>{fmtDraftTime(previewDraft.savedAt)} · {previewDraft.targetMode||"-"} / {previewDraft.qtype||"-"}</div>
+
+            {(previewDraft.subjectSel?.name||previewDraft.topicSel?.name)&&(
+              <div style={{fontSize:11.5,marginBottom:8}}><b>বিষয়:</b> {previewDraft.subjectSel?.name||"-"} {previewDraft.topicSel?.name?`— ${previewDraft.topicSel.name}`:""}</div>
+            )}
+            {(previewDraft.instSel?.name||previewDraft.postSel?.name||previewDraft.examYear)&&(
+              <div style={{fontSize:11.5,marginBottom:8}}><b>প্রতিষ্ঠান/পদ/সাল:</b> {[previewDraft.instSel?.name,previewDraft.postSel?.name,previewDraft.examYear].filter(Boolean).join(" · ")}</div>
+            )}
+
+            {/* সারিতে জমা রাখা একাধিক প্রশ্ন (pendingParts) থাকলে সবগুলো দেখাও */}
+            {(previewDraft.pendingParts||[]).map((p,i)=>(
+              <div key={p.id||i} style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,padding:10,marginBottom:8}}>
+                <div style={{fontSize:9.5,fontWeight:700,color:C.muted,marginBottom:4}}>প্রশ্ন {i+1}</div>
+                <div style={{fontSize:12,fontWeight:700,marginBottom:6}}>{p.question}</div>
+                {[p.opt1,p.opt2,p.opt3,p.opt4].some(Boolean)&&(
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>
+                    {["ক","খ","গ","ঘ"].map((lbl,oi)=>{
+                      const v=[p.opt1,p.opt2,p.opt3,p.opt4][oi];
+                      return v?<div key={oi}>{lbl}. {v}</div>:null;
+                    })}
+                  </div>
+                )}
+                <div style={{fontSize:11.5,color:"#16a34a",fontWeight:700}}>✅ উত্তর: {p.correct}</div>
+                {p.explanation&&<div style={{fontSize:10.5,color:C.muted,marginTop:4}}>💡 {p.explanation}</div>}
+              </div>
+            ))}
+
+            {/* চলতি (এখনো "সারিতে জমা" করা হয়নি এমন) প্রশ্ন থাকলে সেটাও দেখাও */}
+            {previewDraft.question&&(
+              <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:9,padding:10,marginBottom:8}}>
+                <div style={{fontSize:9.5,fontWeight:700,color:C.muted,marginBottom:4}}>{(previewDraft.pendingParts||[]).length?`প্রশ্ন ${(previewDraft.pendingParts||[]).length+1} (এখনো লেখা হচ্ছিল)`:"প্রশ্ন"}</div>
+                <div style={{fontSize:12,fontWeight:700,marginBottom:6}}>{previewDraft.question}</div>
+                {[previewDraft.opt1,previewDraft.opt2,previewDraft.opt3,previewDraft.opt4].some(Boolean)&&(
+                  <div style={{fontSize:11,color:C.muted,marginBottom:4}}>
+                    {["ক","খ","গ","ঘ"].map((lbl,oi)=>{
+                      const v=[previewDraft.opt1,previewDraft.opt2,previewDraft.opt3,previewDraft.opt4][oi];
+                      return v?<div key={oi}>{lbl}. {v}</div>:null;
+                    })}
+                  </div>
+                )}
+                {previewDraft.correct&&<div style={{fontSize:11.5,color:"#16a34a",fontWeight:700}}>✅ উত্তর: {previewDraft.correct}</div>}
+                {previewDraft.explanation&&<div style={{fontSize:10.5,color:C.muted,marginTop:4}}>💡 {previewDraft.explanation}</div>}
+              </div>
+            )}
+
+            {!previewDraft.question&&!(previewDraft.pendingParts||[]).length&&(
+              <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>শুধু Subject/প্রতিষ্ঠান-সেটিংস সেভ ছিল, কোনো প্রশ্ন টাইপ করা হয়নি।</div>
+            )}
+
+            <div style={{display:"flex",gap:8,marginTop:6}}>
+              <button onClick={()=>setPreviewDraft(null)} style={{flex:1,justifyContent:"center",padding:"10px 0",borderRadius:9,border:`1px solid ${C.border}`,background:"transparent",color:C.text,fontWeight:700,fontSize:12}}>বন্ধ করো</button>
+              <button onClick={()=>{loadNamedDraft(previewDraft);setPreviewDraft(null);}} style={{flex:2,justifyContent:"center",padding:"10px 0",borderRadius:9,border:"none",background:C.accent,color:"#fff",fontWeight:800,fontSize:12}}>▶️ এই খসড়া লোড করো</button>
+            </div>
+          </div>
         </div>
       )}
 
