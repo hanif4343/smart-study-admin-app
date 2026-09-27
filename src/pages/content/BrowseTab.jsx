@@ -234,7 +234,11 @@ function BrowseTab({push,tick}){
   },[allQ]);
 
   // Duplicate detection: same Question + AudienceTags + Subject + Sub_topic
+  // 🐛 ফিক্স: QBank-এ একই প্রশ্ন একাধিক পরীক্ষায় (আলাদা exam paper-এ) আসাটা
+  // স্বাভাবিক/প্রত্যাশিত — এটা ডেটা-সমস্যা না, তাই QBank-এর জন্য duplicate
+  // ধরাই বন্ধ। Quiz-এর ডুপ্লিকেট লজিক ১০০% অপরিবর্তিত রাখা হয়েছে।
   const duplicateGroups=useMemo(()=>{
+    if(sheet==="QBank")return [];
     const map={};
     allQ.forEach(q=>{
       const qtext=(q.Question||q.question||"").trim().toLowerCase();
@@ -281,6 +285,7 @@ function BrowseTab({push,tick}){
   };
   const FUZZY_THRESHOLD=0.6; // ৬০%+ শব্দ মিললে "সম্ভাব্য near-duplicate" ধরা হয়
   const runFuzzyScan=useCallback(()=>{
+    if(sheet==="QBank"){ push("warn","QBank-এ এই ফিচার বন্ধ","একই প্রশ্ন একাধিক পরীক্ষায় থাকা এখানে স্বাভাবিক, তাই duplicate/near-duplicate চেক শুধু Quiz-এর জন্য"); return; }
     setFuzzyScanning(true);
     // setTimeout দিয়ে এক টিক পরে চালানো — বাটনের ⏳ স্পিনার আগে রেন্ডার হওয়ার সুযোগ পায়
     setTimeout(()=>{
@@ -328,7 +333,7 @@ function BrowseTab({push,tick}){
       setFuzzyScanning(false);
       push("success","🔍 স্ক্যান শেষ",groupsOut.length?`${groupsOut.length}টা সম্ভাব্য near-duplicate গ্রুপ পাওয়া গেছে`:"কোনো near-duplicate পাওয়া যায়নি — সাফ!");
     },30);
-  },[allQ,push]);
+  },[allQ,push,sheet]);
   const fuzzyQs=useMemo(()=>{
     if(!fuzzyGroups)return [];
     const seen=new Set();
@@ -523,6 +528,9 @@ function BrowseTab({push,tick}){
         {["Quiz","QBank","Study"].map(s=>(
           <button key={s} className={`ftab${sheet===s&&viewMode==="all"?" on":""}`} onClick={()=>{setSheet(s);setFilterAudience("all");setSearch("");setViewMode("all");setFuzzyGroups(null);}}>{s}</button>
         ))}
+        {/* 🐛 ফিক্স: QBank-এ একই প্রশ্ন একাধিক পরীক্ষায় আসা স্বাভাবিক বলে
+            duplicate/fuzzy বাটন দুটোই QBank-এ লুকানো — শুধু Quiz/Study-তে দেখাবে */}
+        {sheet!=="QBank" && (<>
         <button
           onClick={()=>setViewMode(v=>v==="duplicates"?"all":"duplicates")}
           style={{marginLeft:"auto",fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="duplicates"?C.red:C.border}`,background:viewMode==="duplicates"?tint(C.red,"22"):"transparent",color:viewMode==="duplicates"?C.red:C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
@@ -533,6 +541,10 @@ function BrowseTab({push,tick}){
           style={{fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="fuzzy"?"#a855f7":C.border}`,background:viewMode==="fuzzy"?"#a855f722":"transparent",color:viewMode==="fuzzy"?"#a855f7":C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
           🔍 কাছাকাছি মিল {fuzzyGroups&&fuzzyQs.length>0&&<span style={{fontSize:9,background:"#a855f7",color:"#fff",borderRadius:10,padding:"1px 5px"}}>{fuzzyQs.length}</span>}
         </button>
+        </>)}
+        {sheet==="QBank" && (
+          <div style={{marginLeft:"auto",fontSize:10,color:C.muted,fontStyle:"italic"}}>ℹ️ QBank-এ duplicate চেক বন্ধ (একাধিক পরীক্ষায় একই প্রশ্ন স্বাভাবিক)</div>
+        )}
         <button
           onClick={()=>setViewMode(v=>v==="suspicious"?"all":"suspicious")}
           style={{fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${viewMode==="suspicious"?"#f59e0b":C.border}`,background:viewMode==="suspicious"?"#f59e0b22":"transparent",color:viewMode==="suspicious"?"#f59e0b":C.muted,cursor:"pointer",fontWeight:700,display:"flex",alignItems:"center",gap:4}}>
