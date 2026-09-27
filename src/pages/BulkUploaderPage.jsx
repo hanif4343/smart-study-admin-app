@@ -270,7 +270,14 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     const idx=bulkText.indexOf(entry);
     const el=bulkTextRef.current;
     if(idx===-1||!el){ el?.focus(); return; }
+    // 🐛 ফিক্স: আগে শুধু টেক্সটবক্সের *ভেতরের* scrollTop সেট হতো, কিন্তু পুরো
+    // পেজ/মূল স্ক্রিন কোথায় স্ক্রল করা আছে সেটা বদলাতো না — তাই মডাল বন্ধ হওয়ার
+    // পর টেক্সটবক্সটাই ভিউপোর্টের বাইরে থেকে যেত (মূল স্ক্রিন উপরে/আগের জায়গায়
+    // থেকে যেত, হাইলাইট করা লাইন চোখেই পড়ত না)। এখন টেক্সটবক্সকে পুরো পেজেই
+    // ভিউয়ের মাঝ বরাবর স্ক্রল করে আনা হচ্ছে (scrollIntoView), তারপর ভেতরের
+    // scrollTop ঠিক করে ওই নির্দিষ্ট লাইনটা textarea-র মাঝামাঝি বসানো হচ্ছে।
     requestAnimationFrame(()=>{
+      el.scrollIntoView({block:"center",behavior:"smooth"});
       el.focus();
       el.setSelectionRange(idx,idx+entry.length);
       // ── মোবাইল ব্রাউজারে selectionRange সেট করলে সাধারণত অটো-স্ক্রল হয় না,
@@ -298,10 +305,13 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   };
   // dupPreview বদলালে (নতুন স্ক্যান/একটা ঠিক হয়ে লিস্ট ছোট হলে) index ভ্যালিড
   // রেঞ্জে ক্ল্যাম্প করা — নাহলে ফিক্স করার পর "পরের ▶"-এ চাপলে undefined-এ গিয়ে আটকাতে পারে
+  // 🆕 Fallback ফিল্ড থেকে তৈরি হওয়া Subject/Topic রিভিউ-লিস্টে দেখানো/গোনা
+  // হয় না — এটা admin নিজেই একটামাত্র ভিজিবল ইনপুটে টাইপ করেছে, ভুল হলে
+  // সেটা নিজেই জানে, ১০০+ লাইনের ভেতর খুঁজে বের করার মতো "লুকানো" সমস্যা না।
+  const reviewList=useMemo(()=>(dupPreview?.wouldCreate||[]).filter(w=>!w.fromFallback),[dupPreview]);
   useEffect(()=>{
-    const len=dupPreview?.wouldCreate?.length||0;
-    if(dupJumpIdx>=len) setDupJumpIdx(0);
-  },[dupPreview]);
+    if(dupJumpIdx>=reviewList.length) setDupJumpIdx(0);
+  },[reviewList,dupJumpIdx]);
 
   /* ── Shuffle MCQ Options ──
      প্রতিটি MCQ লাইনে অপশনগুলো (col 1-4) random করে সাজায়,
@@ -444,7 +454,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     // "এগুলো কি Subject নাকি Topic হিসেবে তৈরি হচ্ছে" স্পষ্টভাবে দেখিয়ে
     // confirm নেওয়া হয়। opts.skipCreateConfirm===true মানে মোডাল থেকে
     // confirm করে আবার কল করা হয়েছে, তাই এবার সরাসরি এগিয়ে যাও।
-    if(!opts.skipCreateConfirm && dupPreview?.wouldCreate?.length>0){
+    if(!opts.skipCreateConfirm && reviewList.length>0){
       setPendingCreateConfirm(true);
       return;
     }
@@ -792,37 +802,42 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       {dupPreviewLoading && (
         <div style={{fontSize:10.5,color:C.muted,marginBottom:8}}>⏳ Subject/Topic চেক করা হচ্ছে...</div>
       )}
-      {!dupPreviewLoading && dupPreview && dupPreview.wouldCreate && (
-        dupPreview.wouldCreate.length===0 ? (
-          <div style={{fontSize:10.5,color:"#10b981",marginBottom:8}}>✅ সব Subject/Topic বিদ্যমান তালিকার সাথে মিলেছে — নতুন কিছু তৈরি হবে না</div>
+      {!dupPreviewLoading && dupPreview && (
+        reviewList.length===0 ? (
+          <div style={{fontSize:10.5,color:"#10b981",marginBottom:8}}>✅ সব Subject/Topic বিদ্যমান তালিকার সাথে মিলেছে (বা শুধু Fallback থেকে আসছে) — লাইনে রিভিউ করার মতো কিছু নেই</div>
         ) : (
           <div style={{background:"#1c1004",border:"1px solid #d9770644",borderRadius:10,padding:"10px 12px",marginBottom:10}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,flexWrap:"wrap",gap:6}}>
               <div style={{fontSize:11.5,fontWeight:800,color:"#f59e0b"}}>
-                🆕 {dupPreview.wouldCreate.length}টা নতুন Subject/Topic তৈরি হবে
+                🆕 {reviewList.length}টা নতুন Subject/Topic তৈরি হবে (লাইন থেকে)
               </div>
               {/* 🆕 Find Next-এর মতো — একটা ঠিক করে "পরের ▶" চাপলেই পরেরটার লাইনে জাম্প করে */}
-              {dupPreview.wouldCreate.length>1&&(
+              {reviewList.length>1&&(
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   <button type="button" className="btn" style={{fontSize:10,padding:"3px 9px"}}
-                    onClick={()=>setDupJumpIdx(i=>(i-1+dupPreview.wouldCreate.length)%dupPreview.wouldCreate.length)}>◀ আগের</button>
-                  <span style={{fontSize:10,color:C.muted}}>{dupJumpIdx+1}/{dupPreview.wouldCreate.length}</span>
+                    onClick={()=>setDupJumpIdx(i=>(i-1+reviewList.length)%reviewList.length)}>◀ আগের</button>
+                  <span style={{fontSize:10,color:"#e5e7eb"}}>{dupJumpIdx+1}/{reviewList.length}</span>
                   <button type="button" className="btn" style={{fontSize:10,padding:"3px 9px"}}
-                    onClick={()=>setDupJumpIdx(i=>(i+1)%dupPreview.wouldCreate.length)}>পরের ▶</button>
+                    onClick={()=>setDupJumpIdx(i=>(i+1)%reviewList.length)}>পরের ▶</button>
                 </div>
               )}
             </div>
+            {/* 🐛 ফিক্স: এই প্যানেলের background সবসময় হার্ডকোড করা গাঢ় রঙ (#1c1004),
+                কিন্তু আগে color:C.text ব্যবহার হতো — থিম লাইট মোডে থাকলে C.text
+                গাঢ় রঙ হয়ে যায়, ফলে গাঢ়-এর-উপর-গাঢ় হয়ে টেক্সট পড়া যাচ্ছিল না।
+                এখন সরাসরি হালকা রঙ (#e5e7eb) হার্ডকোড করা — থিম যাই হোক, এই
+                নির্দিষ্ট প্যানেলে সবসময় পড়া যাবে। */}
             <div style={{display:"flex",flexDirection:"column",gap:5}}>
-              {dupPreview.wouldCreate.map((w,i)=>(
+              {reviewList.map((w,i)=>(
                 <div key={i} onClick={()=>{setDupJumpIdx(i);jumpToWouldCreate(w);}}
-                  style={{fontSize:10.5,color:C.text,cursor:"pointer",padding:"6px 8px",borderRadius:7,
-                    background:i===dupJumpIdx?"#f59e0b1a":"transparent",border:`1px solid ${i===dupJumpIdx?"#f59e0b55":"transparent"}`}}>
-                  <span style={{fontWeight:700}}>{w.type==="subject"?"📚 Subject":"📌 Topic"}:</span> "{w.name}"
-                  {w.parentSubjectName?<span style={{color:C.muted}}> ({w.parentSubjectName}-এর আন্ডারে)</span>:null}
-                  <span style={{color:"#3b82f6",marginLeft:6,fontWeight:700}}>{w.fromFallback?"📍 Fallback ফিল্ডে যাও":"👉 লাইনে যাও"}</span>
+                  style={{fontSize:10.5,color:"#e5e7eb",cursor:"pointer",padding:"6px 8px",borderRadius:7,
+                    background:i===dupJumpIdx?"#f59e0b26":"transparent",border:`1px solid ${i===dupJumpIdx?"#f59e0b66":"transparent"}`}}>
+                  <span style={{fontWeight:700,color:"#fbbf24"}}>{w.type==="subject"?"📚 Subject":"📌 Topic"}:</span> "{w.name}"
+                  {w.parentSubjectName?<span style={{color:"#9ca3af"}}> ({w.parentSubjectName}-এর আন্ডারে)</span>:null}
+                  <span style={{color:"#60a5fa",marginLeft:6,fontWeight:700}}>👉 লাইনে যাও</span>
                   {w.similarTo&&(
-                    <div style={{color:"#ef4444",marginTop:2}}>
-                      ⚠️ কাছাকাছি বিদ্যমান নাম আছে: <b>"{w.similarTo}"</b> — এটাই বোঝাতে চেয়েছ? (টাইপো হলে লাইনে/Fallback ফিল্ডে ঠিক করে নাও)
+                    <div style={{color:"#f87171",marginTop:2}}>
+                      ⚠️ কাছাকাছি বিদ্যমান নাম আছে: <b>"{w.similarTo}"</b> — এটাই বোঝাতে চেয়েছ? (টাইপো হলে লাইনে ঠিক করে নাও)
                     </div>
                   )}
                 </div>
@@ -836,19 +851,19 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           প্যাসিভ প্রিভিউ স্ক্রল করে মিস করে ফেলা ঠেকাতে)। এখানে স্পষ্ট করে
           Subject না Topic — তার লেবেল + কার আন্ডারে — সব দেখানো হয়, "হ্যাঁ" না
           চাপলে আসল সাবমিট শুরুই হবে না। */}
-      {pendingCreateConfirm && dupPreview?.wouldCreate?.length>0 && (
+      {pendingCreateConfirm && reviewList.length>0 && (
         <div style={{position:"fixed",inset:0,background:"#000000cc",zIndex:320,display:"flex",alignItems:"center",justifyContent:"center",padding:16}} onClick={()=>setPendingCreateConfirm(false)}>
           <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:14,padding:16,maxWidth:420,width:"100%",maxHeight:"80vh",overflowY:"auto"}} onClick={e=>e.stopPropagation()}>
             <div style={{fontSize:14,fontWeight:900,color:"#f59e0b",marginBottom:4}}>🆕 নতুন Subject/Topic তৈরি হবে</div>
             <div style={{fontSize:11,color:C.muted,marginBottom:12,lineHeight:1.5}}>
-              সাবমিট করলে নিচেরগুলো আগে থেকে বিদ্যমান তালিকায় নেই বলে <b>নতুন</b> এন্ট্রি হিসেবে তৈরি হবে। ভালো করে দেখে নাও — টাইপো থাকলে "না, ফিরে যাই" চেপে Fallback ফিল্ড/লাইন ঠিক করো।
+              সাবমিট করলে নিচেরগুলো আগে থেকে বিদ্যমান তালিকায় নেই বলে <b>নতুন</b> এন্ট্রি হিসেবে তৈরি হবে। ভালো করে দেখে নাও — টাইপো থাকলে "না, ফিরে যাই" চেপে লাইন ঠিক করো।
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
-              {dupPreview.wouldCreate.map((w,i)=>(
+              {reviewList.map((w,i)=>(
                 <div key={i} onClick={()=>jumpToWouldCreate(w)} style={{cursor:"pointer",background:w.type==="subject"?"#3b82f611":"#a855f711",border:`1px solid ${w.type==="subject"?"#3b82f644":"#a855f744"}`,borderRadius:9,padding:"8px 10px",fontSize:11.5}}>
                   <div style={{fontWeight:800,color:w.type==="subject"?"#3b82f6":"#a855f7"}}>{w.type==="subject"?"📚 নতুন SUBJECT":"📌 নতুন TOPIC"}</div>
                   <div style={{color:C.text,marginTop:2}}>"{w.name}"{w.parentSubjectName?<span style={{color:C.muted}}> — {w.parentSubjectName}-এর আন্ডারে</span>:null}</div>
-                  <div style={{color:"#3b82f6",marginTop:3,fontSize:10,fontWeight:700}}>{w.fromFallback?"📍 ঠিক করতে Fallback ফিল্ডে যাও":"👉 ঠিক করতে লাইনে যাও"}</div>
+                  <div style={{color:"#3b82f6",marginTop:3,fontSize:10,fontWeight:700}}>👉 ঠিক করতে লাইনে যাও</div>
                   {w.similarTo&&<div style={{color:"#ef4444",marginTop:3,fontSize:10.5}}>⚠️ কাছাকাছি বিদ্যমান নাম: "{w.similarTo}" — এটাই বোঝাতে চাওনি তো?</div>}
                 </div>
               ))}
