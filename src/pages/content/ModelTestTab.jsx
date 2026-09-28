@@ -20,7 +20,7 @@ function ModelTestTab({push,tick}){
   const subjects=useMemo(()=>{
     const set=new Set();
     [...quizArr,...qbankArr,...studyArr].forEach(q=>{
-      const s=(q.Subject||q.subject||"").trim();
+      const s=String(q.Subject||q.subject||"").trim();
       if(s)set.add(s);
     });
     return[...set].sort((a,b)=>a.localeCompare(b,"bn"));
@@ -51,7 +51,7 @@ function ModelTestTab({push,tick}){
     if(count<=0||perTest<=0){push("warn","সংখ্যা ঠিকভাবে দিন","");return;}
     setGenerating(true);
     try{
-      const bySubject=q=>(q.Subject||q.subject||"").trim()===subject;
+      const bySubject=q=>String(q.Subject||q.subject||"").trim()===subject;
       const quizItems  = quizArr.filter(bySubject);
       const qbankItems = qbankArr.filter(bySubject);
       // Study sheet-এ MCQ option থাকে না — mcq-only টেস্টে ঢুকবে না
