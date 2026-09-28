@@ -85,7 +85,7 @@ async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,g
   for(const item of entries){
     const sName=((item.subject&&item.subject.trim())||fallbackSubject||"").trim();
     const tName=((item.topic&&item.topic.trim())||fallbackTopic||"").trim();
-    if(!sName||!tName) return{ok:false,reason:`"${(item.q||"").substring(0,40)}..." — Subject/Topic নেই (লাইনে টাইপ করো, অথবা ওপরের ফিল্ড পূরণ করো)`};
+    if(!sName||!tName) return{ok:false,reason:`"${String(item.q||"").substring(0,40)}..." — Subject/Topic নেই (লাইনে টাইপ করো, অথবা ওপরের ফিল্ড পূরণ করো)`};
     const sKey=norm(sName);
     let sId=subjCache.get(sKey);
     if(!sId){
