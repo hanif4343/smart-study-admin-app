@@ -29,7 +29,7 @@ function ReportEditModal({report,onClose,onDone,push}){
   // "0", "null", "" — এগুলো invalid ID
   const qid     = (qidRaw===""||qidRaw==="0"||qidRaw==="null"||qidRaw==="undefined") ? "" : qidRaw;
   // Report এর নিজস্ব question text — সবচেয়ে reliable fallback
-  const reportQText = (report.Question||report.question||"").trim();
+  const reportQText = String(report.Question||report.question||"").trim();
 
   useEffect(()=>{
     // কোনো identifier নেই — সরাসরি report এর text দিয়ে যাও
@@ -54,7 +54,7 @@ function ReportEditModal({report,onClose,onDone,push}){
               if(qfbKey && x._fbKey && x._fbKey===qfbKey) return true;
               // Priority 2: Question text exact match — সবচেয়ে reliable
               if(reportQText){
-                const xq=(x.Question||x.question||"").trim();
+                const xq=String(x.Question||x.question||"").trim();
                 if(xq && xq===reportQText) return true;
               }
               // Priority 3: ID field match
@@ -75,7 +75,7 @@ function ReportEditModal({report,onClose,onDone,push}){
               setCorrect(q.Correct||q.correct||"");
               setExplanation(q.Explanation||q.explanation||"");
               setTechnique(q.Technique||q.technique||"");
-              const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
+              const qt=String(q.QType||q.qtype||"MCQ").toLowerCase();
               setQtype(t==="Study"?"study":qt==="written"?"written":"mcq");
             }
           }catch(_){}
@@ -91,7 +91,7 @@ function ReportEditModal({report,onClose,onDone,push}){
             const raw=await loadPath(t);
             const arr=toArr(raw);
             const q=arr.find(x=>{
-              const xq=(x.Question||x.question||"").trim();
+              const xq=String(x.Question||x.question||"").trim();
               return xq && xq===reportQText;
             });
             if(q&&!cancelled){
@@ -105,7 +105,7 @@ function ReportEditModal({report,onClose,onDone,push}){
               setCorrect(q.Correct||q.correct||"");
               setExplanation(q.Explanation||q.explanation||"");
               setTechnique(q.Technique||q.technique||"");
-              const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
+              const qt=String(q.QType||q.qtype||"MCQ").toLowerCase();
               setQtype(t==="Study"?"study":qt==="written"?"written":"mcq");
             }
           }catch(_){}
@@ -121,7 +121,7 @@ function ReportEditModal({report,onClose,onDone,push}){
         setOpt4(report.Opt4||report.opt4||report.Option4||report.option4||"");
         setCorrect(report.Correct||report.correct||"");
         setExplanation(report.Explanation||report.explanation||"");
-        const qt=(report.QType||report.qtype||"MCQ").toLowerCase();
+        const qt=String(report.QType||report.qtype||"MCQ").toLowerCase();
         setQtype(qt==="written"?"written":"mcq");
       }
 
