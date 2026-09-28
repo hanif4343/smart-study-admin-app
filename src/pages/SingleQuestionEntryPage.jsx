@@ -227,7 +227,7 @@ function SingleQuestionEntryPage({push}){
       const parts=[s,t].filter(Boolean);
       label=parts.length?parts.join(" — "):"নাম-ছাড়া খসড়া";
     }
-    const qn=(d.pendingParts?d.pendingParts.length:0)+((d.question||"").trim()?1:0);
+    const qn=(d.pendingParts?d.pendingParts.length:0)+(String(d.question||"").trim()?1:0);
     if(qn) label+=` (${qn}টা প্রশ্ন)`;
     return label;
   }
@@ -513,7 +513,7 @@ function SingleQuestionEntryPage({push}){
           if(!id) return;
           const optsFilled=[part.opt1,part.opt2,part.opt3,part.opt4].some(o=>(o||"").trim());
           const needsOptions=effQtype==="MCQ" && !!part.correct?.trim() && !optsFilled;
-          const needsExplanation=!(part.explanation||"").trim();
+          const needsExplanation=!String(part.explanation||"").trim();
           if(needsOptions||needsExplanation) queueAutoGen({id,needsOptions,needsExplanation,push});
         });
         setPendingParts([]);
