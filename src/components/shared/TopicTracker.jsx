@@ -30,15 +30,15 @@ function buildRefCountMap(refData){
   const map={};
   if(!refData) return map;
   const subjName={};
-  (refData.subjects||[]).forEach(s=>{ subjName[s.subject_id]=(s.subject_name||"").trim(); });
+  (refData.subjects||[]).forEach(s=>{ subjName[s.subject_id]=String(s.subject_name||"").trim(); });
   (refData.subjects||[]).forEach(s=>{
-    const sName=(s.subject_name||"").trim();
+    const sName=String(s.subject_name||"").trim();
     if(!sName) return;
     if(!map[sName]) map[sName]={topics:{},subjectId:s.subject_id};
   });
   (refData.topics||[]).forEach(t=>{
     const sName=subjName[t.subject_id]||"অজানা";
-    const tName=(t.topic_name||"").trim()||"General";
+    const tName=String(t.topic_name||"").trim()||"General";
     const cnt=parseInt(t.row_count)||0;
     if(!map[sName]) map[sName]={topics:{},subjectId:t.subject_id};
     if(!map[sName].topics[tName]) map[sName].topics[tName]={count:0};
@@ -112,6 +112,28 @@ function TopicTracker({push,tick}){
   const[openSubjects,setOpenSubjects] = useState(()=>new Set());
   const toggleOpen=(s)=>setOpenSubjects(prev=>{ const n=new Set(prev); n.has(s)?n.delete(s):n.add(s); return n; });
 
+  // 🆕 "এখনই চেক করো" — GAS-এর checkEmptyTopicsNow action কল করে, যেটা
+  // (নতুন) খালি টপিক পেলে সাথে সাথে ADMIN_PHONE-এ আসল FCM push পাঠায়।
+  // এটা না থাকলে আগে খালি-টপিক জানার একমাত্র উপায় ছিল এই পেজটা নিজে খুলে
+  // দেখা — এখন সেটাপ ঠিকমতো হয়েছে কিনা টেস্ট করাও সহজ (৬ ঘন্টা অপেক্ষা না করে)।
+  const[checkingEmpty,setCheckingEmpty]=useState(false);
+  const checkEmptyNow=async()=>{
+    if(!GAS||!gasSecret){ push("error","GAS URL/Secret সেট নেই",""); return; }
+    setCheckingEmpty(true);
+    try{
+      const r=await fetch(`${GAS}?action=checkEmptyTopicsNow&secret=${encodeURIComponent(gasSecret)}`).then(x=>x.json());
+      if(r?.status!=="success"){ push("error","ব্যর্থ",r?.message||""); }
+      else if(r.newlyEmpty>0){
+        push(r.notified?"success":"warn", r.notified?"📲 Push পাঠানো হয়েছে!":"⚠️ নতুন খালি টপিক পাওয়া গেছে কিন্তু push যায়নি",
+          `${r.newlyEmpty}টা নতুন খালি টপিক${r.notified?"":" — ADMIN_PHONE সেট আছে কিনা চেক করো"}`);
+      } else {
+        push("success","✅ সব ঠিক আছে",`মোট ${r.totalEmpty||0}টা খালি টপিক, কিন্তু সব আগেই notify করা হয়েছে — নতুন কিছু নেই।`);
+      }
+      const d=await fetchReferenceData({gasSecret}); setRefData(d); // তাজা count দেখানোর জন্য রিফ্রেশ
+    }catch(e){ push("error","ব্যর্থ",e.message); }
+    setCheckingEmpty(false);
+  };
+
   const togglePick=async(subject,topic)=>{
     const existing=picks.find(p=>p.subject===subject&&p.topic===topic);
     try{
@@ -177,9 +199,14 @@ function TopicTracker({push,tick}){
 
       {emptyCount>0 && (
         <div className="card" style={{borderColor:tint(C.danger,"40"),background:`linear-gradient(180deg,${tint(C.danger,"0d")},${C.card})`,marginBottom:12}}>
-          <div style={{display:"flex",alignItems:"center",gap:8}}>
-            <span className="topic-empty-dot" style={{fontSize:16}}>🔴</span>
-            <div style={{fontSize:12.5,fontWeight:700,color:C.danger}}>{emptyCount}টা টপিক এখনো ফাঁকা — কোনো প্রশ্ন নেই</div>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,flexWrap:"wrap"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <span className="topic-empty-dot" style={{fontSize:16}}>🔴</span>
+              <div style={{fontSize:12.5,fontWeight:700,color:C.danger}}>{emptyCount}টা টপিক এখনো ফাঁকা — কোনো প্রশ্ন নেই</div>
+            </div>
+            <button onClick={checkEmptyNow} disabled={checkingEmpty} title="সাথে সাথে চেক করো, নতুন খালি টপিক থাকলে ফোনে Push পাঠাও" style={{fontSize:10.5,padding:"6px 10px",borderRadius:8,border:`1px solid ${tint(C.danger,"40")}`,background:"transparent",color:C.danger,fontWeight:700}}>
+              {checkingEmpty?"⏳ চেক হচ্ছে...":"📲 এখনই চেক+Notify"}
+            </button>
           </div>
         </div>
       )}
