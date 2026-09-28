@@ -136,9 +136,9 @@ function buildSubjectMap(arr){
   const map={};
   for(let i=0;i<arr.length;i++){
     const q=arr[i];
-    const sub=(q.Subject||q.subject||"Unknown").trim();
-    const typ=(q.QType||q.qtype||"MCQ").toLowerCase();
-    const top=(q.Sub_topic||q.sub_topic||"General").trim()||"General";
+    const sub=String(q.Subject||q.subject||"Unknown").trim();
+    const typ=String(q.QType||q.qtype||"MCQ").toLowerCase();
+    const top=String(q.Sub_topic||q.sub_topic||"General").trim()||"General";
     const isWr=typ==="written";
     if(!map[sub])map[sub]={total:0,mcq:0,written:0,topics:{}};
     map[sub].total++;if(isWr)map[sub].written++;else map[sub].mcq++;
