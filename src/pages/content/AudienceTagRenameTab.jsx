@@ -45,12 +45,12 @@ function AudienceTagRenameTab({push,tick}){
     const map={};
     bulkSheetData.forEach(q=>{
       const key=bulkMode==="subject"
-        ?(q.Subject||q.subject||"").trim()
-        :(q.Sub_topic||q.sub_topic||q.SubTopic||q.subTopic||"").trim(); // subtopic, not topic
+        ?String(q.Subject||q.subject||"").trim()
+        :String(q.Sub_topic||q.sub_topic||q.SubTopic||q.subTopic||"").trim(); // subtopic, not topic
       if(!key)return;
       if(!map[key])map[key]={count:0,hasMissing:false};
       map[key].count++;
-      const tag=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
+      const tag=String(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
       if(!tag)map[key].hasMissing=true;
     });
     return Object.entries(map).sort((a,b)=>a[0].localeCompare(b[0],"bn"));
@@ -79,8 +79,8 @@ function AudienceTagRenameTab({push,tick}){
       const tag=bulkTag.trim();
       const affected=bulkSheetData.filter(q=>{
         const key=bulkMode==="subject"
-          ?(q.Subject||q.subject||"").trim()
-          :(q.Topic||q.topic||q.Sub_topic||q.sub_topic||"").trim();
+          ?String(q.Subject||q.subject||"").trim()
+          :String(q.Topic||q.topic||q.Sub_topic||q.sub_topic||"").trim();
         return bulkSelected.has(key);
       });
       const ids=affected.map(q=>(q.ID||q.id||q._fbKey||"").toString()).filter(Boolean);
