@@ -525,11 +525,11 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       const id=result.ids?.[idx];
       if(!id) return;
       const optsFilled=[row.opt1,row.opt2,row.opt3,row.opt4].some(o=>(o||"").trim());
-      const needsOptions=eff==="MCQ" && !!(row.correct||"").trim() && !optsFilled;
-      const needsExplanation=!(row.explanation||"").trim();
+      const needsOptions=eff==="MCQ" && !!String(row.correct||"").trim() && !optsFilled;
+      const needsExplanation=!String(row.explanation||"").trim();
       if(needsOptions||needsExplanation) queueAutoGen({id,needsOptions,needsExplanation,push});
     });
-    entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
+    entries.forEach(item=>addLog(`… ${String(item.q||"").substring(0,55)}...`,"ok"));
     setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setRunning(false);setDone(true);
     if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার","sheet",mode,result.failedRows);
@@ -917,7 +917,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
                     </div>
                     {!r.ok&&r.entry&&<div style={{fontSize:10,color:"#60a5fa",marginTop:5,fontWeight:700}}>👆 ট্যাপ করো — নিচের টেক্সটবক্সে এই লাইনটা সিলেক্ট হয়ে যাবে, সরাসরি ঠিক করতে পারবে</div>}
                     {r.ok&&<div style={{fontSize:10,color:"#10b981",marginTop:4}}>
-                      ❓ {(r.q||"").substring(0,60)}{r.q?.length>60?"...":""}
+                      ❓ {String(r.q||"").substring(0,60)}{r.q?.length>60?"...":""}
                       {(r.subject||r.topic)&&<span style={{color:"#818cf8"}}> · 📚 {r.subject}{r.topic?` / ${r.topic}`:""}</span>}
                     </div>}
                   </div>
