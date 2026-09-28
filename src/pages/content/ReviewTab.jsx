@@ -118,8 +118,8 @@ function ReviewTab({push,tick}){
   const rowsWithFlags=useMemo(()=>{
     return allQ.map(q=>{
       const qid=String(q.id||q.ID||"");
-      const subj=(q.Subject||q.subject||"").trim();
-      const topic=(q.Sub_topic||q.sub_topic||q.Topic||q.topic||"").trim();
+      const subj=String(q.Subject||q.subject||"").trim();
+      const topic=String(q.Sub_topic||q.sub_topic||q.Topic||q.topic||"").trim();
       const appCount=appearanceCountOf[qid]||0;
       return{q,qid,subj,topic,appCount,
         missingSubject:!subj, missingTopic:!topic, missingAppearance:appCount===0};
