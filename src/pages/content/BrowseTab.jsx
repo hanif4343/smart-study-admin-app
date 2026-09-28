@@ -224,7 +224,7 @@ function BrowseTab({push,tick}){
   const audienceTags=useMemo(()=>{
     const map={};
     allQ.forEach(q=>{
-      const tagRaw=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
+      const tagRaw=String(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
       if(!tagRaw)return;
       tagRaw.split(",").map(t=>t.trim()).filter(Boolean).forEach(t=>{
         map[t]=(map[t]||0)+1;
@@ -241,10 +241,10 @@ function BrowseTab({push,tick}){
     if(sheet==="QBank")return [];
     const map={};
     allQ.forEach(q=>{
-      const qtext=(q.Question||q.question||"").trim().toLowerCase();
-      const atag=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim().toLowerCase();
-      const subj=(q.Subject||q.subject||"").trim().toLowerCase();
-      const subt=(q.Sub_topic||q.sub_topic||"").trim().toLowerCase();
+      const qtext=String(q.Question||q.question||"").trim().toLowerCase();
+      const atag=String(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim().toLowerCase();
+      const subj=String(q.Subject||q.subject||"").trim().toLowerCase();
+      const subt=String(q.Sub_topic||q.sub_topic||"").trim().toLowerCase();
       if(!qtext)return;
       const key=`${qtext}|||${atag}|||${subj}|||${subt}`;
       if(!map[key])map[key]=[];
@@ -291,10 +291,10 @@ function BrowseTab({push,tick}){
     setTimeout(()=>{
       const buckets={};
       allQ.forEach(q=>{
-        const qtext=(q.Question||q.question||"").trim();
+        const qtext=String(q.Question||q.question||"").trim();
         if(qtext.length<8)return; // খুব ছোট এন্ট্রি "সন্দেহজনক" ট্যাবেই ধরা পড়ে, এখানে দরকার নেই
-        const subj=(q.Subject||q.subject||"").trim().toLowerCase();
-        const subt=(q.Sub_topic||q.sub_topic||"").trim().toLowerCase();
+        const subj=String(q.Subject||q.subject||"").trim().toLowerCase();
+        const subt=String(q.Sub_topic||q.sub_topic||"").trim().toLowerCase();
         const key=`${subj}|||${subt}`;
         (buckets[key]=buckets[key]||[]).push({q,words:new Set(normalizeWords(qtext)),len:qtext.length});
       });
@@ -351,7 +351,7 @@ function BrowseTab({push,tick}){
 
 
   const suspiciousQs=useMemo(()=>allQ.filter(q=>{
-    const len=(q.Question||q.question||"").trim().length;
+    const len=String(q.Question||q.question||"").trim().length;
     return len>0&&len<4;
   }),[allQ]);
 
@@ -359,7 +359,7 @@ function BrowseTab({push,tick}){
     let arr=viewMode==="duplicates"?duplicateQs:viewMode==="fuzzy"?fuzzyQs:viewMode==="suspicious"?suspiciousQs:allQ;
     if(filterAudience!=="all"){
       arr=arr.filter(q=>{
-        const tagRaw=(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
+        const tagRaw=String(q.AudienceTags||q.audienceTags||q.audience_tags||"").trim();
         return tagRaw.split(",").map(t=>t.trim()).includes(filterAudience);
       });
     }
@@ -373,7 +373,7 @@ function BrowseTab({push,tick}){
         arr=arr.filter(q=>{
           const sid=(q.subject_id||q.Subject_id||"").toString();
           if(sid) return sid===String(filterSubjectId);
-          return (q.Subject||q.subject||"").trim().toLowerCase()===wantName; // fallback: subject_id নেই এমন পুরনো রো
+          return String(q.Subject||q.subject||"").trim().toLowerCase()===wantName; // fallback: subject_id নেই এমন পুরনো রো
         });
       }
       if(filterTopicId!=="all"){
@@ -381,7 +381,7 @@ function BrowseTab({push,tick}){
         arr=arr.filter(q=>{
           const tid=(q.topic_id||q.Topic_id||"").toString();
           if(tid) return tid===String(filterTopicId);
-          return (q.Sub_topic||q.sub_topic||q.Topics||q.topic||"").trim().toLowerCase()===wantName; // fallback
+          return String(q.Sub_topic||q.sub_topic||q.Topics||q.topic||"").trim().toLowerCase()===wantName; // fallback
         });
       }
     }
@@ -493,7 +493,7 @@ function BrowseTab({push,tick}){
         item:{q:e.q,opt1:"",opt2:"",opt3:"",opt4:"",correct:e.a,explanation:""},
         subject:e.subject, subtopic:e.sub_topic||e.subject,
         qtype:isStudy?"Study":(e.qtype||"Written"),
-        audienceTags:(e.audienceTags||"").split(",").filter(Boolean),
+        audienceTags:String(e.audienceTags||"").split(",").filter(Boolean),
       }));
       const result=await saveRowsToSheet({rows,targetTab:sheet,gasSecret,push,source:"Reformat"});
       if(result.added>0){
@@ -788,11 +788,11 @@ function BrowseTab({push,tick}){
        pageSlice.map((q,i)=>{
         const qid=(q.ID||q.id||"").toString();
         const qtext=(q.Question||q.question||"(নোট)").slice(0,80);
-        const qFullLen=(q.Question||q.question||"").trim().length;
+        const qFullLen=String(q.Question||q.question||"").trim().length;
         const isSuspicious=qFullLen>0&&qFullLen<4; // "৬"-এর মতো stray/ভাঙা নয়েজ এন্ট্রি ধরার জন্য
         const sub=(q.Subject||q.subject||"—");
         const tp=(q.Sub_topic||q.sub_topic||"");
-        const qt=(q.QType||q.qtype||"MCQ").toLowerCase();
+        const qt=String(q.QType||q.qtype||"MCQ").toLowerCase();
         const isDup=viewMode==="duplicates";
         const isOriginal=q._isDupOriginal;
         const cardKey=q._fbKey||i;
