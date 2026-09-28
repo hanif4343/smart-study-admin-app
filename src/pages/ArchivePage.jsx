@@ -93,8 +93,8 @@ function ArchivePage({push,onSendToBulk}){
     const effQtype=src.qtype||"Written";
     const items=getBulkEntries(src.text).map(l=>parseBulkEntry(l,effQtype)).filter(r=>r.ok);
     if(!items.length){push("warn","⚠️ কোনো valid প্রশ্ন পাওয়া যায়নি","format ঠিক আছে কিনা দেখুন");return;}
-    const subject=(src.subject||"").trim();
-    const subtopic=(src.subtopic||"").trim()||subject;
+    const subject=String(src.subject||"").trim();
+    const subtopic=String(src.subtopic||"").trim()||subject;
     if(!subject && !items.some(i=>i.subject)){
       push("warn","⚠️ Subject লিখুন (উপরে এডিট করে, অথবা প্রতিটা লাইনে Subject;Topic টাইপ করো)","");return;
     }
