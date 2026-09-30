@@ -34,13 +34,13 @@ function saveArchive(list){
   }
 }
 
-/* rows: [{q,correct,explanation?}] → bulk-ready {} wrapped text (multi-line answার-safe) */
+/* rows: [{q,correct,explanation?}] → bulk-ready {{ }} wrapped text (multi-line answার-safe) */
 function rowsToArchiveText(rows){
   return (rows||[]).map(r=>{
     const q=(r.q||"").toString();
     const correct=(r.correct||"").toString();
     const explanation=(r.explanation||"").toString();
-    return `{${q};;${correct}${explanation?(";;"+explanation):""}}`;
+    return `{{${q};;${correct}${explanation?(";;"+explanation):""}}}`;
   }).join("\n");
 }
 
