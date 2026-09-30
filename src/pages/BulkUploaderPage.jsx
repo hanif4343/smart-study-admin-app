@@ -316,7 +316,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   /* ── Shuffle MCQ Options ──
      প্রতিটি MCQ লাইনে অপশনগুলো (col 1-4) random করে সাজায়,
      correct field (col 5) সেই অনুযায়ী আপডেট করে। subject/topic/ব্যাখ্যা অপরিবর্তিত থাকে।
-     { } block এবং plain line দুটো format-ই handle করে।
+     {{ }} block এবং plain line দুটো format-ই handle করে।
   */
   const[shuffleInfo,setShuffleInfo]=useState(null); // {count} — কতটা shuffle হলো
   const handleShuffle=()=>{
@@ -348,10 +348,10 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       shuffled++;
       return newLine;
     });
-    // { } block ছিলে কিনা detect করি
-    const wasBlock=/\{[\s\S]+?\}/.test(bulkText);
+    // {{ }} ব্লক ছিল কিনা detect করি
+    const wasBlock=/\{\{[\s\S]+?\}\}/.test(bulkText);
     const result=wasBlock
-      ? newLines.map(l=>`{ ${l} }`).join("\n")
+      ? newLines.map(l=>`{{ ${l} }}`).join("\n")
       : newLines.join("\n");
     setShuffleInfo({count:shuffled});
     handleText(result);
@@ -958,10 +958,10 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           onChange={e=>handleText(e.target.value)}
           onKeyDown={e=>applyRichTextShortcut(e,handleText)}
           placeholder={mode==="Study"
-            ?"{ প্রশ্ন ;; উত্তর লাইন১\nউত্তর লাইন২ }\n{ পরের প্রশ্ন ;; উত্তর }"
+            ?"{{ প্রশ্ন ;; উত্তর লাইন১\nউত্তর লাইন২ }}\n{{ পরের প্রশ্ন ;; উত্তর }}"
             :qtype==="Written"
-            ?"{ আকাশ থেকে বৃষ্টি পড়ে — রেখাঙ্কিত পদের কারক নির্ণয় করো ;; কর্তৃকারক ;; বাংলা ব্যাকরণ ;; কারক ;; ব্যাখ্যা(optional) }\n{ পরের প্রশ্ন ;; উত্তর ;; Subject ;; Topic }"
-            :"{ বাংলাদেশ কত সালে স্বাধীনতা লাভ করেছে? ;; ১৯৬৬ ;; ১৯৬৯ ;; ১৯৭১ ;; ১৯৭৪ ;; ১৯৭১ ;; বাংলাদেশ বিষয়াবলী ;; মুক্তিযুদ্ধ ;; ১৯৭১ সালের ১৬ই ডিসেম্বর... }\n{ প্রশ্ন ;; অপ১ ;; অপ২ ;; অপ৩ ;; অপ৪ ;; সঠিকউত্তর ;; Subject ;; Topic }"}
+            ?"{{ আকাশ থেকে বৃষ্টি পড়ে — রেখাঙ্কিত পদের কারক নির্ণয় করো ;; কর্তৃকারক ;; বাংলা ব্যাকরণ ;; কারক ;; ব্যাখ্যা(optional) }}\n{{ পরের প্রশ্ন ;; উত্তর ;; Subject ;; Topic }}"
+            :"{{ বাংলাদেশ কত সালে স্বাধীনতা লাভ করেছে? ;; ১৯৬৬ ;; ১৯৬৯ ;; ১৯৭১ ;; ১৯৭৪ ;; ১৯৭১ ;; বাংলাদেশ বিষয়াবলী ;; মুক্তিযুদ্ধ ;; ১৯৭১ সালের ১৬ই ডিসেম্বর... }}\n{{ প্রশ্ন ;; অপ১ ;; অপ২ ;; অপ৩ ;; অপ৪ ;; সঠিকউত্তর ;; Subject ;; Topic }}"}
         />
       </div>
 
