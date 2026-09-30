@@ -40,7 +40,7 @@ function rowsToArchiveText(rows){
     const q=(r.q||"").toString();
     const correct=(r.correct||"").toString();
     const explanation=(r.explanation||"").toString();
-    return `{${q};${correct}${explanation?(";"+explanation):""}}`;
+    return `{${q};;${correct}${explanation?(";;"+explanation):""}}`;
   }).join("\n");
 }
 
