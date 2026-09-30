@@ -36,7 +36,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const[postSel,setPostSel]=useState({id:"",name:""});
   const[instSel,setInstSel]=useState({id:"",name:""});
   const[examYear,setExamYear]=useState("");
-  // ── MCQ/Written (inline) মোডে প্রতিটা লাইনে ;Subject;Topic দিতে হয় — কিন্তু
+  // ── MCQ/Written (inline) মোডে প্রতিটা লাইনে ;;Subject;;Topic দিতে হয় — কিন্তু
   // বেশিরভাগ লাইনই একই বিষয়ের হলে বারবার টাইপ না করে এই fallback দুটো ভরে
   // রাখলেই চলে; কোনো লাইনে নিজস্ব Subject;Topic থাকলে সেটাই priority পায়,
   // না থাকলে (আগে এখানে কিছু ছিল না বলেই "Subject/Topic নেই" এরর আসতো —
@@ -202,7 +202,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         const sName=((r.subject&&r.subject.trim())||fs||"").trim();
         const tName=((r.topic&&r.topic.trim())||ft||"").trim();
         if(!sName||!tName) return{idx:i+1, entry:e, ok:false, err:true, skip:false,
-          reason:"Subject/Topic নেই — লাইনে ;Subject;Topic যোগ করো, অথবা উপরে Fallback ফিল্ড ভরো"};
+          reason:"Subject/Topic নেই — লাইনে ;;Subject;;Topic যোগ করো, অথবা উপরে Fallback ফিল্ড ভরো"};
       }
       return{idx:i+1, entry:e, ...r};
     });
@@ -327,7 +327,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       const tr=entry.trim();
       if(!tr||tr.startsWith("#"))return entry;
       const flat=tr.replace(/\r?\n/g," ").replace(/\s+/g," ");
-      const parts=flat.split(";").map(p=>p.trim());
+      const parts=flat.split(";;").map(p=>p.trim());
       // নতুন MCQ প্যাটার্ন: 0=প্রশ্ন, 1-4=অপশন, 5=correct, 6=subject, 7=topic, 8=ব্যাখ্যা(optional)
       if(parts.length<8)return entry;
       const q=parts[0];
@@ -343,8 +343,8 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       }
       // correct field = shuffled text-এ যেটা সঠিক (value same থাকে)
       const newLine=expl
-        ?`${q} ; ${opts[0]} ; ${opts[1]} ; ${opts[2]} ; ${opts[3]} ; ${correct} ; ${subj} ; ${top} ; ${expl}`
-        :`${q} ; ${opts[0]} ; ${opts[1]} ; ${opts[2]} ; ${opts[3]} ; ${correct} ; ${subj} ; ${top}`;
+        ?`${q} ;; ${opts[0]} ;; ${opts[1]} ;; ${opts[2]} ;; ${opts[3]} ;; ${correct} ;; ${subj} ;; ${top} ;; ${expl}`
+        :`${q} ;; ${opts[0]} ;; ${opts[1]} ;; ${opts[2]} ;; ${opts[3]} ;; ${correct} ;; ${subj} ;; ${top}`;
       shuffled++;
       return newLine;
     });
@@ -525,11 +525,11 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       const id=result.ids?.[idx];
       if(!id) return;
       const optsFilled=[row.opt1,row.opt2,row.opt3,row.opt4].some(o=>(o||"").trim());
-      const needsOptions=eff==="MCQ" && !!String(row.correct||"").trim() && !optsFilled;
-      const needsExplanation=!String(row.explanation||"").trim();
+      const needsOptions=eff==="MCQ" && !!(row.correct||"").trim() && !optsFilled;
+      const needsExplanation=!(row.explanation||"").trim();
       if(needsOptions||needsExplanation) queueAutoGen({id,needsOptions,needsExplanation,push});
     });
-    entries.forEach(item=>addLog(`… ${String(item.q||"").substring(0,55)}...`,"ok"));
+    entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
     setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setRunning(false);setDone(true);
     if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার","sheet",mode,result.failedRows);
@@ -742,7 +742,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       {(getEffectiveType(mode,qtype)==="MCQ"||getEffectiveType(mode,qtype)==="Written")&&(
         <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
           <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:6}}>📚 Fallback Subject/Topic (ঐচ্ছিক)</div>
-          <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>যেসব লাইনে ;Subject;Topic দেওয়া নেই, সেগুলোর জন্য এটা ব্যবহার হবে — সব লাইনে বারবার লিখতে হবে না।</div>
+          <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>যেসব লাইনে ;;Subject;;Topic দেওয়া নেই, সেগুলোর জন্য এটা ব্যবহার হবে — সব লাইনে বারবার লিখতে হবে না।</div>
           <div style={{display:"flex",gap:8}}>
             <div style={{position:"relative",flex:1}}>
               <input ref={fbSubjInputRef} className="inp" style={{width:"100%"}} placeholder="Fallback Subject" value={fallbackSubject}
@@ -917,7 +917,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
                     </div>
                     {!r.ok&&r.entry&&<div style={{fontSize:10,color:"#60a5fa",marginTop:5,fontWeight:700}}>👆 ট্যাপ করো — নিচের টেক্সটবক্সে এই লাইনটা সিলেক্ট হয়ে যাবে, সরাসরি ঠিক করতে পারবে</div>}
                     {r.ok&&<div style={{fontSize:10,color:"#10b981",marginTop:4}}>
-                      ❓ {String(r.q||"").substring(0,60)}{r.q?.length>60?"...":""}
+                      ❓ {(r.q||"").substring(0,60)}{r.q?.length>60?"...":""}
                       {(r.subject||r.topic)&&<span style={{color:"#818cf8"}}> · 📚 {r.subject}{r.topic?` / ${r.topic}`:""}</span>}
                     </div>}
                   </div>
@@ -958,10 +958,10 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
           onChange={e=>handleText(e.target.value)}
           onKeyDown={e=>applyRichTextShortcut(e,handleText)}
           placeholder={mode==="Study"
-            ?"{ প্রশ্ন ; উত্তর লাইন১\nউত্তর লাইন২ }\n{ পরের প্রশ্ন ; উত্তর }"
+            ?"{ প্রশ্ন ;; উত্তর লাইন১\nউত্তর লাইন২ }\n{ পরের প্রশ্ন ;; উত্তর }"
             :qtype==="Written"
-            ?"{ আকাশ থেকে বৃষ্টি পড়ে — রেখাঙ্কিত পদের কারক নির্ণয় করো ; কর্তৃকারক ; বাংলা ব্যাকরণ ; কারক ; ব্যাখ্যা(optional) }\n{ পরের প্রশ্ন ; উত্তর ; Subject ; Topic }"
-            :"{ বাংলাদেশ কত সালে স্বাধীনতা লাভ করেছে? ; ১৯৬৬ ; ১৯৬৯ ; ১৯৭১ ; ১৯৭৪ ; ১৯৭১ ; বাংলাদেশ বিষয়াবলী ; মুক্তিযুদ্ধ ; ১৯৭১ সালের ১৬ই ডিসেম্বর... }\n{ প্রশ্ন ; অপ১ ; অপ২ ; অপ৩ ; অপ৪ ; সঠিকউত্তর ; Subject ; Topic }"}
+            ?"{ আকাশ থেকে বৃষ্টি পড়ে — রেখাঙ্কিত পদের কারক নির্ণয় করো ;; কর্তৃকারক ;; বাংলা ব্যাকরণ ;; কারক ;; ব্যাখ্যা(optional) }\n{ পরের প্রশ্ন ;; উত্তর ;; Subject ;; Topic }"
+            :"{ বাংলাদেশ কত সালে স্বাধীনতা লাভ করেছে? ;; ১৯৬৬ ;; ১৯৬৯ ;; ১৯৭১ ;; ১৯৭৪ ;; ১৯৭১ ;; বাংলাদেশ বিষয়াবলী ;; মুক্তিযুদ্ধ ;; ১৯৭১ সালের ১৬ই ডিসেম্বর... }\n{ প্রশ্ন ;; অপ১ ;; অপ২ ;; অপ৩ ;; অপ৪ ;; সঠিকউত্তর ;; Subject ;; Topic }"}
         />
       </div>
 
