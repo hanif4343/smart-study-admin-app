@@ -43,43 +43,47 @@ function parseBulkEntry(entry, effectiveType){
     return null;
   };
 
+  // 🛠️ ডেলিমিটার বদল: "；" এর বদলে এখন ";;" (ডাবল সেমিকোলন) দিয়ে ফিল্ড আলাদা করা
+  // হয়। কারণ: idioms/অনুপাত/ইংরেজি বাক্যে প্রায়ই একটা একক ";" থাকে (যেমন "৬:৮:১০"
+  // বা "he said; then left"), যেটা আগে ভুল করে ফিল্ড-বিভাজক হিসেবে গণ্য হয়ে
+  // যেত। ডাবল ";;" বাস্তব টেক্সটে প্রায় কখনোই আপনাআপনি আসে না, তাই এখন একক ";"
+  // যেকোনো ফিল্ডের ভিতরে নিশ্চিন্তে রাখা যায় — নিচের overflow-detection ব্লকগুলো
+  // (৫টার বেশি/৯টার বেশি অংশ ইত্যাদি) আগের বাগের জন্য বানানো হয়েছিল, ডাবল
+  // ডেলিমিটারে সেই বাগের সুযোগই আর নেই, তবু বাড়তি সুরক্ষা হিসেবে অক্ষত রাখা হলো।
+  const DELIM=";;";
   if(effectiveType==="Study"){
-    const si=tr.indexOf(";");
-    if(si===-1)return{err:true,reason:"Study: প্রথম ';' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
+    const si=tr.indexOf(DELIM);
+    if(si===-1)return{err:true,reason:"Study: প্রথম ';;' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
     const q=tr.substring(0,si).trim();
-    const ans=tr.substring(si+1).trim();
+    const ans=tr.substring(si+DELIM.length).trim();
     if(!q)return{err:true,reason:"Study: প্রশ্ন খালি"};
     if(!ans)return{err:true,reason:"Study: উত্তর খালি"};
     return{ok:true,q,correct:ans,explanation:""};
 
   } else if(effectiveType==="Written"){
-    // ── Written প্যাটার্ন (Phase 7, MCQ-র মতোই): প্রশ্ন;উত্তর;subject;topic;ব্যাখ্যা(optional)
+    // ── Written প্যাটার্ন (Phase 7, MCQ-র মতোই): প্রশ্ন;;উত্তর;;subject;;topic;;ব্যাখ্যা(optional)
     // অপশন (opt1-4) নেই, বাকি নিয়ম MCQ-র সাথে সামঞ্জস্যপূর্ণ — ২-৩ কলাম হলে পুরনো ফরম্যাট
     // (subject/topic ছাড়া, OCR/AI Import compatibility), ৪+ কলাম হলে নতুন ফরম্যাট। ──
     const flat=tr.replace(/\r?\n/g," ").replace(/\s+/g," ");
-    const parts=flat.split(";").map(p=>p.trim());
-    if(parts.length<2)return{err:true,reason:"Written: ';' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
+    const parts=flat.split(DELIM).map(p=>p.trim());
+    if(parts.length<2)return{err:true,reason:"Written: ';;' দিয়ে প্রশ্ন ও উত্তর আলাদা করুন"};
     let q,ans,subject="",topic="",explanation="";
     if(parts.length<=5){
-      // ── স্বাভাবিক কেস — প্রশ্ন/উত্তরে নিজস্ব কোনো সেমিকোলন নেই, আগের মতোই পজিশন ধরে ──
+      // ── স্বাভাবিক কেস — প্রশ্ন/উত্তরে নিজস্ব কোনো ডাবল-সেমিকোলন নেই, আগের মতোই পজিশন ধরে ──
       q=parts[0]; ans=parts[1];
       if(parts.length>=4){ subject=parts[2]; topic=parts[3]; explanation=parts[4]||""; }
-      else if(parts.length===3){ explanation=parts[2]||""; } // পুরনো প্যাটার্ন: প্রশ্ন;উত্তর;ব্যাখ্যা
+      else if(parts.length===3){ explanation=parts[2]||""; } // পুরনো প্যাটার্ন: প্রশ্ন;;উত্তর;;ব্যাখ্যা
     } else {
-      // ── 🐛 ফিক্স: ৫টার বেশি অংশ — মানে প্রশ্ন বা উত্তরের ভিতরেই সেমিকোলন আছে (idioms,
-      // translation, একাধিক sub-part-সহ প্রশ্ন — "a. X; ans1  b. Y; ans2 ...; Subject; Topic"
-      // টাইপ)। আগে এখানে পজিশন [2]/[3] ধরে Subject/Topic বের করা হতো, ফলে উত্তরের মাঝের
-      // কোনো অংশ ভুলে Subject/Topic হিসেবে বসে যেত (বাস্তবে দেখা গেছে — একটা Idioms
-      // প্রশ্নের উত্তরের অংশবিশেষ "He really dropped the ball..." নতুন Subject হিসেবে
-      // তৈরি হয়ে গিয়েছিল)। এখন শেষ ২টা অংশ নিশ্চিতভাবে Subject/Topic ধরা হচ্ছে (এই দুটো
-      // ছোট, একলাইন, সেমিকোলনবিহীন হওয়ার কথা), আর তার আগের সবটুকু (যতই সেমিকোলন থাকুক)
-      // আবার জোড়া দিয়ে প্রথম সেমিকোলনে প্রশ্ন/উত্তর আলাদা করা হচ্ছে। এই ওভারফ্লো-কেসে
-      // আলাদা ব্যাখ্যা(optional) সাপোর্ট করা হচ্ছে না — Subject/Topic ঠিক বসাটাই বেশি জরুরি। ──
+      // ── ৫টার বেশি অংশ — মানে প্রশ্ন বা উত্তরের ভিতরেই কাকতালীয়ভাবে ";;" চলে এসেছে
+      // (অত্যন্ত বিরল ডাবল-ডেলিমিটারে, কিন্তু বাড়তি সুরক্ষা হিসেবে রাখা হলো)। শেষ ২টা
+      // অংশ নিশ্চিতভাবে Subject/Topic ধরা হচ্ছে, আর তার আগের সবটুকু আবার জোড়া দিয়ে
+      // প্রথম ";;"-এ প্রশ্ন/উত্তর আলাদা করা হচ্ছে। এই ওভারফ্লো-কেসে আলাদা ব্যাখ্যা(optional)
+      // সাপোর্ট করা হচ্ছে না — Subject/Topic ঠিক বসাটাই বেশি জরুরি। ──
       topic=parts[parts.length-1];
       subject=parts[parts.length-2];
-      const body=parts.slice(0,parts.length-2).join(";");
-      const fsi=body.indexOf(";");
-      if(fsi===-1){ q=body; ans=""; } else { q=body.substring(0,fsi).trim(); ans=body.substring(fsi+1).trim(); }
+      const body=parts.slice(0,parts.length-2).join(DELIM);
+      const fsi=body.indexOf(DELIM);
+      if(fsi===-1){ q=body; ans=""; } else { q=body.substring(0,fsi).trim(); ans=body.substring(fsi+DELIM.length).trim(); }
     }
     if(!q)return{err:true,reason:"Written: প্রশ্ন খালি"};
     if(!ans)return{err:true,reason:"Written: উত্তর খালি"};
@@ -91,17 +95,17 @@ function parseBulkEntry(entry, effectiveType){
     return{ok:true,q,correct:ans,subject,topic,explanation};
 
   } else {
-    // ── MCQ প্যাটার্ন (Phase 7): প্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;সঠিকউত্তর;subject;topic;ব্যাখ্যা(optional)
+    // ── MCQ প্যাটার্ন (Phase 7): প্রশ্ন;;অপ১;;অপ২;;অপ৩;;অপ৪;;সঠিকউত্তর;;subject;;topic;;ব্যাখ্যা(optional)
     // subject/topic এখন প্রতি প্রশ্নে আলাদা করে টাইপ করা হয় (একই bulk-paste-এ ভিন্ন ভিন্ন
     // বিষয়/টপিকের প্রশ্ন মিশিয়ে দেওয়া যায়)। ৬-৭ কলামের পুরনো ফরম্যাটও (subject/topic ছাড়া —
     // যেমন OCR/AI Import যেখানে subject আলাদা field থেকে আসে) এখনো চলবে, সেক্ষেত্রে
     // subject/topic খালি ফেরত যায় আর caller নিজের fallback ব্যবহার করে। ──
     const flat=tr.replace(/\r?\n/g," ").replace(/\s+/g," ");
-    const parts=flat.split(";").map(p=>p.trim());
-    if(parts.length<6)return{err:true,reason:`MCQ: ${parts.length}টি কলাম পেয়েছি, দরকার কমপক্ষে ৬টি (প্রশ্ন;অপ১;অপ২;অপ৩;অপ৪;উত্তর)`};
+    const parts=flat.split(DELIM).map(p=>p.trim());
+    if(parts.length<6)return{err:true,reason:`MCQ: ${parts.length}টি কলাম পেয়েছি, দরকার কমপক্ষে ৬টি (প্রশ্ন;;অপ১;;অপ২;;অপ৩;;অপ৪;;উত্তর)`};
     let subject="",topic="",explanation="";
     if(parts.length<=9){
-      // ── স্বাভাবিক কেস — প্রশ্ন/option-এ নিজস্ব সেমিকোলন নেই, আগের মতোই পজিশন ধরে ──
+      // ── স্বাভাবিক কেস — প্রশ্ন/option-এ নিজস্ব ডাবল-সেমিকোলন নেই, আগের মতোই পজিশন ধরে ──
       if(!parts[0])return{err:true,reason:"MCQ: প্রশ্ন খালি"};
       if(!parts[5])return{err:true,reason:"MCQ: সঠিক উত্তর খালি"};
       if(parts.length>=8){ subject=parts[6]; topic=parts[7]; explanation=parts[8]||""; }
@@ -113,14 +117,13 @@ function parseBulkEntry(entry, effectiveType){
       }
       return{ok:true,q:parts[0],opt1:parts[1],opt2:parts[2],opt3:parts[3],opt4:parts[4],correct:parts[5],subject,topic,explanation};
     }
-    // ── 🐛 ফিক্স: ৯টার বেশি অংশ — প্রশ্নের ভিতরেই সেমিকোলন আছে (Written-এর একই বাগ,
-    // দেখো ওই কমেন্ট)। শেষ ২টা অংশ Subject/Topic, তার আগের সব একসাথে জোড়া দিয়ে
-    // প্রথম ৫টা সেমিকোলনে প্রশ্ন/অপ১-৪/সঠিকউত্তর আলাদা করা হচ্ছে (option/answer এ সেমিকোলন
-    // থাকার সম্ভাবনা কম, তাই এগুলোর জন্য এখনো পজিশন-ভিত্তিক split নিরাপদ) ──
+    // ── ৯টার বেশি অংশ — প্রশ্নের ভিতরেই কাকতালীয়ভাবে ";;" চলে এসেছে (Written-এর একই
+    // বাগ-প্রতিরোধ, দেখো ওই কমেন্ট)। শেষ ২টা অংশ Subject/Topic, তার আগের সব একসাথে
+    // জোড়া দিয়ে প্রথম ৫টা ";;"-এ প্রশ্ন/অপ১-৪/সঠিকউত্তর আলাদা করা হচ্ছে ──
     topic=parts[parts.length-1];
     subject=parts[parts.length-2];
     const bodyParts=parts.slice(0,parts.length-2);
-    const q=bodyParts.slice(0,-5).join(";").trim(); // প্রশ্নে সেমিকোলন থাকলে বাকিটা এখানেই জোড়া লাগবে
+    const q=bodyParts.slice(0,-5).join(DELIM).trim(); // প্রশ্নে ";;" থাকলে বাকিটা এখানেই জোড়া লাগবে
     const[o1,o2,o3,o4,ocorrect]=bodyParts.slice(-5);
     if(!q)return{err:true,reason:"MCQ: প্রশ্ন খালি"};
     if(!ocorrect)return{err:true,reason:"MCQ: সঠিক উত্তর খালি"};
