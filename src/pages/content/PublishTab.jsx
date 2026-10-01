@@ -210,6 +210,9 @@ function PublishTab({push}){
             🟡 {dirtyCount}টি Topic বদলেছে, publish করা বাকি
           </div>
         )}
+        <div style={{fontSize:10.5,color:C.muted,marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`,lineHeight:1.5}}>
+          ℹ️ একটা অটো-ট্রিগার প্রতি ১০ মিনিটে নিজে থেকেই পাবলিশ করে দেয় (তুমি এই পেজ না খুললেও) — তাই প্রায়ই এখানে "up-to-date" দেখাবে, মানে অটো-জব আগেই কাজটা সেরে ফেলেছে। এটা Topics শিটের row_count রিফ্রেশ করা ভিন্ন আরেকটা অটো-ট্রিগার (প্রতি ১৫ মিনিটে) থেকে আলাদা জিনিস।
+        </div>
       </div>
 
       {/* ── CDN-এ এখন বাস্তবে কতটা আছে (read-only, manifest.json থেকে সরাসরি) ── */}
@@ -465,10 +468,16 @@ function PublishTab({push}){
         </div>
       )}
 
-      {/* ── শেষ Publish-এর persistent status ── */}
+      {/* ── শেষ Publish-এর persistent status — এটা শুধু এই ডিভাইসের ব্রাউজারে
+          (localStorage) শেষ কবে এখান থেকে ম্যানুয়ালি "Publish Now" চাপা
+          হয়েছিল তার রেকর্ড। প্রতি ১০ মিনিটে অটো-publishScheduled ট্রিগারও
+          আলাদাভাবে পাবলিশ করে, যেটা এই localStorage-এ ধরা পড়ে না — তাই এই
+          কার্ড পুরনো/stale দেখাতে পারে যদিও CDN আসলে আপ-টু-ডেট। আসল/লাইভ
+          অবস্থা সবসময় উপরের "🌐 CDN-এ এখন যা আছে" কার্ডে (সরাসরি manifest.json
+          থেকে পড়া) — সেটাই একমাত্র সার্ভার-সত্য উৎস। ── */}
       {lastResult && (
         <div className="card" style={{marginTop:16}}>
-          <div style={{fontSize:12,fontWeight:700,marginBottom:6,color:C.muted}}>সর্বশেষ Publish</div>
+          <div style={{fontSize:12,fontWeight:700,marginBottom:6,color:C.muted}}>🖥️ সর্বশেষ Publish (এই ডিভাইসে, ম্যানুয়াল)</div>
           <div style={{fontSize:12,color:C.text}}>
             {new Date(lastResult.at).toLocaleString("bn-BD")}
           </div>
@@ -480,6 +489,11 @@ function PublishTab({push}){
           </div>
           {lastResult.sanityWarning && (
             <div style={{fontSize:11,color:C.warning,marginTop:6}}>{lastResult.sanityWarning}</div>
+          )}
+          {publishStats?.version && lastResult.manifestVersion && publishStats.version>lastResult.manifestVersion && (
+            <div style={{fontSize:11,color:C.muted,marginTop:8,paddingTop:8,borderTop:`1px dashed ${C.border}`}}>
+              ℹ️ এটা পুরনো তথ্য — এর পর প্রতি ১০ মিনিটের অটো-Publish (অন্য সেশনে বা এই ডিভাইস বন্ধ থাকা অবস্থায়ও চলে) আরও v{publishStats.version} পর্যন্ত আপডেট করে ফেলেছে। আসল বর্তমান অবস্থা উপরের "🌐 CDN-এ এখন যা আছে" কার্ডে দেখো, এটা শুধু এই ডিভাইসে শেষ কবে ম্যানুয়ালি চাপা হয়েছিল তার ইতিহাস।
+            </div>
           )}
         </div>
       )}
