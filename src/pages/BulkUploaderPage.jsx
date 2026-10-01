@@ -237,15 +237,28 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     let cancelled=false;
     const t=setTimeout(async()=>{
       setDupPreviewLoading(true);
-      const entries=getEntries(bulkText).map(e=>({...parseEntry(e,eff),_raw:e})).filter(r=>r.ok);
-      if(!entries.length){ if(!cancelled){ setDupPreview(null); setDupPreviewLoading(false);} return; }
-      const res=await resolveSubjectTopicForEntries({
-        entries, subjectOptions, topicsAll:refData?.topics||[], sheet:mode,
-        fallbackSubject, fallbackTopic, dryRun:true,
-      });
-      if(cancelled)return;
-      setDupPreview(res.ok?res:null);
-      setDupPreviewLoading(false);
+      try{
+        const entries=getEntries(bulkText).map(e=>({...parseEntry(e,eff),_raw:e})).filter(r=>r.ok);
+        if(!entries.length){ if(!cancelled){ setDupPreview(null);} return; }
+        const res=await resolveSubjectTopicForEntries({
+          entries, subjectOptions, topicsAll:refData?.topics||[], sheet:mode,
+          fallbackSubject, fallbackTopic, dryRun:true,
+        });
+        if(cancelled)return;
+        setDupPreview(res.ok?res:null);
+      }catch(err){
+        // 🐛 গুরুত্বপূর্ণ ফিক্স: আগে এখানে কোনো try/catch ছিল না — কোনো একটা
+        // লাইনে অপ্রত্যাশিত ডেটা (যেমন কোনো ফিল্ড string না হয়ে অন্য টাইপ)
+        // থাকলে এই async কলব্যাক exception ছুঁড়ে থেমে যেত, আর
+        // setDupPreviewLoading(false) নিচে কখনো পৌঁছাতই পারত না — ফলে
+        // "⏳ Subject/Topic চেক করা হচ্ছে..." মেসেজ চিরতরে আটকে থাকত এবং মনে
+        // হতো পেজটা কাজ করছে না (এটাই ইউজার-রিপোর্টেড বাগ)। এখন এরর ধরা
+        // পড়ে, console-এ লগ হয়, আর finally ব্লক সবসময় loading state ছেড়ে দেয়।
+        console.error("dupPreview check failed:",err);
+        if(!cancelled) setDupPreview(null);
+      }finally{
+        if(!cancelled) setDupPreviewLoading(false);
+      }
     },700);
     return ()=>{ cancelled=true; clearTimeout(t); };
   },[bulkText,mode,qtype,fallbackSubject,fallbackTopic,refData]);
@@ -463,11 +476,20 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     stopRef.current=false;
     setLog([]);
 
+    // 🐛 গুরুত্বপূর্ণ ফিক্স: আগে এই গোটা ব্লকে কোনো try/catch ছিল না। মাঝখানে
+    // কোথাও অপ্রত্যাশিত কোনো এরর (network glitch, কোনো field অপ্রত্যাশিত টাইপ
+    // হওয়া ইত্যাদি) ছুঁড়লে setRunning(false) আর কখনো চলত না — Submit বাটন
+    // চিরতরে "চলছে" অবস্থায় আটকে থাকত, পেজটা পুরোপুরি অকেজো মনে হতো যতক্ষণ না
+    // পেজ রিলোড করা হতো। এখন পুরো ফ্লো try/catch/finally দিয়ে মোড়া — যেকোনো
+    // এরর ধরা পড়বে, স্পষ্ট মেসেজ দেখাবে, আর finally-তে setRunning(false)
+    // সবসময় নিশ্চিতভাবে চলবে, যাই ঘটুক না কেন।
+    try{
+
     if(mode==="QBank" && postSel.name.trim()&&instSel.name.trim()&&examYear.trim()){
       const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
-      if(!postRes.ok){ setRunning(false); push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      if(!postRes.ok){ push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
       const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
-      if(!instRes.ok){ setRunning(false); push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      if(!instRes.ok){ push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
       examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
       if(postRes.created||instRes.created) loadRefData(); // নতুন পদ/প্রতিষ্ঠান তৈরি হলে তালিকা রিফ্রেশ
     }
@@ -482,7 +504,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     if(isInline){
       addLog("🔎 Subject/Topic মিলিয়ে দেখা হচ্ছে...","ok");
       const r=await resolveSubjectTopicPerEntry(entries);
-      if(!r.ok){ setRunning(false); push("error","❌ "+r.reason,""); return; }
+      if(!r.ok){ push("error","❌ "+r.reason,""); return; }
       perEntry=r.resolved;
       if(r.anyCreated) loadRefData(); // নতুন subject/topic তৈরি হলে dropdown-ও রিফ্রেশ হোক
     }
@@ -531,7 +553,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     });
     entries.forEach(item=>addLog(`… ${(item.q||"").substring(0,55)}...`,"ok"));
     setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
-    setRunning(false);setDone(true);
+    setDone(true);
     if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার","sheet",mode,result.failedRows);
     const subjLabel=isInline?[...new Set(perEntry.map(p=>p.subjectName))].join(", "):subjectName;
     if(result.added>0)push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${mode} — ${subjLabel}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:"")+(batchGroupId?` · group: ${batchGroupId}`:""));
@@ -545,6 +567,12 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     if(result.failedRows.length)push("error",`${result.failedRows.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if((result.added>0||result.skipped>0)&&archiveIdRef.current){ archiveDelete(archiveIdRef.current); archiveIdRef.current=null; }
     if(result.added>0) clearDraft(LS_DRAFT_BULK); // ✅ সফল সেভ হয়ে গেছে, আর ড্রাফট রাখার দরকার নেই
+
+    }catch(err){
+      push("error","❌ অপ্রত্যাশিত এরর — সাবমিট থেমে গেছে",String(err?.message||err));
+    }finally{
+      setRunning(false);
+    }
   };
 
   const reset=()=>{setBulkText("");setValidStats(null);setLog([]);setProgress({done:0,total:0,sent:0,failed:0});setDone(false);setTopicId("");setPostSel({id:"",name:""});setInstSel({id:"",name:""});setExamYear("");archiveIdRef.current=null;clearDraft(LS_DRAFT_BULK);};
