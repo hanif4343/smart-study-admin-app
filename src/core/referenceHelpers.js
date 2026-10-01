@@ -83,9 +83,9 @@ async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,g
   const resolved=[];
   const wouldCreate=[]; // শুধু dryRun-এ ব্যবহৃত — deduped (subjCache/topicCache-এর কারণে একই নাম দুইবার ঢোকে না)
   for(const item of entries){
-    const sName=((item.subject&&item.subject.trim())||fallbackSubject||"").trim();
-    const tName=((item.topic&&item.topic.trim())||fallbackTopic||"").trim();
-    if(!sName||!tName) return{ok:false,reason:`"${String(item.q||"").substring(0,40)}..." — Subject/Topic নেই (লাইনে টাইপ করো, অথবা ওপরের ফিল্ড পূরণ করো)`};
+    const sName=((item.subject&&String(item.subject).trim())||fallbackSubject||"").trim();
+    const tName=((item.topic&&String(item.topic).trim())||fallbackTopic||"").trim();
+    if(!sName||!tName) return{ok:false,reason:`"${(item.q||"").substring(0,40)}..." — Subject/Topic নেই (লাইনে টাইপ করো, অথবা ওপরের ফিল্ড পূরণ করো)`};
     const sKey=norm(sName);
     let sId=subjCache.get(sKey);
     if(!sId){
@@ -99,7 +99,7 @@ async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,g
         // করতে পারে। fromFallback:true মানে এই Subject লাইনে টাইপ করা হয়নি,
         // ওপরের গ্লোবাল Fallback Subject ফিল্ড থেকে এসেছে — তখন bulkText-এ কোনো
         // লাইন নেই জাম্প করার মতো, বরং Fallback ইনপুট বক্সটাই ফোকাস করা উচিত।
-        const fromFallback=!(item.subject&&item.subject.trim());
+        const fromFallback=!(item.subject&&String(item.subject).trim());
         wouldCreate.push({type:"subject",name:sName,sheet,similarTo:similar?similar.name:null,sourceEntry:fromFallback?null:item._raw,fromFallback});
         sId="__NEW_SUBJECT__"+sKey;
         curSubjects=[...curSubjects,{subject_id:sId,subject_name:sName,sheet}];
@@ -118,7 +118,7 @@ async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,g
       if(hit) tId=hit.topic_id;
       else if(dryRun){
         const similar=fuzzyBestMatch(tName,curTopics.filter(t=>t.subject_id===sId).map(t=>({id:t.topic_id,name:t.topic_name})));
-        const fromFallback=!(item.topic&&item.topic.trim());
+        const fromFallback=!(item.topic&&String(item.topic).trim());
         wouldCreate.push({type:"topic",name:tName,parentSubjectName:sName,similarTo:similar?similar.name:null,sourceEntry:fromFallback?null:item._raw,fromFallback});
         tId="__NEW_TOPIC__"+tKey;
         curTopics=[...curTopics,{topic_id:tId,topic_name:tName,subject_id:sId}];
