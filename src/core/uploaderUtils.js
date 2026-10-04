@@ -19,6 +19,40 @@ function getBulkEntries(raw){
   if(entries.length>0)return entries;
   return raw.split("\n").map(s=>s.trim()).filter(Boolean);
 }
+// 🛡️ ফরম্যাট-উদাহরণ/টেমপ্লেট এন্ট্রি ডিটেক্টর — ChatGPT/Gemini-এর মতো AI টুল
+// প্রায়ই আসল প্রশ্নগুলোর আগে নিজে থেকেই ফরম্যাট-টেমপ্লেটটা আবার লিখে দেয়
+// (যেমন "{{প্রশ্ন;;অপ১;;অপ২;;অপ৩;;অপ৪;;উত্তর;;ব্যাখ্যা}}")। এটা সিনট্যাক্স
+// অনুযায়ী ১০০% ভ্যালিড একটা এন্ট্রি (৬+ কলাম, সব ভরা), তাই আগে এটাও আসল
+// প্রশ্নের মতোই পাস হয়ে যেত — ডাটাবেসে পুরোপুরি অর্থহীন একটা প্রশ্ন ("প্রশ্ন"
+// নামের প্রশ্ন, "অপ১/২/৩/৪" নামের অপশন) ঢুকে যাওয়ার ঝুঁকি ছিল। এই ফাংশন
+// q/correct/options-এর টেক্সট পরিচিত টেমপ্লেট-শব্দের সাথে কতটা মিলছে সেটা
+// (একসাথে একাধিক ফিল্ডে মিলতে হবে, শুধু একটাতে না — ভুলে আসল প্রশ্ন বাদ
+// পড়া এড়াতে) চেক করে বুঝে নেয় এটা আসল প্রশ্ন নাকি নিছক উদাহরণ।
+const PLACEHOLDER_Q=new Set(["প্রশ্ন","question","প্রশ্নটি","প্রশ্ন টি"]);
+const PLACEHOLDER_ANS=new Set(["উত্তর","সঠিকউত্তর","সঠিক উত্তর","answer","correct","correctanswer","correct answer"]);
+const PLACEHOLDER_OPT_SETS=[
+  ["অপ১","অপ২","অপ৩","অপ৪"],
+  ["অপশন১","অপশন২","অপশন৩","অপশন৪"],
+  ["অপশন ১","অপশন ২","অপশন ৩","অপশন ৪"],
+  ["option1","option2","option3","option4"],
+  ["option 1","option 2","option 3","option 4"],
+  ["opt1","opt2","opt3","opt4"],
+  ["opt 1","opt 2","opt 3","opt 4"],
+];
+const flatNorm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+function isTemplatePlaceholder({q,correct,opt1,opt2,opt3,opt4}){
+  const qN=flatNorm(q), cN=flatNorm(correct);
+  const qMatch=PLACEHOLDER_Q.has(qN), cMatch=PLACEHOLDER_ANS.has(cN);
+  if(opt1!==undefined){
+    // MCQ: প্রশ্ন + উত্তর + ৪টা অপশন — তিন ধরনের ফিল্ড একসাথে না মিললে স্কিপ হবে না
+    if(!qMatch||!cMatch)return false;
+    const opts=[opt1,opt2,opt3,opt4].map(flatNorm);
+    return PLACEHOLDER_OPT_SETS.some(set=>set.every((w,i)=>opts[i]===w));
+  }
+  // Written/Study: অপশন নেই, তাই প্রশ্ন + উত্তর দুটোই মিললে তবেই স্কিপ
+  return qMatch&&cMatch;
+}
+
 // effectiveType: "Study" | "Written" | "MCQ"
 function parseBulkEntry(entry, effectiveType){
   const tr=entry.trim();
@@ -65,6 +99,7 @@ function parseBulkEntry(entry, effectiveType){
     const ans=tr.substring(si+DELIM.length).trim();
     if(!q)return{err:true,reason:"Study: প্রশ্ন খালি"};
     if(!ans)return{err:true,reason:"Study: উত্তর খালি"};
+    if(isTemplatePlaceholder({q,correct:ans}))return{skip:true,reason:"ফরম্যাট-টেমপ্লেট উদাহরণ সারি (আসল প্রশ্ন না) — বাদ দেওয়া হলো"};
     return{ok:true,q,correct:ans,explanation:""};
 
   } else if(effectiveType==="Written"){
@@ -99,6 +134,7 @@ function parseBulkEntry(entry, effectiveType){
       if(!topic)return{err:true,reason:"Written: Topic খালি"};
       const sc=sanityCheck(subject,topic,"Written"); if(sc)return sc;
     }
+    if(isTemplatePlaceholder({q,correct:ans}))return{skip:true,reason:"ফরম্যাট-টেমপ্লেট উদাহরণ সারি (আসল প্রশ্ন না) — বাদ দেওয়া হলো"};
     return{ok:true,q,correct:ans,subject,topic,explanation};
 
   } else {
@@ -122,6 +158,7 @@ function parseBulkEntry(entry, effectiveType){
         if(!topic)return{err:true,reason:"MCQ: Topic খালি"};
         const sc=sanityCheck(subject,topic,"MCQ"); if(sc)return sc;
       }
+      if(isTemplatePlaceholder({q:parts[0],correct:parts[5],opt1:parts[1],opt2:parts[2],opt3:parts[3],opt4:parts[4]}))return{skip:true,reason:"ফরম্যাট-টেমপ্লেট উদাহরণ সারি (আসল প্রশ্ন না) — বাদ দেওয়া হলো"};
       return{ok:true,q:parts[0],opt1:parts[1],opt2:parts[2],opt3:parts[3],opt4:parts[4],correct:parts[5],subject,topic,explanation};
     }
     // ── ৯টার বেশি অংশ — প্রশ্নের ভিতরেই কাকতালীয়ভাবে ";;" চলে এসেছে (Written-এর একই
@@ -137,6 +174,7 @@ function parseBulkEntry(entry, effectiveType){
     if(!subject)return{err:true,reason:"MCQ: Subject খালি"};
     if(!topic)return{err:true,reason:"MCQ: Topic খালি"};
     const sc=sanityCheck(subject,topic,"MCQ"); if(sc)return sc;
+    if(isTemplatePlaceholder({q,correct:ocorrect,opt1:o1,opt2:o2,opt3:o3,opt4:o4}))return{skip:true,reason:"ফরম্যাট-টেমপ্লেট উদাহরণ সারি (আসল প্রশ্ন না) — বাদ দেওয়া হলো"};
     return{ok:true,q,opt1:o1,opt2:o2,opt3:o3,opt4:o4,correct:ocorrect,subject,topic,explanation:""};
   }
 }
