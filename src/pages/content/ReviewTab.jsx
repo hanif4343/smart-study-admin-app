@@ -12,6 +12,8 @@
    আছে), Subject/Topic-এর ক্ষেত্রে resolveOrCreateReference দিয়ে বিদ্যমান
    reference-id রিইউজ বা প্রয়োজনে নতুন তৈরি — ঠিক MultiSubjectImportPage/
    BrowseTab যেভাবে করে, সেই একই প্যাটার্ন। ── */
+import { getCachedReferenceData } from "../../core/refCache.js";
+import { useRefCacheSync } from "../../hooks/useRefCacheSync.js";
 import React, { useState, useEffect, useMemo } from "react";
 import { C, tint } from "../../core/config.js";
 import { useSheetRows, invalidate } from "../../core/dataCache.js";
@@ -86,7 +88,8 @@ function ReviewTab({push,tick}){
   const{data:raw,loading}=useSheetRows("QBank",(tick||0)+localTick*1000);
   const allQ=useMemo(()=>toArr(raw),[raw]);
 
-  const[refData,setRefData]=useState(null);
+  const[refData,setRefData]=useState(getCachedReferenceData);
+  useRefCacheSync(setRefData);
   const[allAppearances,setAllAppearances]=useState([]);
   const[refLoading,setRefLoading]=useState(true);
   useEffect(()=>{
@@ -96,7 +99,7 @@ function ReviewTab({push,tick}){
       fetchReferenceData({gasSecret}),
       fetchAllExamAppearances({gasSecret}),
     ]).then(([rd,ap])=>{
-      setRefData(rd);
+      if(rd) setRefData(rd);
       setAllAppearances(ap.ok?ap.appearances:[]);
       setRefLoading(false);
     }).catch(()=>setRefLoading(false));
