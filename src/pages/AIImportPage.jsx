@@ -1,4 +1,6 @@
 /* ══════════ AI IMPORT PAGE (ML Kit OCR) ══════════ */
+import { getCachedReferenceData } from "../core/refCache.js";
+import { useRefCacheSync } from "../hooks/useRefCacheSync.js";
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { C, tint } from "../core/config.js";
 import { _LC } from "../core/logger.js";
@@ -62,7 +64,8 @@ function AIImportPage({push,onSendToBulk}){
   // PaperComposer-এর জন্য refData/sessionCount — SingleQuestionEntryPage-এ যেই
   // একই প্যাটার্ন ব্যবহার হয় (ছোট ব্লক বলে এখানে আলাদাভাবে রাখা হলো, শেয়ার্ড
   // হুক বানানো এই মুহূর্তে প্রয়োজনীয় না)।
-  const[cardRefData,setCardRefData]=useState(null);
+  const[cardRefData,setCardRefData]=useState(getCachedReferenceData);
+  useRefCacheSync(setCardRefData);
   const[cardRefDataError,setCardRefDataError]=useState(null);
   const[cardRefDataLoading,setCardRefDataLoading]=useState(false);
   const loadCardRefData=useCallback(()=>{
@@ -126,8 +129,9 @@ function AIImportPage({push,onSendToBulk}){
   /* ── Subjects/Topics রেফারেন্স টেবিল — সাবমিটের আগে subject/topic টেক্সট থেকে
      subject_id/topic_id বের করতে লাগে (raw text কখনো sheet-এ যায় না, বিশেষ করে
      QBank-এ তো plain "subject" কলামই নেই) ── */
-  const[refData,setRefData]=useState(null);
-  useEffect(()=>{ fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); },[gasSecret]);
+  const[refData,setRefData]=useState(getCachedReferenceData);
+  useRefCacheSync(setRefData);
+  useEffect(()=>{ fetchReferenceData({gasSecret}).then(d=>{ if(d) setRefData(d); }).catch(()=>{}); },[gasSecret]);
   const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===effMode):[];
 
   // ── QBank + Post/Institution/Year (Exam Appearance) — এই পুরো ব্যাচের প্রশ্ন যে পরীক্ষা
