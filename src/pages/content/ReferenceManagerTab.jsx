@@ -4,6 +4,8 @@
    renameReferenceItem/deleteReferenceItem action দিয়ে, প্রতিটাই Quiz/QBank/Study-এর
    প্রশ্নের রো টাচ না করে শুধু ছোট রেফারেন্স-টেবিলে কাজ করে।
    ⚠️ SubTopics তুলে দেওয়া হয়েছে — QBank এখন Quiz/Study-এর মতোই ২-লেভেল (Subject→Topic)। */
+import { getCachedReferenceData } from "../../core/refCache.js";
+import { useRefCacheSync } from "../../hooks/useRefCacheSync.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
@@ -51,16 +53,17 @@ function ReferenceManagerTab({push}){
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
-  const[refData,setRefData]=useState(null);
+  const[refData,setRefData]=useState(getCachedReferenceData);
+  useRefCacheSync(setRefData);
   const[loading,setLoading]=useState(false);
   const[tick,setTick]=useState(0);
   const refresh=useCallback(()=>setTick(t=>t+1),[]);
 
   useEffect(()=>{
-    if(!gasSecret){ setRefData(null); return; }
+    if(!gasSecret){ return; }
     let cancelled=false;
-    setLoading(true);
-    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled){ setRefData(d); setLoading(false); } });
+    setLoading(!getCachedReferenceData());
+    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled){ if(d) setRefData(d); setLoading(false); } });
     return()=>{ cancelled=true; };
   },[gasSecret,tick]);
 
