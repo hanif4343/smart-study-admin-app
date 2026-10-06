@@ -16,6 +16,8 @@
      একটা নতুন Subject/Topic রেফারেন্স-এন্ট্রি তৈরি হয় (0 প্রশ্ন নিয়ে), আলাদা কোনো
      প্ল্যান-লিস্ট এϵ্ট্রি না — তাই তৈরি হওয়ার সাথে সাথেই এটা "আসল ডেটাবেজের অংশ"।
    ══════════════════════════════════════════════════════════════════════════ */
+import { getCachedReferenceData } from "../../core/refCache.js";
+import { useRefCacheSync } from "../../hooks/useRefCacheSync.js";
 import React, { useState, useEffect, useMemo } from "react";
 import { C, tint, GAS } from "../../core/config.js";
 import { fbPush, fbDelete } from "../../core/firebase.js";
@@ -90,13 +92,14 @@ function TopicTracker({push,tick}){
   const pickedKeySet = useMemo(()=>new Set(picks.map(p=>p.subject+"||"+p.topic)),[picks]);
 
   const gasSecret=loadSharedGasSecret();
-  const[refData,setRefData]=useState(null);
+  const[refData,setRefData]=useState(getCachedReferenceData);
+  useRefCacheSync(setRefData);
   const[refLoading,setRefLoading]=useState(false);
   useEffect(()=>{
     if(!gasSecret) return;
     let cancelled=false;
-    setRefLoading(true);
-    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled){ setRefData(d); setRefLoading(false); } });
+    setRefLoading(!getCachedReferenceData());
+    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled){ if(d) setRefData(d); setRefLoading(false); } });
     return()=>{ cancelled=true; };
   },[gasSecret,tick]);
 
