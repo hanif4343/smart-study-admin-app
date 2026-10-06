@@ -6,6 +6,8 @@
    Subjects/Topics রেফারেন্স-টেবিলের ঠিক ১টা রো বদলানো — Quiz/QBank/Study
    কখনো টাচ হয় না, প্রশ্ন যতই থাকুক (৭৭৬১টা হোক বা ২ লাখ)।
    ⚠️ SubTopic তুলে দেওয়া হয়েছে — QBank এখন Quiz/Study-এর মতোই ২-লেভেল। */
+import { getCachedReferenceData } from "../../core/refCache.js";
+import { useRefCacheSync } from "../../hooks/useRefCacheSync.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
@@ -21,17 +23,18 @@ function RenameTab({push}){
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
-  const[refData,setRefData]=useState(null); // {subjects,topics,tags,posts,institutions}
+  const[refData,setRefData]=useState(getCachedReferenceData); // {subjects,topics,tags,posts,institutions}
+  useRefCacheSync(setRefData);
   const[loading,setLoading]=useState(false);
   const[tick,setTick]=useState(0);
   const refresh=useCallback(()=>setTick(t=>t+1),[]);
 
   useEffect(()=>{
-    if(!gasSecret){ setRefData(null); return; }
+    if(!gasSecret){ return; }
     let cancelled=false;
-    setLoading(true);
+    setLoading(!getCachedReferenceData());
     fetchReferenceData({gasSecret}).then(d=>{
-      if(!cancelled){ setRefData(d); setLoading(false); }
+      if(!cancelled){ if(d) setRefData(d); setLoading(false); }
     });
     return()=>{ cancelled=true; };
   },[gasSecret,tick]);
