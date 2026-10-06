@@ -6,6 +6,8 @@
    দিয়ে লিস্ট হয়, আর ডিলিট হয় GAS-এর নতুন "deleteByReferenceId" action দিয়ে —
    row_start/row_count ইনডেক্স ব্যবহার করে একটা মাত্র contiguous-range delete,
    অনেক দ্রুত এবং নিরাপদ। */
+import { getCachedReferenceData } from "../../core/refCache.js";
+import { useRefCacheSync } from "../../hooks/useRefCacheSync.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
@@ -18,16 +20,17 @@ function DeleteTab({push}){
 
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
-  const[refData,setRefData]=useState(null);
+  const[refData,setRefData]=useState(getCachedReferenceData);
+  useRefCacheSync(setRefData);
   const[loading,setLoading]=useState(false);
   const[tick,setTick]=useState(0);
   const refresh=useCallback(()=>setTick(t=>t+1),[]);
 
   useEffect(()=>{
-    if(!gasSecret){ setRefData(null); return; }
+    if(!gasSecret){ return; }
     let cancelled=false;
-    setLoading(true);
-    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled){ setRefData(d); setLoading(false); } });
+    setLoading(!getCachedReferenceData());
+    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled){ if(d) setRefData(d); setLoading(false); } });
     return()=>{ cancelled=true; };
   },[gasSecret,tick]);
 
