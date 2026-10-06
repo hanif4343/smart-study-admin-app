@@ -1,4 +1,6 @@
 /* ══════════ BULK UPLOADER PAGE ══════════ */
+import { getCachedReferenceData } from "../core/refCache.js";
+import { useRefCacheSync } from "../hooks/useRefCacheSync.js";
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { C, tint } from "../core/config.js";
 import { invalidate } from "../core/dataCache.js";
@@ -50,7 +52,8 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   // Quiz/QBank Subject/Topic থেকে মিলে যাওয়া নাম সাজেশন হিসেবে দেখাবে।
   const[fbSubjFocus,setFbSubjFocus]=useState(false);
   const[fbTopicFocus,setFbTopicFocus]=useState(false);
-  const[refData,setRefData]=useState(null);
+  const[refData,setRefData]=useState(getCachedReferenceData); // 🆕 cache থেকে সঙ্গে সঙ্গে — নেটের অপেক্ষা নেই
+  useRefCacheSync(setRefData);
   const[refLoading,setRefLoading]=useState(false);
   const[bulkText,setBulkText]=useState("");
   const[tagIds,setTagIds]=useState([]); // আগে audienceTags (নামের array) ছিল — এখন Tags-রেফারেন্স-টেবিলের id array
@@ -85,9 +88,9 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
 
   /* Load Subjects/Topics/Tags/Posts/Institutions reference-টেবিল (আগে Firebase স্ক্যান করে distinct subject বের করা হতো — এখন GAS getReferenceData) */
   const loadRefData=useCallback(()=>{
-    if(!gasSecret){ setRefData(null); return; }
+    if(!gasSecret){ return; }
     setRefLoading(true);
-    fetchReferenceData({gasSecret}).then(d=>{ setRefData(d); setRefLoading(false); });
+    fetchReferenceData({gasSecret}).then(d=>{ if(d) setRefData(d); setRefLoading(false); });
   },[gasSecret]);
   useEffect(()=>{ loadRefData(); },[loadRefData]);
 
