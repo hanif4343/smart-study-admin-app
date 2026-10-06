@@ -2,6 +2,8 @@
 import { GAS } from "./config.js";
 import { fbPush, fbSet } from "./firebase.js";
 import { invalidate } from "./dataCache.js";
+import { getCachedReferenceData, setCachedReferenceData, getRefCacheTs } from "./refCache.js";
+import { loadSharedGasSecret } from "./utils.js";
 
 // 🐛 ফিক্স (২০+ মিনিট ধরে "সেভ হচ্ছে..." আটকে থাকা): আগে plain fetch()-এর কোনো
 // timeout ছিল না — ধীরগতির/অস্থির নেটওয়ার্কে (LTE-তে কয়েক KB/s দেখা গেছে
@@ -220,29 +222,79 @@ async function deleteIdsInSheet({sheet,ids,gasSecret}){
 // চিরতরে null থেকে যেত, আর সাবমিট চাপলেই বারবার "এখনো লোড হচ্ছে" দেখাতো — আসলে
 // লোড হচ্ছিল না, ব্যর্থ হয়ে থেমে গিয়েছিল, শুধু ব্যবহারকারীর কাছে সেটা স্পষ্ট ছিল
 // না। এখন non-JSON/network এরর পেলে ৮০০ms পর একবার নিজে থেকে আবার চেষ্টা করে।
+/* 🆕 CACHE-AWARE ভার্সন (stale-while-revalidate):
+   • নেটওয়ার্ক সফল হলে → ডেটা localStorage cache-এ সেভ + সব পেজকে জানানো হয়।
+   • নেটওয়ার্ক ব্যর্থ/slow/timeout হলে → cache থাকলে সেটাই ফেরত (ok:true, stale:true),
+     তাই নেট কম থাকলেও Subject/Topic/Post/Institution/Tag পাওয়া যায়।
+   • cache-ও না থাকলে আগের মতোই error ফেরত (🔁 রিট্রাই বাটন কাজ করে)।
+   • একই সময়ে অনেক কম্পোনেন্ট কল করলেও আসল রিকোয়েস্ট যায় ১টাই (dedupe)। */
+const REF_TIMEOUT_MS = 20000;
+let _refInflight = null; // {secret, promise}
+
+function _refStaleFallback(errMsg){
+  const cached = getCachedReferenceData();
+  if(cached) return {ok:true,data:cached,error:null,stale:true,warn:errMsg};
+  return {ok:false,data:null,error:errMsg};
+}
+
+async function _fetchReferenceNetwork(gasSecret){
+  const url=`${GAS}?action=getReferenceData&secret=${encodeURIComponent(gasSecret)}`;
+  for(let attempt=0;attempt<=1;attempt++){
+    const ctrl=typeof AbortController!=="undefined"?new AbortController():null;
+    const timer=ctrl?setTimeout(()=>ctrl.abort(),REF_TIMEOUT_MS):null;
+    try{
+      const resp=await fetch(url,ctrl?{signal:ctrl.signal}:undefined);
+      const data=await resp.json().catch(()=>null);
+      if(timer) clearTimeout(timer);
+      if(!data){
+        if(attempt<1){ await new Promise(r=>setTimeout(r,800)); continue; }
+        return _refStaleFallback("সার্ভার থেকে সঠিক JSON আসেনি (নেটওয়ার্ক সমস্যা বা GAS deploy ভাঙা থাকতে পারে) — 'রিট্রাই' চাপো");
+      }
+      if(data.status!=="success"||!data.data){
+        // সার্ভার স্পষ্টভাবে reject করেছে (যেমন ভুল secret) — এটা cache দিয়ে ঢাকা হয় না
+        return{ok:false,data:null,error:data.message||"getReferenceData ব্যর্থ — GAS Secret Key ভুল বা মেয়াদোত্তীর্ণ হতে পারে"};
+      }
+      setCachedReferenceData(data.data);
+      return{ok:true,data:data.data,error:null,stale:false};
+    }catch(e){
+      if(timer) clearTimeout(timer);
+      if(attempt<1){ await new Promise(r=>setTimeout(r,800)); continue; }
+      const msg=e?.name==="AbortError"?"নেট খুব slow — সময় শেষ":(e?.message||String(e));
+      return _refStaleFallback(msg);
+    }
+  }
+}
+
 async function fetchReferenceDataVerbose({gasSecret}){
   if(!GAS) return{ok:false,data:null,error:"GAS URL সেট করা নেই (বিল্ডে VITE_GAS_URL env var চেক করো)"};
   if(!gasSecret) return{ok:false,data:null,error:"GAS Secret Key দেওয়া নেই — উপরে Save Location প্যানেলে বসাও"};
-  const url=`${GAS}?action=getReferenceData&secret=${encodeURIComponent(gasSecret)}`;
-  for(let attempt=0;attempt<=1;attempt++){
-    try{
-      const resp=await fetch(url);
-      const data=await resp.json().catch(()=>null);
-      if(!data){
-        if(attempt<1){ await new Promise(r=>setTimeout(r,800)); continue; }
-        return{ok:false,data:null,error:"সার্ভার থেকে সঠিক JSON আসেনি (নেটওয়ার্ক সমস্যা বা GAS deploy ভাঙা থাকতে পারে) — 'রিট্রাই' চাপো"};
-      }
-      if(data.status!=="success"||!data.data) return{ok:false,data:null,error:data.message||"getReferenceData ব্যর্থ — GAS Secret Key ভুল বা মেয়াদোত্তীর্ণ হতে পারে"};
-      return{ok:true,data:data.data,error:null};
-    }catch(e){
-      if(attempt<1){ await new Promise(r=>setTimeout(r,800)); continue; }
-      return{ok:false,data:null,error:e?.message||String(e)};
-    }
-  }
+  if(_refInflight && _refInflight.secret===gasSecret) return _refInflight.promise;
+  const promise=_fetchReferenceNetwork(gasSecret).finally(()=>{ if(_refInflight?.promise===promise) _refInflight=null; });
+  _refInflight={secret:gasSecret,promise};
+  return promise;
 }
 async function fetchReferenceData({gasSecret}){
   const res=await fetchReferenceDataVerbose({gasSecret});
   return res.ok?res.data:null;
+}
+
+/* Reference add/rename/delete-এর পর চলমান পুরনো fetch বাতিল — যাতে পরের fetch সত্যিই তাজা আসে */
+function _refMutated(){ _refInflight=null; }
+
+/* ব্যাকগ্রাউন্ডে নীরবে cache গরম রাখে — অ্যাপ খোলা/ফোকাস/অনলাইন হলে চলে।
+   force=false হলে ৬০ সেকেন্ডের মধ্যে আবার আনে না। */
+function warmReferenceCache({force=false}={}){
+  try{
+    const secret=loadSharedGasSecret();
+    if(!secret||!GAS) return;
+    if(!force && getCachedReferenceData() && Date.now()-getRefCacheTs()<60000) return;
+    fetchReferenceDataVerbose({gasSecret:secret}).catch(()=>{});
+  }catch(_){}
+}
+if(typeof window!=="undefined" && !window.__refCacheListeners){
+  window.__refCacheListeners=true;
+  window.addEventListener("online",()=>warmReferenceCache({force:true}));
+  document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") warmReferenceCache(); });
 }
 
 /* ── refType (subjects/topics/tags/posts/institutions) + id দিয়ে
@@ -281,6 +333,7 @@ async function renameReferenceItem({refType,id,newName,gasSecret,push}){
       push?.("error","❌ Rename ব্যর্থ",msg);
       return{ok:false};
     }
+    _refMutated();
     return{ok:true,rowsChanged:data.rowsChanged||1,firebaseSynced:data.firebaseSynced!==false};
   }catch(e){ push?.("error","❌ Rename ব্যর্থ",e.message); return{ok:false}; }
 }
@@ -301,6 +354,7 @@ async function addReferenceItem({refType,name,parentId,sheet,gasSecret,push}){
       push?.("error","❌ যোগ ব্যর্থ",msg);
       return{ok:false};
     }
+    _refMutated();
     return{ok:true,id:data.id};
   }catch(e){ push?.("error","❌ যোগ ব্যর্থ",e.message); return{ok:false}; }
 }
@@ -319,6 +373,7 @@ async function deleteReferenceItem({refType,id,gasSecret,push}){
       push?.("error","❌ ডিলিট ব্যর্থ",msg);
       return{ok:false};
     }
+    _refMutated();
     return{ok:true};
   }catch(e){ push?.("error","❌ ডিলিট ব্যর্থ",e.message); return{ok:false}; }
 }
@@ -333,6 +388,7 @@ async function deleteByReferenceId({refType,id,gasSecret,push}){
     const resp=await fetch(url);
     const data=await resp.json().catch(()=>({}));
     if(data.status!=="success"){ push?.("error","❌ ডিলিট ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
+    _refMutated();
     return{ok:true,deleted:data.deleted||0,examAppearancesDeleted:data.examAppearancesDeleted||0};
   }catch(e){ push?.("error","❌ ডিলিট ব্যর্থ",e.message); return{ok:false}; }
 }
@@ -535,4 +591,4 @@ async function forceReindexNow({gasSecret,push}){
   }catch(e){ push?.("error","❌ Reindex ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, updateFieldsInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, fetchReferenceDataVerbose, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest, forceReindexNow };
+export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, updateFieldsInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, fetchReferenceDataVerbose, warmReferenceCache, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest, forceReindexNow };
