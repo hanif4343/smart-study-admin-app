@@ -4,6 +4,8 @@
    ⚠️ এখন question_id ম্যানুয়ালি বসাতে হয় (Browse ট্যাব এখনো Sheet/GAS-এ migrate
    হয়নি, তাই সরাসরি "এই প্রশ্নে appearance যোগ করো" বাটন এখনো নেই — future task,
    master plan-এ নোট করা আছে)। */
+import { getCachedReferenceData } from "../../core/refCache.js";
+import { useRefCacheSync } from "../../hooks/useRefCacheSync.js";
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
@@ -14,10 +16,11 @@ import { TypeaheadCombo } from "../../components/shared/TypeaheadCombo.jsx";
 function ExamAppearancesTab({push}){
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
-  const[refData,setRefData]=useState(null);
+  const[refData,setRefData]=useState(getCachedReferenceData);
+  useRefCacheSync(setRefData);
   const loadRefData=useCallback(()=>{
     if(!gasSecret) return;
-    fetchReferenceData({gasSecret}).then(setRefData);
+    fetchReferenceData({gasSecret}).then(d=>{ if(d) setRefData(d); });
   },[gasSecret]);
   useEffect(()=>{ loadRefData(); },[loadRefData]);
 
