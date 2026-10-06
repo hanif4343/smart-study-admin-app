@@ -6,6 +6,8 @@
    ⚠️ NO-FIREBASE POLICY আপডেট: "Bulk Add Audience Tag" অংশ এখন dataCache.js-এর
    loadPath (Quiz/QBank/Study-এর জন্য primary GAS getSheetRows) দিয়ে Sheet থেকেই পড়ে,
    আর লেখাও GAS "updateField" (syncFieldsToSheet) দিয়ে হয় — Firebase পুরোপুরি বাইপাস। ── */
+import { getCachedReferenceData } from "../../core/refCache.js";
+import { useRefCacheSync } from "../../hooks/useRefCacheSync.js";
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { C, tint } from "../../core/config.js";
 import { useFB, invalidate } from "../../core/dataCache.js";
@@ -110,13 +112,14 @@ function AudienceTagRenameTab({push,tick}){
   // Collect all Tags from the reference table (Phase 5 — না আর Firebase স্ক্যান করে না)
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
-  const[refData,setRefData]=useState(null);
+  const[refData,setRefData]=useState(getCachedReferenceData);
+  useRefCacheSync(setRefData);
   const[refTick,setRefTick]=useState(0);
   const refreshTags=useCallback(()=>setRefTick(t=>t+1),[]);
   useEffect(()=>{
-    if(!gasSecret){ setRefData(null); return; }
+    if(!gasSecret){ return; }
     let cancelled=false;
-    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled) setRefData(d); });
+    fetchReferenceData({gasSecret}).then(d=>{ if(!cancelled&&d) setRefData(d); });
     return()=>{ cancelled=true; };
   },[gasSecret,refTick]);
 
