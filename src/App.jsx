@@ -5,6 +5,7 @@
    এ ভাগ করা হয়েছে। এখানে শুধু: routing shell, top-bar, bottom-nav,
    back-button/exit-confirm লজিক, badge counts, push-notification wiring.)
    ══════════════════════════════════════════════════════════════════ */
+import { warmReferenceCache } from "./core/sheetSave.js";
 import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 
 import { C, tint } from "./core/config.js";
@@ -110,6 +111,10 @@ export default function App(){
   // এখন loggedIn true হওয়া মাত্রই (fresh login বা optimistic-restore, দুটো ক্ষেত্রেই)
   // এই effect চলবে — টোকেন সেভ idempotent (বারবার চললেও সমস্যা নেই, শুধু ওভাররাইট হয়)।
   useEffect(()=>{ if(loggedIn) _saveAdminFcmToken(); },[loggedIn]);
+
+  // 🆕 লগইন/অ্যাপ খোলার সাথে সাথে Subject/Topic/Tag/Post/Institution cache চুপচাপ গরম করে রাখো —
+  //    যাতে Entry পেজ খুললে নেটের অপেক্ষা ছাড়াই সব লিস্ট সঙ্গে সঙ্গে পাওয়া যায়।
+  useEffect(()=>{ if(loggedIn) warmReferenceCache({force:true}); },[loggedIn]);
 
   // ⚡ Optimistic লগইনের পর ব্যাকগ্রাউন্ডে token সচল আছে কিনা যাচাই — সত্যিই ব্যর্থ হলেই
   //    (refresh token + সেভ করা পাসওয়ার্ড দিয়ে re-login দুটোই ব্যর্থ) লগআউট দেখানো হয়।
