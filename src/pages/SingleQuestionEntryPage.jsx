@@ -12,6 +12,8 @@
    দিয়ে পুরো চলতি কাজ (সারিসহ) নাম-ছাড়া তালিকায় জমা রাখা যায় — একই খসড়া পরে লোড
    করে আবার সেভ করলে নতুন এন্ট্রি না বানিয়ে (id মিলিয়ে) আপডেট হয়ে যায়, ডুপ্লিকেট
    হয় না। */
+import { getCachedReferenceData } from "../core/refCache.js";
+import { useRefCacheSync } from "../hooks/useRefCacheSync.js";
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
@@ -43,7 +45,8 @@ function SingleQuestionEntryPage({push}){
   const[audienceTags,setAudienceTags]=useState("Job");
 
   // ── Subjects/Topics/Posts/Institutions রেফারেন্স টেবিল ──
-  const[refData,setRefData]=useState(null);
+  const[refData,setRefData]=useState(getCachedReferenceData); // 🆕 cache থেকে সঙ্গে সঙ্গে
+  useRefCacheSync(setRefData);
   const[refDataError,setRefDataError]=useState(null);
   const[refDataLoading,setRefDataLoading]=useState(false);
   const loadRefData=useCallback(()=>{
