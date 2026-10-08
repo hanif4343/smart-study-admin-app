@@ -13,9 +13,10 @@ import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, renameReferenceItem } from "../../core/sheetSave.js";
 import { RenameModal } from "./RenameModal.jsx";
+import { topicCount, subjectCount } from "../../core/refFilter.js";
 
 // Sheet নাম → subject_id প্রিফিক্স (migration script যেভাবে বানিয়েছিল সেটার সাথে মিলিয়ে)
-const SHEET_PREFIX = { Quiz: "QZ_", QBank: "QB_", Study: "ST_" };
+// (পুরনো SHEET_PREFIX আর লাগে না — subject/topic এখন Unified: S01 / S01_T01)
 
 function RenameTab({push}){
   const[sheet,setSheet]=useState("Quiz");
@@ -43,25 +44,20 @@ function RenameTab({push}){
   //    হিসেব করা হয় তার নিচের সব topic-এর row_count যোগ করে (extra fetch লাগে না)। ──
   const list=useMemo(()=>{
     if(!refData) return [];
-    const prefix=SHEET_PREFIX[sheet];
+    // Unified তালিকা: নাম বদলানো সব sheet-এর জন্য একসাথে প্রযোজ্য। সংখ্যা দেখানো হয় নির্বাচিত sheet-এর।
     if(type==="subject"){
       return (refData.subjects||[])
-        .filter(s=>s.sheet===sheet)
-        .map(s=>{
-          const cnt=(refData.topics||[]).filter(t=>t.subject_id===s.subject_id)
-            .reduce((sum,t)=>sum+(parseInt(t.row_count)||0),0);
-          return {id:s.subject_id,name:s.subject_name,count:cnt,refType:"subjects"};
-        })
+        .map(s=>({id:s.subject_id,name:s.subject_name,count:subjectCount(refData,s.subject_id,sheet),refType:"subjects"}))
         .sort((a,b)=>b.count-a.count);
     }
     const subjMap={}; (refData.subjects||[]).forEach(s=>{subjMap[s.subject_id]=s.subject_name;});
     return (refData.topics||[])
-      .filter(t=>t.subject_id && t.subject_id.startsWith(prefix))
+      .filter(t=>t.subject_id)
       .map(t=>({
         id:t.topic_id,
         name:`${subjMap[t.subject_id]||"?"} → ${t.topic_name}`,
         rawName:t.topic_name,
-        count:parseInt(t.row_count)||0,
+        count:topicCount(t,sheet),
         refType:"topics"
       }))
       .sort((a,b)=>b.count-a.count);
