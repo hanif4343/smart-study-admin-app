@@ -71,7 +71,9 @@ function stripEmoji(s){
 function buildTaxonomyFromRefData(refData){
   if(!refData||!(refData.subjects||[]).length) return null;
   const out={};
-  (refData.subjects||[]).filter(s=>s.sheet==="Quiz").forEach(s=>{
+  const _allSubj=refData.subjects||[];
+  const _quizSubj=_allSubj.filter(s=>(refData.topics||[]).some(t=>t.subject_id===s.subject_id&&(parseInt(t.row_count_quiz,10)||0)>0));
+  (_quizSubj.length?_quizSubj:_allSubj).forEach(s=>{
     const topics=(refData.topics||[]).filter(t=>t.subject_id===s.subject_id).map(t=>stripEmoji(t.topic_name)).filter(Boolean);
     out[stripEmoji(s.subject_name)]=topics.length?topics:["সাধারণ"];
   });
