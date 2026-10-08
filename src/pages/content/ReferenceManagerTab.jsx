@@ -10,6 +10,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, renameReferenceItem, addReferenceItem, deleteReferenceItem } from "../../core/sheetSave.js";
+import { topicCount, subjectCount } from "../../core/refFilter.js";
 import { RenameModal } from "./RenameModal.jsx";
 import { useModalBack } from "../../hooks/useModalBack.js";
 
@@ -72,7 +73,7 @@ function ReferenceManagerTab({push}){
   // ── Parent dropdown-এর অপশন (topics-এর জন্য subjects) ──
   const parentOptions=useMemo(()=>{
     if(!refData) return [];
-    if(refKey==="topics") return (refData.subjects||[]).filter(s=>s.sheet===sheet);
+    if(refKey==="topics") return (refData.subjects||[]);
     return [];
   },[refData,refKey,sheet]);
 
@@ -82,18 +83,18 @@ function ReferenceManagerTab({push}){
   const list=useMemo(()=>{
     if(!refData) return [];
     const rows=refData[refKey]||[];
-    if(refKey==="subjects") return rows.filter(r=>r.sheet===sheet);
+    if(refKey==="subjects") return rows;
     if(refKey==="topics") return parentId ? rows.filter(r=>r.subject_id===parentId) : [];
     return rows;
   },[refData,refKey,sheet,parentId]);
 
   const countFor=useCallback((row)=>{
     if(refKey==="topics"||refKey==="subjects"){
-      if(refKey==="topics") return parseInt(row.row_count)||0;
-      return (refData?.topics||[]).filter(t=>t.subject_id===row.subject_id).reduce((s,t)=>s+(parseInt(t.row_count)||0),0);
+      if(refKey==="topics") return topicCount(row,sheet);
+      return subjectCount(refData,row.subject_id,sheet);
     }
     return null; // tags/posts/institutions-এর জন্য live count নেই
-  },[refData,refKey]);
+  },[refData,refKey,sheet]);
 
   const[addName,setAddName]=useState("");
   const[adding,setAdding]=useState(false);
