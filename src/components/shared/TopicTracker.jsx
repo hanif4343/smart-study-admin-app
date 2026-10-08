@@ -24,6 +24,7 @@ import { fbPush, fbDelete } from "../../core/firebase.js";
 import { useFB } from "../../core/dataCache.js";
 import { loadSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, addReferenceItem } from "../../core/sheetSave.js";
+import { topicTotal } from "../../core/refFilter.js";
 
 /* subject_id/topic_id রেফারেন্স-টেবিল থেকে Subject-নাম → {topics:{Topic-নাম:{count}}, subjectId}
    ম্যাপ বানায় — একই নামের একাধিক subject_id/topic_id (ভিন্ন Sheet-এ) থাকলে count যোগ হয়ে যায়,
@@ -41,7 +42,7 @@ function buildRefCountMap(refData){
   (refData.topics||[]).forEach(t=>{
     const sName=subjName[t.subject_id]||"অজানা";
     const tName=String(t.topic_name||"").trim()||"General";
-    const cnt=parseInt(t.row_count)||0;
+    const cnt=topicTotal(t);
     if(!map[sName]) map[sName]={topics:{},subjectId:t.subject_id};
     if(!map[sName].topics[tName]) map[sName].topics[tName]={count:0};
     map[sName].topics[tName].count+=cnt;
