@@ -340,7 +340,7 @@ async function renameReferenceItem({refType,id,newName,gasSecret,push}){
 
 /* ── refType + name (+ parentId/sheet) দিয়ে নতুন রেফারেন্স-এন্ট্রি যোগ — GAS-এর
    "addReferenceItem" action। id GAS নিজে থেকেই generate করে (parent-scoped prefix)। ── */
-async function addReferenceItem({refType,name,parentId,sheet,gasSecret,push}){
+async function addReferenceItem({refType,name,parentId,sheet,tagIds,gasSecret,push}){
   if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই",""); return{ok:false}; }
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও",""); return{ok:false}; }
   try{
@@ -348,6 +348,7 @@ async function addReferenceItem({refType,name,parentId,sheet,gasSecret,push}){
       `&refType=${encodeURIComponent(refType)}&name=${encodeURIComponent(name)}`;
     if(parentId) url+=`&parentId=${encodeURIComponent(parentId)}`;
     if(sheet) url+=`&sheet=${encodeURIComponent(sheet)}`;
+    if(tagIds&&tagIds.length) url+=`&tagIds=${encodeURIComponent(Array.isArray(tagIds)?tagIds.join(","):String(tagIds))}`;
     const{data,rawFail,status,preview}=await _gasFetchDiag(url);
     if(data.status!=="success"){
       const msg=rawFail?`HTTP ${status}, JSON না। raw: "${preview}"`:(data.message||"অজানা error");
@@ -380,11 +381,11 @@ async function deleteReferenceItem({refType,id,gasSecret,push}){
 
 /* ── একটা পুরো subject_id/topic_id-এর সব প্রশ্ন একসাথে ডিলিট — GAS-এর
    "deleteByReferenceId" action (row-range-ভিত্তিক, দ্রুত, বড় Subject-এও নিরাপদ)। ── */
-async function deleteByReferenceId({refType,id,gasSecret,push}){
+async function deleteByReferenceId({refType,id,sheet,gasSecret,push}){
   if(!GAS||!gasSecret) return{ok:false};
   try{
     const url=`${GAS}?action=deleteByReferenceId&secret=${encodeURIComponent(gasSecret)}`+
-      `&refType=${encodeURIComponent(refType)}&id=${encodeURIComponent(id)}`;
+      `&refType=${encodeURIComponent(refType)}&id=${encodeURIComponent(id)}`+(sheet?`&sheet=${encodeURIComponent(sheet)}`:"");
     const resp=await fetch(url);
     const data=await resp.json().catch(()=>({}));
     if(data.status!=="success"){ push?.("error","❌ ডিলিট ব্যর্থ",data.message||"অজানা error"); return{ok:false}; }
