@@ -151,7 +151,7 @@ function BrowseTab({push,tick}){
     fetchAllExamAppearances({gasSecret}).then(r=>setAllAppearances(r.ok?r.appearances:[])).catch(()=>{});
   },[gasSecret,localTick]);
 
-  const subjectOptions=useMemo(()=>refData?(refData.subjects||[]).filter(s=>s.sheet===sheet):[],[refData,sheet]);
+  const subjectOptions=useMemo(()=>refData?(refData.subjects||[]):[],[refData,sheet]);
   const topicOptions=useMemo(()=>filterSubjectId==="all"||!refData?[]:(refData.topics||[]).filter(t=>String(t.subject_id)===String(filterSubjectId)),[refData,filterSubjectId]);
   // ── নাম-দিয়ে-খোঁজার fallback map — পুরনো এন্ট্রিতে subject_id/topic_id না থাকলে
   // (আগের raw-text সময়ের ডেটা) নামের সাথে মিলিয়ে ধরার জন্য ──
