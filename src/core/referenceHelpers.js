@@ -43,13 +43,13 @@ function fuzzyBestMatch(name,options){
  * sheet — শুধু refType==="subjects" এ দরকার (Quiz/QBank/Study — কোন ট্যাবের subject)
  * ফেরত: {ok, id, created?} — created:true মানে নতুন এন্ট্রি বানানো হয়েছে (caller চাইলে refData রিফ্রেশ করুক)
  */
-async function resolveOrCreateReference({sel,refType,options,gasSecret,push,parentId,sheet}){
+async function resolveOrCreateReference({sel,refType,options,gasSecret,push,parentId,sheet,tagIds}){
   const name=(sel?.name||"").trim();
   if(!name) return{ok:false};
   if(sel?.id) return{ok:true,id:sel.id};
   const hit=(options||[]).find(o=>norm(o.name)===norm(name));
   if(hit) return{ok:true,id:hit.id};
-  const res=await addReferenceItem({refType,name,parentId,sheet,gasSecret,push});
+  const res=await addReferenceItem({refType,name,parentId,sheet,tagIds,gasSecret,push});
   return res.ok?{ok:true,id:res.id,created:true}:{ok:false};
 }
 
