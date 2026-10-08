@@ -34,7 +34,7 @@ function QBankConverterTab({push,tick}){
     fetchReferenceData({gasSecret}).then(d=>setRefData(d));
   },[gasSecret]);
   useEffect(()=>{ loadRefData(); },[loadRefData]);
-  const subjectOptionsQuiz=useMemo(()=>refData?(refData.subjects||[]).filter(s=>s.sheet==="Quiz"):[],[refData]);
+  const subjectOptionsQuiz=useMemo(()=>refData?(refData.subjects||[]):[],[refData]);
 
   // ⚡ Firebase quota বন্ধ থাকলেও কাজ চালু থাকে — useFB()-এর ভেতরের loadPath() এখন
   // Firebase read ব্যর্থ হলে নিজে থেকেই Google Sheet fallback (GAS "getSheetRows")
