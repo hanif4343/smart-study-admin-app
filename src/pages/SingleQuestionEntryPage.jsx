@@ -59,7 +59,7 @@ function SingleQuestionEntryPage({push}){
     });
   },[gasSecret]);
   useEffect(()=>{ loadRefData(); },[loadRefData]);
-  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===targetMode).map(s=>({id:s.subject_id,name:s.subject_name})):[];
+  const subjectOptions=refData?(refData.subjects||[]).map(s=>({id:s.subject_id,name:s.subject_name})):[];
   const topicOptions=refData&&subjectSel.id?(refData.topics||[]).filter(t=>t.subject_id===subjectSel.id).map(t=>({id:t.topic_id,name:t.topic_name})):[];
 
   // ── QBank + পদ/প্রতিষ্ঠান/সাল (Exam Appearance) — সেশনজুড়ে থাকে, প্রতিটা প্রশ্নে
