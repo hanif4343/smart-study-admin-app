@@ -12,6 +12,7 @@ import { callAiProviderRotatingRaw, buildKeyPool } from "../../core/ocrProviders
 import { buildSheetRow, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft } from "../../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../../core/referenceHelpers.js";
+import { subjectsForTags, topicsOfSubject } from "../../core/refFilter.js";
 import { TypeaheadCombo } from "./TypeaheadCombo.jsx";
 
 /* ── AI দিয়ে MCQ-এর ৩টা ভুল অপশন + ব্যাখ্যা বানানোর প্রম্পট (SingleQuestionEntryPage-এর
@@ -249,7 +250,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const toggleExpand=id=>setExpandedItems(s=>{const n=new Set(s); n.has(id)?n.delete(id):n.add(id); return n;});
 
   const tabDef=PAPER_TABS.find(t=>t.key===activeTab);
-  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet==="QBank").map(s=>({id:s.subject_id,name:s.subject_name})):[];
+  const subjectOptions=refData?(refData.subjects||[]).map(s=>({id:s.subject_id,name:s.subject_name})):[];
   const topicOptionsFor=subjId=>refData&&subjId?(refData.topics||[]).filter(t=>t.subject_id===subjId).map(t=>({id:t.topic_id,name:t.topic_name})):[];
 
   // ── পদ/প্রতিষ্ঠান/সাল (Exam Appearance) — SingleQuestionEntryPage-এর পুরনো
@@ -270,6 +271,9 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   // Post/Institution-এর মতোই সেশন-জুড়ে থাকে, সব রো-তে একই ট্যাগ প্রযোজ্য হয়।
   const tagOptions=refData?(refData.tags||[]).map(tg=>({id:tg.tag_id,name:tg.tag_name})):[];
   const[selectedTagIds,setSelectedTagIds]=useState([]);
+  // ── Tag অনুযায়ী dropdown ফিল্টার (নাম-দিয়ে-মেলানো/তৈরির লজিক সব subject দেখেই চলে, শুধু তালিকা ছোট হয়) ──
+  const subjectOptionsShown=refData?subjectsForTags(refData,selectedTagIds).map(s=>({id:s.subject_id,name:s.subject_name})):[];
+  const topicOptionsForShown=subjId=>refData&&subjId?topicsOfSubject(refData,subjId,selectedTagIds).map(t=>({id:t.topic_id,name:t.topic_name})):[];
   const defaultTagAppliedRef=useRef(false);
   useEffect(()=>{
     if(defaultTagAppliedRef.current||!tagOptions.length)return;
@@ -559,7 +563,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       const resolveSubjectCached=async name=>{
         const key=norm(name);
         if(subjectIdCache[key])return subjectIdCache[key];
-        const res=await resolveOrCreateReference({sel:{id:"",name},refType:"subjects",options:subjectOptions,gasSecret,sheet:"QBank",push});
+        const res=await resolveOrCreateReference({sel:{id:"",name},refType:"subjects",options:subjectOptions,gasSecret,sheet:"QBank",tagIds:selectedTagIds,push});
         if(!res.ok)throw new Error(`"${name}" Subject resolve ব্যর্থ`);
         subjectIdCache[key]=res.id;
         return res.id;
@@ -572,7 +576,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         if(!topicName)return null;
         const key=subjId+"|"+norm(topicName);
         if(topicIdCache[key])return topicIdCache[key];
-        const res=await resolveOrCreateReference({sel:topicSel,refType:"topics",options:topicOptionsFor(subjId),gasSecret,parentId:subjId,push});
+        const res=await resolveOrCreateReference({sel:topicSel,refType:"topics",options:topicOptionsFor(subjId),gasSecret,parentId:subjId,tagIds:selectedTagIds,push});
         if(!res.ok)return null;
         topicIdCache[key]=res.id;
         return res.id;
@@ -1083,7 +1087,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                   <label>📚 Subject (real sheet subject — যেমন "সাধারণ বিজ্ঞান")</label>
                   <TypeaheadCombo
-                    options={subjectOptions}
+                    options={subjectOptionsShown}
                     value={card.subjectSel}
                     onChange={sel=>updateCard(activeTab,card.id,{subjectSel:sel})}
                     placeholder="Subject লিখো বা বেছে নাও..."
@@ -1096,7 +1100,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                 <label>📌 Topic</label>
                 <TypeaheadCombo
-                  options={topicOptionsFor(tabDef.gkStyle?card.subjectSel.id:subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
+                  options={topicOptionsForShown(tabDef.gkStyle?card.subjectSel.id:subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
                   value={card.topicSel}
                   onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel})}
                   placeholder={tabDef.gkStyle&&!card.subjectSel.name.trim()?"আগে Subject বেছে নাও":"Topic লিখো বা বেছে নাও..."}
