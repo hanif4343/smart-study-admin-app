@@ -111,7 +111,7 @@ function ReviewTab({push,tick}){
     return m;
   },[allAppearances]);
 
-  const subjectOptions=useMemo(()=>refData?(refData.subjects||[]).filter(s=>s.sheet==="QBank"):[],[refData]);
+  const subjectOptions=useMemo(()=>refData?(refData.subjects||[]):[],[refData]);
   const allTopics=refData?.topics||[];
   const topicOptionsFor=subjectId=>subjectId?allTopics.filter(t=>String(t.subject_id)===String(subjectId)).map(t=>({id:t.topic_id,name:t.topic_name})):[];
 
