@@ -306,7 +306,7 @@ function MultiSubjectImportPage({push}){
      plain "subject" কলামই নেই) ── */
   const[refData,setRefData]=useState(null);
   useEffect(()=>{ fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); },[gasSecret]);
-  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===targetMode):[];
+  const subjectOptions=refData?(refData.subjects||[]):[];
 
   /* ── QBank-এ পদ/প্রতিষ্ঠান/সাল (Exam Appearance) — ঐচ্ছিক, দিলে এই পুরো ব্যাচ একটা
      Exam_Appearances এন্ট্রি পাবে। QBank প্রশ্ন user app-এ appearance দিয়ে ব্রাউজ হয়,
