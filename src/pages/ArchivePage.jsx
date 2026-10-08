@@ -42,7 +42,7 @@ function ArchivePage({push,onSendToBulk}){
      subject_id/topic_id বের করতে লাগে (raw text sheet-এ যায় না) ── */
   const[refData,setRefData]=useState(null);
   useEffect(()=>{ fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); },[gasSecret]);
-  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===targetMode):[];
+  const subjectOptions=refData?(refData.subjects||[]):[];
 
   // ── QBank + Post/Institution/Year — যেকোনো entry সরাসরি Submit করার সময় targetMode
   // QBank হলে এটা ব্যবহার হয়, ঠিক AIImportPage/BulkUploaderPage-এর মতোই। এটা ছাড়া
