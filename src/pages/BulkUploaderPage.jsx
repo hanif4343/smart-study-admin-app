@@ -14,6 +14,7 @@ import {
 import { saveRowsToSheet, fetchReferenceData } from "../core/sheetSave.js";
 import { queueAutoGen } from "../core/autoGenTrigger.js";
 import { resolveOrCreateReference, resolveSubjectTopicForEntries, norm } from "../core/referenceHelpers.js";
+import { subjectsForTags, topicsOfSubject } from "../core/refFilter.js";
 import { archiveDelete } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
@@ -170,7 +171,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   /* pendingSubjectName/pendingTopicName + refData লোড হয়ে গেলে নাম মিলিয়ে id বসানো */
   useEffect(()=>{
     if(!refData||!pendingSubjectName) return;
-    const s=(refData.subjects||[]).find(x=>x.sheet===mode && x.subject_name.trim().toLowerCase()===pendingSubjectName.trim().toLowerCase());
+    const s=(refData.subjects||[]).find(x=>x.subject_name.trim().toLowerCase()===pendingSubjectName.trim().toLowerCase());
     if(s){
       setSubjectId(s.subject_id);
       if(pendingTopicName){
@@ -375,8 +376,9 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   };
 
   /* ── Reference dropdown options (mode/subjectId অনুযায়ী scoped) ── */
-  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===mode):[];
-  const topicOptions=refData&&subjectId?(refData.topics||[]).filter(t=>t.subject_id===subjectId):[];
+  // ── Unified subject/topic: sheet দিয়ে নয়, selected Tag দিয়ে ফিল্টার (বর্তমানে বাছা subject/topic সবসময় থাকে) ──
+  const subjectOptions=refData?subjectsForTags(refData,tagIds,[subjectId]):[];
+  const topicOptions=refData&&subjectId?topicsOfSubject(refData,subjectId,tagIds,[topicId]):[];
   const tagOptions=refData?(refData.tags||[]):[];
   const postOptions=refData?(refData.posts||[]).map(p=>({id:p.post_id,name:p.post_name})):[];
   const instOptions=refData?(refData.institutions||[]).map(i=>({id:i.institution_id,name:i.institution_name})):[];
