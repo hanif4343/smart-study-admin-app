@@ -12,6 +12,7 @@ import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, deleteByReferenceId } from "../../core/sheetSave.js";
+import { topicCount, subjectCount } from "../../core/refFilter.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
 
 function DeleteTab({push}){
@@ -36,17 +37,15 @@ function DeleteTab({push}){
 
   const list=useMemo(()=>{
     if(!refData) return [];
+    // Unified: নির্বাচিত sheet-এ যে subject/topic-এর প্রশ্ন আছে শুধু সেগুলো দেখানো হয় (সংখ্যা ওই sheet-এর)।
     if(type==="subject"){
-      return (refData.subjects||[]).filter(s=>s.sheet===sheet).map(s=>{
-        const cnt=(refData.topics||[]).filter(t=>t.subject_id===s.subject_id).reduce((sum,t)=>sum+(parseInt(t.row_count)||0),0);
-        return {id:s.subject_id,name:s.subject_name,count:cnt,refType:"subject"};
-      }).sort((a,b)=>b.count-a.count);
+      return (refData.subjects||[]).map(s=>({id:s.subject_id,name:s.subject_name,count:subjectCount(refData,s.subject_id,sheet),refType:"subject"}))
+        .filter(x=>x.count>0).sort((a,b)=>b.count-a.count);
     }
     const subjMap={}; (refData.subjects||[]).forEach(s=>{subjMap[s.subject_id]=s.subject_name;});
-    const prefix={Quiz:"QZ_",QBank:"QB_",Study:"ST_"}[sheet];
-    return (refData.topics||[]).filter(t=>t.subject_id&&t.subject_id.startsWith(prefix)).map(t=>({
-      id:t.topic_id,name:`${subjMap[t.subject_id]||"?"} → ${t.topic_name}`,count:parseInt(t.row_count)||0,refType:"topic"
-    })).sort((a,b)=>b.count-a.count);
+    return (refData.topics||[]).filter(t=>t.subject_id).map(t=>({
+      id:t.topic_id,name:`${subjMap[t.subject_id]||"?"} → ${t.topic_name}`,count:topicCount(t,sheet),refType:"topic"
+    })).filter(x=>x.count>0).sort((a,b)=>b.count-a.count);
   },[refData,sheet,type]);
 
   const[delTarget,setDelTarget]=useState(null);
@@ -55,7 +54,7 @@ function DeleteTab({push}){
   const doBulkDelete=async()=>{
     if(!delTarget)return;
     setDelLoading(true);
-    const res=await deleteByReferenceId({refType:delTarget.refType,id:delTarget.id,gasSecret,push});
+    const res=await deleteByReferenceId({refType:delTarget.refType,id:delTarget.id,sheet,gasSecret,push});
     if(res.ok){
       push("success","🗑️ Bulk Delete সম্পন্ন!",
         `"${delTarget.name}" · ${res.deleted}টি প্রশ্ন মুছে গেছে (Exam_Appearances: ${res.examAppearancesDeleted}টি clean হয়েছে) · index অটো আপডেট হয়েছে`);
