@@ -132,7 +132,7 @@ function AIImportPage({push,onSendToBulk}){
   const[refData,setRefData]=useState(getCachedReferenceData);
   useRefCacheSync(setRefData);
   useEffect(()=>{ fetchReferenceData({gasSecret}).then(d=>{ if(d) setRefData(d); }).catch(()=>{}); },[gasSecret]);
-  const subjectOptions=refData?(refData.subjects||[]).filter(s=>s.sheet===effMode):[];
+  const subjectOptions=refData?(refData.subjects||[]):[];
 
   // ── QBank + Post/Institution/Year (Exam Appearance) — এই পুরো ব্যাচের প্রশ্ন যে পরীক্ষা
   // থেকে, সেটা এখানে দেওয়া থাকলে সাবমিটের সময় Exam_Appearances-এ একটা এন্ট্রি যোগ হয়ে
