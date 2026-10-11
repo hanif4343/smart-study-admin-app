@@ -54,8 +54,19 @@ function isTemplatePlaceholder({q,correct,opt1,opt2,opt3,opt4}){
 }
 
 // effectiveType: "Study" | "Written" | "MCQ"
+// 🔢 সিরিয়াল-নম্বর স্ট্রিপার — বাল্ক টেক্সটে প্রশ্নের আগে "১.", "২)", "(৩)", "4।",
+// "5 -" ইত্যাদি সিরিয়াল বসানো যায়, কিন্তু সেটা কখনোই ডাটাবেস/শিটে যাবে না।
+// নিরাপত্তা: শুধু ১-৪ ডিজিটের সংখ্যার পরে সাথে সাথে বিভাজক (. । ) অথবা স্পেস-সহ : - – —)
+// থাকলেই কাটে — তাই "১৯৭১ সালে...", "২.৫ কত?", "২০২৩-২৪ অর্থবছর" ইত্যাদি আসল প্রশ্ন অক্ষত থাকে।
+const SERIAL_RE=/^(?:[(\[][\d০-৯]{1,4}[)\]]|[\d০-৯]{1,4}(?:[.।)](?![\d০-৯])|[:\-–—](?=\s)))\s*/;
+const stripSerial=s=>{
+  const t=String(s||"").replace(/^\s+/,"");
+  const r=t.replace(SERIAL_RE,"");
+  return r.trim()?r:t; // শুধু সিরিয়াল ছাড়া কিছুই না থাকলে অক্ষত রাখি (পরে "প্রশ্ন খালি" error আসবে না ভুল কাটার জন্য)
+};
+
 function parseBulkEntry(entry, effectiveType){
-  const tr=entry.trim();
+  const tr=stripSerial(entry);
   if(!tr||tr.startsWith("#"))return{skip:true};
 
   // ── 🛡️ Subject/Topic sanity check — এই দুটো সবসময় ছোট, একলাইনের ক্যাটাগরি-লেবেল
