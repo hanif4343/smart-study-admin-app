@@ -81,7 +81,7 @@ function ExamAppearancesTab({push}){
       <div className="fld" style={{marginBottom:10}}>
         <label>প্রশ্নের ID</label>
         <div style={{display:"flex",gap:6}}>
-          <input className="inp" style={{flex:1}} placeholder="যেমন: QB-00123" value={questionId} onChange={e=>setQuestionId(e.target.value)}/>
+          <input className="inp" style={{flex:1}} placeholder="যেমন: QN000123" value={questionId} onChange={e=>setQuestionId(e.target.value)}/>
           <button className="btn bp" onClick={load} disabled={loading}>{loading?"⏳":"🔍 দেখাও"}</button>
         </div>
       </div>
