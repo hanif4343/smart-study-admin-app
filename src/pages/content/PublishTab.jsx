@@ -13,6 +13,16 @@ import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest, forceReindexNow } from "../../core/sheetSave.js";
 
+/* ── Publish-চলছে লক: Publish Now একবার চাপলে বাকি সব Topic শেষ না হওয়া পর্যন্ত নিজে থেকে একের পর এক চলে
+   (GAS প্রতি রানে সর্বোচ্চ ৪০০ Topic করে), প্রোগ্রেস বার দেখায়, আর শেষ না হওয়া পর্যন্ত সব বাটন বন্ধ থাকে।
+   লকটা localStorage-এও থাকে (heartbeat সহ) — পেজ রিলোড/ট্যাব বদলালেও চলমান থাকলে বাটন বন্ধ থাকে ও বার দেখায়। ── */
+const LS_RUN = "cdn_publish_run_lock";
+const LOCK_STALE_MS = 8*60*1000;   // ৮ মিনিটে কোনো heartbeat না এলে লক বাসি ধরা হয় (ব্রাউজার বন্ধ/ক্র্যাশ)
+const MAX_RUNS = 80;               // ৮০ × ৪০০ = ৩২,০০০ Topic পর্যন্ত নিরাপত্তা-সীমা
+function loadRunLock(){ try{ const r=JSON.parse(localStorage.getItem(LS_RUN)||"null"); if(r && Date.now()-r.heartbeat<LOCK_STALE_MS) return r; }catch{} return null; }
+function saveRunLock(o){ try{ localStorage.setItem(LS_RUN, JSON.stringify({...o,heartbeat:Date.now()})); }catch{} }
+function clearRunLock(){ try{ localStorage.removeItem(LS_RUN); }catch{} }
+
 const LS_LAST_PUBLISH = "cdn_last_publish_result"; // persistent status — localStorage-এ থাকে, অ্যাপ বন্ধ করলেও শেষ ফলাফল দেখা যায়
 
 function loadLastPublish(){
@@ -36,6 +46,8 @@ function PublishTab({push}){
   const[dirtyCount,setDirtyCount]=useState(null); // null = লোড হচ্ছে/অজানা
   const[loadingCount,setLoadingCount]=useState(false);
   const[publishing,setPublishing]=useState(false);
+  const[prog,setProg]=useState(null);              // এই সেশনে চলমান রান: {total,done,runs,failed}
+  const[extLock,setExtLock]=useState(loadRunLock); // অন্য সেশন/রিলোডের আগের রান চলছে কিনা
   const[lastResult,setLastResult]=useState(loadLastPublish);
   const[confirmOpen,setConfirmOpen]=useState(false);
   const[checked,setChecked]=useState(()=>CHECKLIST_ITEMS.map(()=>false));
@@ -63,7 +75,7 @@ function PublishTab({push}){
     const result=await markAllTopicsDirty({gasSecret,push});
     setMarkingAll(false);
     if(result.ok){
-      push?.("success",`✅ ${result.markedCount}টা Topic dirty মার্ক হলো`,"এখন একাধিকবার Publish Now চাপলে ধীরে ধীরে সব CDN-এ উঠবে");
+      push?.("success",`✅ ${result.markedCount}টা Topic dirty মার্ক হলো`,"এখন একবার Publish Now চাপলেই প্রোগ্রেস বারসহ সব নিজে থেকে CDN-এ উঠবে");
       refreshCount();
     }
   };
@@ -139,6 +151,30 @@ function PublishTab({push}){
 
   useEffect(()=>{ refreshCount(); },[refreshCount]);
 
+  // ── অন্য সেশনে/রিলোডের আগে শুরু হওয়া রান চলছে — প্রতি ৬ সেকেন্ডে dirty count দেখে প্রোগ্রেস আপডেট, শেষ হলে লক ছাড়া ──
+  useEffect(()=>{
+    if(!extLock || prog) return;
+    const t=setInterval(async()=>{
+      const lock=loadRunLock();
+      if(!lock){ setExtLock(null); refreshCount(); refreshStats(); return; }
+      setExtLock(lock);
+      const c=await fetchDirtyTopicsCount({gasSecret});
+      if(c!==null){ setDirtyCount(c); if(c===0){ clearRunLock(); setExtLock(null); refreshStats(); } }
+    },6000);
+    return()=>clearInterval(t);
+  },[extLock,prog,gasSecret,refreshCount,refreshStats]);
+
+  // ── রান চলাকালীন পেজ বন্ধ করতে গেলে সতর্কতা ──
+  useEffect(()=>{
+    if(!prog) return;
+    const h=e=>{ e.preventDefault(); e.returnValue=""; };
+    window.addEventListener("beforeunload",h);
+    return()=>window.removeEventListener("beforeunload",h);
+  },[prog]);
+
+  const runBusy = !!prog || !!extLock;
+  const busy = publishing || markingAll || rollingBack || reindexing || deletingOrphan || runBusy;
+
   // ── ⚡ Force Reindex Now — ১৫-মিনিটের auto-reindex ট্রিগারের জন্য অপেক্ষা
   // না করে, এখনই Topics শিটের row_count_* কলাম রিফ্রেশ করে দেয়। এটা
   // "Publish Now"-এর চেয়ে অনেক হালকা (GitHub-এ কিছু commit করে না, শুধু
@@ -158,22 +194,51 @@ function PublishTab({push}){
 
   const doPublish = async()=>{
     setConfirmOpen(false);
+    if(runBusy) return;
+    let total=await fetchDirtyTopicsCount({gasSecret});
+    if(total===null) total=dirtyCount||0;
+    if(!total){ push?.("info","ℹ️ Publish করার মতো কিছু ছিল না","সব আগে থেকেই up-to-date"); refreshCount(); return; }
     setPublishing(true);
-    const result = await publishNow({gasSecret,push});
+    setProg({total,done:0,runs:0,failed:0});
+    saveRunLock({total});
+    const agg={published:0,failed:0,errors:[],totalQuestions:0,manifestVersion:null,sanityWarning:null};
+    let runs=0, ok=true;
+    while(runs<MAX_RUNS){
+      const result = await publishNow({gasSecret,push});
+      runs++;
+      if(!result.ok){ ok=false; break; }
+      agg.published+=result.published||0;
+      agg.failed+=result.failed||0;
+      if(result.errors) agg.errors.push(...result.errors);
+      if(result.totalQuestions) agg.totalQuestions=result.totalQuestions;
+      if(result.manifestVersion) agg.manifestVersion=result.manifestVersion;
+      if(result.sanityWarning) agg.sanityWarning=result.sanityWarning;
+      const remaining=result.remaining||0;
+      setProg({total,done:Math.max(0,total-remaining),runs,failed:agg.failed});
+      saveRunLock({total});
+      if(remaining<=0) break;                 // সব শেষ
+      if((result.published||0)===0) break;    // কোনো অগ্রগতি নেই — অসীম লুপ এড়াতে থামো
+    }
+    clearRunLock();
+    setProg(null);
     setPublishing(false);
-    if(result.ok){
-      saveLastPublish(result);
-      setLastResult({...result, at:Date.now()});
-      if(result.failed>0){
-        push?.("warn",`⚠️ আংশিক সফল — ${result.published}টি হয়েছে, ${result.failed}টি ব্যর্থ`,
-          (result.errors||[]).slice(0,3).join("; "));
-      }else if(result.published===0){
+    if(agg.published>0 || ok){
+      const final={...agg,ok:true};
+      saveLastPublish(final);
+      setLastResult({...final, at:Date.now()});
+    }
+    if(ok){
+      if(agg.failed>0){
+        push?.("warn",`⚠️ আংশিক সফল — ${agg.published}টি হয়েছে, ${agg.failed}টি ব্যর্থ`,agg.errors.slice(0,3).join("; "));
+      }else if(agg.published===0){
         push?.("info","ℹ️ Publish করার মতো কিছু ছিল না","সব আগে থেকেই up-to-date");
       }else{
-        push?.("success",`✅ ${result.published}টি Topic Publish হয়েছে`,
-          `মোট ${result.totalQuestions||0}টি প্রশ্ন — manifest v${result.manifestVersion||"?"}`);
+        push?.("success",`✅ ${agg.published}টি Topic Publish হয়েছে (${runs}টি রানে)`,
+          `মোট ${agg.totalQuestions||0}টি প্রশ্ন — manifest v${agg.manifestVersion||"?"}`);
       }
-      if(result.sanityWarning) push?.("warn","⚠️ Sanity-check সতর্কতা",result.sanityWarning);
+      if(agg.sanityWarning) push?.("warn","⚠️ Sanity-check সতর্কতা",agg.sanityWarning);
+    }else if(agg.published>0){
+      push?.("warn",`⚠️ মাঝপথে থেমেছে — এ পর্যন্ত ${agg.published}টি Topic হয়েছে`,"আবার Publish Now চাপলে বাকিটা চলবে");
     }
     refreshCount();
     refreshStats();
@@ -260,7 +325,7 @@ function PublishTab({push}){
             className="btn"
             style={{width:"100%",justifyContent:"center",padding:"9px",fontSize:12,
               background: gasSecret ? C.success : C.border, color: gasSecret ? "#fff" : C.muted}}
-            disabled={!gasSecret || reindexing}
+            disabled={!gasSecret || busy}
             onClick={doForceReindex}
           >
             {reindexing ? "⏳ Reindex হচ্ছে..." : "⚡ Force Reindex Now"}
@@ -292,13 +357,13 @@ function PublishTab({push}){
                 <div key={sheetName} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 0",borderTop:`1px solid ${C.border}`}}>
                   <span style={{fontSize:12,color:C.text}}>{sheetName}: <b style={{color:C.warning}}>{s.orphan}</b>টি</span>
                   <button className="btn" style={{fontSize:10,padding:"4px 8px",background:`${tint(C.warning,"18")}`,color:C.warning}}
-                    disabled={deletingOrphan} onClick={()=>setDeleteOrphanTarget(sheetName)}>🗑️ মুছো</button>
+                    disabled={busy} onClick={()=>setDeleteOrphanTarget(sheetName)}>🗑️ মুছো</button>
                 </div>
               );
             })}
             {totalOrphan>1 && (
               <button className="btn" style={{width:"100%",justifyContent:"center",marginTop:8,fontSize:11,padding:"7px",background:C.warning,color:"#fff"}}
-                disabled={deletingOrphan} onClick={()=>setDeleteOrphanTarget("all")}>
+                disabled={busy} onClick={()=>setDeleteOrphanTarget("all")}>
                 {deletingOrphan?"⏳ মুছা হচ্ছে...":`🗑️ সবগুলো মুছো (${totalOrphan}টি)`}
               </button>
             )}
@@ -343,16 +408,41 @@ function PublishTab({push}){
         </div>
       )}
 
+      {/* ── Publish প্রোগ্রেস বার — রান চলাকালীন (এই সেশনে বা রিলোডের আগের সেশনে) ── */}
+      {runBusy && (()=>{
+        const total=prog?prog.total:(extLock?.total||0);
+        const done=prog?prog.done:Math.max(0,total-(dirtyCount||0));
+        const pct=total>0?Math.min(100,Math.round(done/total*100)):0;
+        return(
+          <div className="card" style={{marginBottom:12,border:`1px solid ${tint(C.info,"40")}`}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div style={{fontSize:13,fontWeight:700,color:C.info}}>🚀 Publish চলছে…</div>
+              <div style={{fontSize:13,fontWeight:700,color:C.text}}>{pct}%</div>
+            </div>
+            <div style={{height:10,borderRadius:6,background:C.border,overflow:"hidden"}}>
+              <div style={{height:"100%",width:`${pct}%`,background:C.info,borderRadius:6,transition:"width .4s ease"}}/>
+            </div>
+            <div style={{fontSize:11,color:C.muted,marginTop:8,lineHeight:1.6}}>
+              {done}/{total}টি Topic শেষ{prog?` · রান ${prog.runs}${prog.failed?` · ${prog.failed}টি ব্যর্থ`:""}`:""}
+              {done===0 && " · প্রথম ব্যাচ চলছে (১-২ মিনিট লাগতে পারে)"}
+              <br/>
+              {prog?"সব শেষ না হওয়া পর্যন্ত এই পেজ খোলা রাখো — বাটনগুলো এ সময় বন্ধ থাকবে।"
+                   :"অন্য সেশনে/রিলোডের আগে শুরু হওয়া Publish চলছে — শেষ না হওয়া পর্যন্ত বাটনগুলো বন্ধ থাকবে।"}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* ── Publish বাটন ── */}
       <button
         className="btn"
         style={{width:"100%",justifyContent:"center",padding:"12px",fontSize:14,
-          background: dirtyCount>0 && allChecked ? C.info : C.border,
-          color: dirtyCount>0 && allChecked ? "#fff" : C.muted}}
-        disabled={!gasSecret || publishing || !dirtyCount || !allChecked}
+          background: dirtyCount>0 && allChecked && !busy ? C.info : C.border,
+          color: dirtyCount>0 && allChecked && !busy ? "#fff" : C.muted}}
+        disabled={!gasSecret || busy || !dirtyCount || !allChecked}
         onClick={()=>setConfirmOpen(true)}
       >
-        {publishing ? "⏳ Publish হচ্ছে..." : `🚀 Publish Now${dirtyCount?` (${dirtyCount}টি Topic)`:""}`}
+        {runBusy ? "⏳ Publish চলছে… শেষ হলে আবার করা যাবে" : `🚀 Publish Now${dirtyCount?` (${dirtyCount}টি Topic)`:""}`}
       </button>
       {dirtyCount>0 && !allChecked && (
         <div style={{fontSize:11,color:C.muted,textAlign:"center",marginTop:6}}>উপরের সবগুলো চেক করলে বাটন চালু হবে</div>
@@ -365,19 +455,19 @@ function PublishTab({push}){
         <button
           className="btn bg"
           style={{width:"100%",justifyContent:"center",padding:"9px",fontSize:12}}
-          disabled={!gasSecret || markingAll}
+          disabled={!gasSecret || busy}
           onClick={()=>setMarkAllOpen(true)}
         >
           {markingAll ? "⏳ মার্ক হচ্ছে..." : "🔄 সব Topic Dirty মার্ক করো"}
         </button>
         <div style={{fontSize:10,color:C.muted,marginTop:5,marginBottom:12,lineHeight:1.5}}>
-          শুধু তখনই দরকার যখন পুরনো (Publish Pipeline চালু হওয়ার আগের) সব প্রশ্ন প্রথমবার CDN-এ তুলতে চাও — একবার মার্ক করলে এরপর একাধিকবার "Publish Now" চেপে ধীরে ধীরে সব উঠবে।
+          শুধু তখনই দরকার যখন পুরনো (Publish Pipeline চালু হওয়ার আগের) সব প্রশ্ন প্রথমবার CDN-এ তুলতে চাও — একবার মার্ক করে "Publish Now" চাপলে প্রোগ্রেস বার দেখাবে আর সব Topic নিজে থেকে একের পর এক উঠে যাবে।
         </div>
 
         <button
           className="btn bg"
           style={{width:"100%",justifyContent:"center",padding:"9px",fontSize:12}}
-          disabled={!gasSecret || rollingBack}
+          disabled={!gasSecret || busy}
           onClick={openRollback}
         >
           {rollingBack ? "⏳ ফিরিয়ে দেওয়া হচ্ছে..." : "↩️ পুরনো ভার্সনে ফিরে যাও (Rollback)"}
@@ -441,7 +531,7 @@ function PublishTab({push}){
             <div className="mh"/>
             <div style={{fontSize:13,fontWeight:700,marginBottom:8}}>🔄 সব Topic Dirty মার্ক করবে?</div>
             <div style={{background:`${tint(C.warning,"12")}`,border:`1px solid ${tint(C.warning,"30")}`,borderRadius:9,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted}}>
-              এতে <b style={{color:C.text}}>প্রতিটা</b> Topic dirty মার্ক হয়ে যাবে (নতুন বা পুরনো, সব)। এটা এক-কালীন কাজ, শুধু প্রথমবার পুরো ডেটাবেজ CDN-এ তোলার জন্য। এরপর ৪০০-এর cap থাকায় একাধিকবার Publish Now চাপতে হবে সব শেষ হতে।
+              এতে <b style={{color:C.text}}>প্রতিটা</b> Topic dirty মার্ক হয়ে যাবে (নতুন বা পুরনো, সব)। এটা এক-কালীন কাজ, শুধু প্রথমবার পুরো ডেটাবেজ CDN-এ তোলার জন্য। এরপর একবার Publish Now চাপলেই প্রোগ্রেস বারসহ সব Topic (৪০০টা করে ব্যাচে) নিজে থেকে উঠে যাবে।
             </div>
             <div style={{display:"flex",gap:7}}>
               <button className="btn bg" style={{flex:1,justifyContent:"center"}} onClick={()=>setMarkAllOpen(false)}>বাতিল</button>
