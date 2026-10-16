@@ -151,6 +151,7 @@ function PublishTab({push}){
 
   useEffect(()=>{ refreshCount(); },[refreshCount]);
 
+  const[reindexing,setReindexing]=useState(false);
   // ── অন্য সেশনে/রিলোডের আগে শুরু হওয়া রান চলছে — প্রতি ৬ সেকেন্ডে dirty count দেখে প্রোগ্রেস আপডেট, শেষ হলে লক ছাড়া ──
   useEffect(()=>{
     if(!extLock || prog) return;
@@ -180,7 +181,6 @@ function PublishTab({push}){
   // "Publish Now"-এর চেয়ে অনেক হালকা (GitHub-এ কিছু commit করে না, শুধু
   // Sheet-ইনডেক্স ঠিক করে) — তাই নতুন প্রশ্ন/টপিক যোগ করার পর সাথে সাথে
   // app-এ দেখাতে চাইলে এটাই সবচেয়ে দ্রুত রাস্তা। ──
-  const[reindexing,setReindexing]=useState(false);
   const doForceReindex=async()=>{
     setReindexing(true);
     const result=await forceReindexNow({gasSecret,push});
