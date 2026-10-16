@@ -29,7 +29,7 @@ function TopicTagsTab({push}){
   const[loadErr,setLoadErr]=useState("");
   const[busy,setBusy]=useState(false);
   const[edit,setEdit]=useState(null);          // ফর্মে থাকা রুল (নতুন/এডিট)
-  const[topicFilter,setTopicFilter]=useState("");
+  const[subjFilter,setSubjFilter]=useState("");   // ফর্মে আগে Subject বাছা হয়, তারপর শুধু সেই Subject-এর টপিক দেখায়
   const[testQ,setTestQ]=useState({question:"",option1:"",option2:"",option3:"",option4:"",correct:""});
   const[testRes,setTestRes]=useState(null);
   const[useDraft,setUseDraft]=useState(false);
@@ -49,10 +49,12 @@ function TopicTagsTab({push}){
       .sort((a,b)=>(a.sname+a.name).localeCompare(b.sname+b.name));
   },[refData]);
   const topicLabel=useCallback(id=>{ const t=topics.find(x=>x.id===id); return t?`${t.sname} › ${t.name}`:id; },[topics]);
-  const filteredTopics=useMemo(()=>{
-    const q=topicFilter.trim().toLowerCase(); if(!q) return topics;
-    return topics.filter(t=>(t.sname+" "+t.name+" "+t.id).toLowerCase().includes(q));
-  },[topics,topicFilter]);
+  const subjectList=useMemo(()=>{
+    const m={}; topics.forEach(t=>{ m[t.sid]=m[t.sid]||{id:t.sid,name:t.sname,n:0}; m[t.sid].n++; });
+    return Object.values(m).sort((a,b)=>a.name.localeCompare(b.name));
+  },[topics]);
+  const topicsOfSubject=useMemo(()=>topics.filter(t=>t.sid===subjFilter).sort((a,b)=>a.id.localeCompare(b.id)),[topics,subjFilter]);
+  const startEdit=(r)=>{ const t=topics.find(x=>x.id===r.topic_id); setSubjFilter(t?t.sid:""); setSugg(null); setEdit(r); };
 
   const loadRef=useCallback(()=>{ if(gasSecret) fetchReferenceData({gasSecret}).then(d=>{ if(d) setRefData(d); }); },[gasSecret]);
   const loadAll=useCallback(async()=>{
@@ -234,17 +236,22 @@ function TopicTagsTab({push}){
 
       {/* ══════════ 📋 রুল ══════════ */}
       {tab==="rules" && <div>
-        {!edit && <button className="btn bp" style={{width:"100%",justifyContent:"center",marginBottom:10}} disabled={needSetup} onClick={()=>setEdit({...EMPTY_RULE})}>➕ নতুন রুল</button>}
+        {!edit && <button className="btn bp" style={{width:"100%",justifyContent:"center",marginBottom:10}} disabled={needSetup} onClick={()=>{ setSubjFilter(""); setSugg(null); setEdit({...EMPTY_RULE}); }}>➕ নতুন রুল</button>}
 
         {edit && <div className="card" style={{marginBottom:12,border:`1px solid ${C.info}`}}>
           <div style={{fontSize:13,fontWeight:700,marginBottom:10}}>{edit.rule_id?`✏️ রুল এডিট: ${edit.rule_id}`:"➕ নতুন রুল"}</div>
 
-          <label style={lbl}>Subject › Topic (যেখানে প্রশ্ন সরবে)</label>
-          <input className="inp" value={topicFilter} onChange={e=>setTopicFilter(e.target.value)} placeholder="🔍 খোঁজো (যেমন: লাভ, Preposition)" style={{marginBottom:6}}/>
-          <select className="inp" value={edit.topic_id} onChange={e=>setEdit({...edit,topic_id:e.target.value})} style={{marginBottom:10}}>
-            <option value="">— টপিক বাছো ({filteredTopics.length}টি) —</option>
-            {edit.topic_id && !filteredTopics.find(t=>t.id===edit.topic_id) && <option value={edit.topic_id}>{topicLabel(edit.topic_id)}</option>}
-            {filteredTopics.slice(0,300).map(t=><option key={t.id} value={t.id}>{t.sname} › {t.name} ({t.id})</option>)}
+          <label style={lbl}>১) Subject (যেখানে প্রশ্ন সরবে)</label>
+          <select className="inp" value={subjFilter} onChange={e=>{ setSubjFilter(e.target.value); setEdit({...edit,topic_id:""}); setSugg(null); }} style={{marginBottom:10}}>
+            <option value="">— Subject বাছো ({subjectList.length}টি) —</option>
+            {subjectList.map(sj=><option key={sj.id} value={sj.id}>{sj.name} ({sj.n}টি টপিক)</option>)}
+          </select>
+
+          <label style={lbl}>২) Topic{subjFilter?` (${topicsOfSubject.length}টি)`:""}</label>
+          <select className="inp" value={edit.topic_id} disabled={!subjFilter} onChange={e=>{ setEdit({...edit,topic_id:e.target.value}); setSugg(null); }} style={{marginBottom:10}}>
+            <option value="">{subjFilter?"— Topic বাছো —":"আগে Subject বাছো"}</option>
+            {edit.topic_id && !topicsOfSubject.find(t=>t.id===edit.topic_id) && <option value={edit.topic_id}>{topicLabel(edit.topic_id)}</option>}
+            {topicsOfSubject.map(t=><option key={t.id} value={t.id}>{t.name} ({t.id})</option>)}
           </select>
 
           <label style={lbl}>ট্যাগ / keywords (কমা দিয়ে আলাদা)</label>
@@ -315,7 +322,7 @@ function TopicTagsTab({push}){
               {r.require_blank==="Y"&&"ফাঁকা-শর্ত · "}{r.answer_whole==="Y"&&"পুরো-উত্তর · "}{String(r.exclude_keywords||"").trim()&&`বাদ: ${String(r.exclude_keywords).slice(0,60)}`}
             </div>}
             <div style={{...row,marginTop:8}}>
-              <button className="btn" disabled={busy} onClick={()=>{ setEdit({...EMPTY_RULE,...r}); setTopicFilter(""); window.scrollTo?.({top:0,behavior:"smooth"}); }}>✏️ এডিট</button>
+              <button className="btn" disabled={busy} onClick={()=>{ startEdit({...EMPTY_RULE,...r}); window.scrollTo?.({top:0,behavior:"smooth"}); }}>✏️ এডিট</button>
               <button className="btn" disabled={busy} onClick={()=>toggleActive(r)}>{r.active==="Y"?"⏸ বন্ধ":"▶ চালু"}</button>
               <button className="btn" disabled={busy} style={{color:C.danger}} onClick={()=>deleteRule(r)}>🗑</button>
             </div>
