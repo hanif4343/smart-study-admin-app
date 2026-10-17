@@ -7,7 +7,8 @@
    বানাতে না হয়। নতুন ঐচ্ছিক prop `initialPaper` — দিলে সেই ডেটা দিয়ে শুরু হয়
    (OCR ইম্পোর্টের জন্য), না দিলে আগের মতোই খালি অবস্থা থেকে শুরু হয় (Single Entry-এর
    জন্য — কোনো behavior change নেই)। ══════════ */
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText } from "../../core/paperTemplates.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../../core/ocrProviders.js";
 import { buildSheetRow, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft } from "../../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
@@ -111,10 +112,14 @@ const newPaperItem=()=>({id:newPaperId(),question:"",answer:"",explanation:"",te
 // "+ আরেকটা সাব-পার্ট" চাপা লাগতো। এখন ডিফল্টভাবে ৫টা খালি বক্স নিয়েই শুরু হয় —
 // কম লাগলে পাশের ✕ বাটনে চেপে বাদ দেওয়া যায় (আগে থেকেই ছিল)।
 const DEFAULT_SUBPARTS=5;
-const newGroupCard=()=>({id:newPaperId(),formatStyle:"plain",heading:"",topicSel:{id:"",name:""},subjectChoice:"grammar",
-  items:Array.from({length:DEFAULT_SUBPARTS},()=>newPaperItem())});
+// 🆕 tpl (ঐচ্ছিক) — paperTemplates.js-এর টেমপ্লেট; দিলে হেডিং/ফরম্যাট/লেআউট সেট হয়ে শুরু হয়, কিন্তু
+// ভেতরের সাব-পার্ট বক্স সব ফাঁকা (কোনো স্যাম্পল/প্লেসহোল্ডার টেক্সট নেই)। না দিলে আগের মতোই (OCR ইম্পোর্ট)।
+const newGroupCard=(tpl)=>({id:newPaperId(),formatStyle:tpl?tpl.fmt:"plain",heading:tpl?tpl.heading:"",tplKey:tpl?tpl.key:"",
+  wordBox:tpl&&tpl.key==="cloze"?Array(6).fill(""):[],passage:"",topicSel:{id:"",name:""},subjectChoice:"grammar",
+  items:Array.from({length:DEFAULT_SUBPARTS},()=>tpl&&tpl.mcq?{...newPaperItem(),qtype:"mcq"}:newPaperItem())});
 const newFlatCard=(isGk)=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:"",qtype:"written",opt1:"",opt2:"",opt3:"",opt4:"",topicSel:{id:"",name:""},...(isGk?{subjectSel:{id:"",name:""}}:{})});
-const makeInitialPaper=()=>({bangla:[newGroupCard()],english:[newGroupCard()],math:[newFlatCard(false)],gk:[newFlatCard(true)]});
+const makeInitialPaper=()=>({bangla:[newGroupCard(PAPER_TEMPLATES.bangla[0])],english:[newGroupCard(PAPER_TEMPLATES.english[0])],math:[newFlatCard(false)],gk:[newFlatCard(true)]});
+const toBn=n=>String(n).replace(/\d/g,d=>"০১২৩৪৫৬৭৮৯"[d]);
 const SUBLABELS=["ক","খ","গ","ঘ","ঙ","চ","ছ","জ","ঝ","ঞ","ট","ঠ","ড","ঢ"];
 
 // 🆕 Topic মার্জ — বাংলা/ইংরেজি ট্যাবে ২টা আসল subject (ব্যাকরণ+সাহিত্য) থাকে, কিন্তু
@@ -190,6 +195,144 @@ const PC = {
   answerBg:"#EAF1E4", answerText:"#2C4728", inputBg:"#FFFFFF",
 };
 const pcField = {background:PC.inputBg,border:`1px solid ${PC.border}`,color:PC.ink,borderRadius:9,padding:"9px 12px",fontFamily:"inherit",fontSize:13,width:"100%",outline:"none"};
+
+/* ══════════ 🆕 ছাপা-প্রশ্নপত্র (printed sheet) স্টাইল — Written ট্যাবের কার্ডগুলোর জন্য ══════════ */
+const PS_CSS=`
+.ps-sheet,.ps-sheet *{box-sizing:border-box}
+.ps-bn{margin-bottom:8px}
+.ps-bn .b1{background:#FFEB00;color:#000;text-align:center;font-weight:800;font-size:19px;padding:5px}
+.ps-bn .b2{background:#E8710A;color:#000;text-align:center;font-weight:800;font-size:16px;padding:3px}
+.ps-bn .b3{background:#1F2A6B;color:#fff;display:flex;justify-content:space-between;font-weight:800;font-size:12px;padding:4px 8px}
+.ps-sheet{background:#fff;color:#000;border:1px solid #C9BFA0;border-radius:6px;padding:6px 10px 10px;margin-bottom:10px;font-family:"Noto Sans Bengali","Hind Siliguri",inherit;font-size:14px}
+.ps-en{font-family:Georgia,"Times New Roman",serif}
+.ps-hd{display:flex;align-items:flex-start;gap:5px;margin-top:2px}
+.ps-h{flex:1;font-weight:800;font-size:15px;margin:2px 0 3px;white-space:pre-wrap}
+.ps-ex{flex:none;border:1px solid #1F2A6B;background:#fff;color:#1F2A6B;font-size:11px;font-weight:700;border-radius:6px;padding:2px 7px;cursor:pointer;white-space:nowrap;font-family:system-ui,"Noto Sans Bengali",sans-serif}
+.ps-ex.on{background:#1F2A6B;color:#fff}
+.ps-x{border:0;background:none;font-size:12px;padding:0 2px;cursor:pointer;opacity:.7;flex:none}
+.ps-mini{border:0;background:none;font-size:11px;padding:0 2px;cursor:pointer;opacity:.6;flex:none}
+.ps-pk{margin:3px 0 5px 8px;border:1px solid #1F2A6B;border-radius:8px;overflow:hidden}
+.ps-pk button{display:block;width:100%;text-align:left;border:0;border-bottom:1px solid #ddd;background:#fff;color:#000;font-size:13px;padding:6px 8px;cursor:pointer;font-family:inherit}
+.ps-pk button:last-child{border-bottom:0}
+.ps-pk button.cur{background:#FFEB00;font-weight:800}
+.ps-row{display:grid;grid-template-columns:26px minmax(0,1.15fr) 16px minmax(0,1fr) auto;column-gap:3px;align-items:baseline;margin:0 0 2px 6px;line-height:1.35}
+.ps-row.st{grid-template-columns:26px minmax(0,1fr) auto}
+.ps-lab{white-space:nowrap}
+.ps-sep{text-align:center}
+.ps-ac{display:inline-flex;align-items:center;gap:1px;justify-self:end}
+.ps-l2{grid-column:2 / -1;display:flex;gap:4px;align-items:baseline;margin-bottom:2px}
+.ps-l2>span{white-space:nowrap}
+.ps-in{display:block;width:100%;min-width:0;background:transparent;border:0;border-bottom:1px dotted #bbb;border-radius:0;font:inherit;color:#000;padding:2px 1px;outline:none;resize:none;overflow:hidden;line-height:1.35}
+.ps-in:focus{background:#fffbe0;border-bottom:1px solid #1F2A6B}
+.ps-in.q{font-weight:700}
+.ps-in.ok{border-bottom:1px solid #22a559}
+.ps-bdg{background:#000;color:#fff;padding:0 5px;border-radius:3px;font-size:12px}
+.ps-opts{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:2px 10px}
+.ps-opts label{display:flex;gap:3px;align-items:baseline}
+.ps-tbl{border-collapse:collapse;width:calc(100% - 6px);margin:3px 0 4px 6px;table-layout:fixed}
+.ps-tbl th{background:#d9d9d9;border:1px solid #000;padding:3px;font-weight:800;text-align:center}
+.ps-tbl td{border:1px solid #000;padding:0 4px}
+.ps-tbl td .ps-in{border:0;padding:5px 1px}
+.ps-tbl .xc{border:0;width:44px;padding:0;text-align:right}
+.ps-tbl th.ps-thx{border:0;background:none;width:44px}
+.ps-add{margin:2px 0 4px 6px;border:1px dashed #8a6d1d;background:none;color:#8a6d1d;font-size:12px;font-weight:700;border-radius:6px;padding:3px 10px;cursor:pointer;font-family:inherit}
+.ps-cu{display:flex;gap:6px;margin:2px 0 6px 6px;align-items:center}
+.ps-cu select{flex:none;max-width:46%;font-size:11px}
+.ps-hint{font-size:10.5px;color:#7a6a3a;margin:0 0 4px 6px}
+.ps-wb{display:flex;flex-wrap:wrap;border-left:1px solid #000;border-top:1px solid #000;margin:3px 0 4px 6px;width:calc(100% - 6px)}
+.ps-wc{border-right:1px solid #000;border-bottom:1px solid #000;width:33.333%;display:flex;align-items:center;padding:0 2px}
+.ps-wc .ps-in{text-align:center;border:0}
+.ps-box{border:1px dotted #999!important;padding:5px!important;min-height:70px;margin:4px 0}
+.ps-h2{font-weight:800;margin:4px 0 2px 6px}
+.ps-an{display:flex;flex-wrap:wrap;gap:0 10px;margin-left:6px}
+.ps-ch{display:flex;align-items:baseline;gap:3px;width:calc(50% - 5px)}
+.ps-ch b{white-space:nowrap;font-weight:800}
+.ps-w{position:relative;flex:1;min-width:0;width:100%}
+.ps-tb{position:absolute;bottom:100%;left:0;z-index:30;display:flex;gap:2px;background:#1F2A6B;border-radius:6px;padding:2px 3px;box-shadow:0 2px 6px rgba(0,0,0,.3)}
+.ps-tb button{background:none;border:0;color:#fff;font-size:13px;min-width:24px;height:22px;cursor:pointer;font-family:Georgia,serif;border-radius:4px}
+.ps-tb button:hover{background:#ffffff33}
+.ps-pv{font-size:12.5px;background:#fffbe0;border-left:3px solid #1F2A6B;padding:1px 6px;margin:1px 0 2px;color:#000;white-space:pre-wrap}
+.ps-hintbar{font-size:10.5px;color:#7a6a3a;margin:0 0 6px}
+.ps-tp{background:#FBF7EA;border:1px solid #C9BFA0;border-radius:8px;padding:8px;margin-top:8px}
+`;
+/* ══════════ 🆕 Bold / Underline / Italic (রিচ-টেক্সট) ══════════
+   টেক্সট সিলেক্ট করে Ctrl+B (বোল্ড) / Ctrl+U (আন্ডারলাইন) / Ctrl+I (ইটালিক) চাপলে, অথবা মাউস দিয়ে
+   সিলেক্ট করলে ভেসে ওঠা টুলবারের B / U / I চাপলে — সিলেক্ট করা অংশ <b>..</b> / <u>..</u> / <i>..</i>
+   ট্যাগে মোড়ানো হয় (আবার চাপলে খুলে যায়)। ডেটাবেজে এই ট্যাগসহ টেক্সটই সেভ হয়।
+   ⚠️ ইউজার অ্যাপে এই তিনটা ট্যাগ রেন্ডার করতে হবে (<b> বোল্ড, <u> আন্ডারলাইন, <i> ইটালিক) —
+   নইলে ছাত্রদের স্ক্রিনে ট্যাগগুলো লেখা হিসেবেই দেখাবে। আগের *হাইলাইট* ও _ফাঁকা_ মার্কআপ আলাদা, অক্ষত। */
+const RICH_TAG_RE=/<\/?[biu]>/;
+function psRichRender(text){
+  const parts=String(text||"").split(/(<\/?[biu]>)/);
+  let b=0,u=0,i=0;
+  return parts.map((p,k)=>{
+    const m=/^<(\/?)([biu])>$/.exec(p);
+    if(m){ const on=m[1]?0:1; if(m[2]==="b")b=on; else if(m[2]==="u")u=on; else i=on; return null; }
+    if(!p)return null;
+    return <span key={k} style={{fontWeight:b?800:undefined,textDecoration:u?"underline":undefined,fontStyle:i?"italic":undefined}}>{p}</span>;
+  });
+}
+// সিলেকশনে ট্যাগ টগল: আগে থেকে মোড়ানো (ভেতরে বা ঠিক বাইরে) থাকলে খুলে ফেলে, নইলে মোড়ায়
+function psToggleTag(el,tag){
+  const v=el.value; let s=el.selectionStart,e=el.selectionEnd;
+  // সিলেকশনের কোনো প্রান্ত যদি অন্য কোনো ট্যাগের মাঝখানে পড়ে (যেমন <b> এর অর্ধেক), ট্যাগের বাইরে সরিয়ে নাও
+  for(const m of v.matchAll(/<\/?[biu]>/g)){
+    const ms=m.index, me=ms+m[0].length;
+    if(s>ms&&s<me)s=me;
+    if(e>ms&&e<me)e=ms;
+  }
+  if(s>=e)return null;
+  const open="<"+tag+">",close="</"+tag+">",sel=v.slice(s,e);
+  if(sel.length>=open.length+close.length&&sel.startsWith(open)&&sel.endsWith(close)){
+    const inner=sel.slice(open.length,sel.length-close.length);
+    return {value:v.slice(0,s)+inner+v.slice(e),s,e:s+inner.length};
+  }
+  if(s>=open.length&&v.slice(s-open.length,s)===open&&v.slice(e,e+close.length)===close){
+    return {value:v.slice(0,s-open.length)+sel+v.slice(e+close.length),s:s-open.length,e:e-open.length};
+  }
+  return {value:v.slice(0,s)+open+sel+close+v.slice(e),s:s+open.length,e:e+open.length};
+}
+// টেক্সট লিখলে নিজে নিজে উচ্চতা বাড়ে (ছাপা লাইনের মতো দেখায়) + Ctrl+B/U/I + সিলেক্ট করলে ভাসমান টুলবার
+function PsTA({value,onChange,onKeyDown,taRef,className}){
+  const r=useRef(null);
+  const[hasSel,setHasSel]=useState(false);
+  useLayoutEffect(()=>{ const el=r.current; if(el){ el.style.height="auto"; el.style.height=el.scrollHeight+"px"; } },[value]);
+  const sync=()=>{ const el=r.current; setHasSel(!!el&&el.selectionStart!==el.selectionEnd); };
+  const commit=res=>{
+    if(!res)return;
+    if(onChange)onChange({target:{value:res.value}});
+    requestAnimationFrame(()=>{ const el=r.current; if(el){ el.focus(); el.setSelectionRange(res.s,res.e); } });
+  };
+  const apply=tag=>{ const el=r.current; if(el)commit(psToggleTag(el,tag)); };
+  const clearFmt=()=>{
+    const el=r.current; if(!el||el.selectionStart===el.selectionEnd)return;
+    const v=el.value,s=el.selectionStart,e=el.selectionEnd,sel=v.slice(s,e).replace(/<\/?[biu]>/g,"");
+    commit({value:v.slice(0,s)+sel+v.slice(e),s,e:s+sel.length});
+  };
+  const keyDown=e=>{
+    if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey){
+      const k=String(e.key).toLowerCase(), tag=k==="b"?"b":k==="u"?"u":k==="i"?"i":null;
+      if(tag){ e.preventDefault(); apply(tag); return; }
+    }
+    if(onKeyDown)onKeyDown(e);
+  };
+  return (
+    <div className="ps-w">
+      {hasSel&&(
+        <div className="ps-tb" onMouseDown={e=>e.preventDefault()}>
+          <button type="button" title="বোল্ড (Ctrl+B)" onClick={()=>apply("b")}><b>B</b></button>
+          <button type="button" title="আন্ডারলাইন (Ctrl+U)" onClick={()=>apply("u")}><u>U</u></button>
+          <button type="button" title="ইটালিক (Ctrl+I)" onClick={()=>apply("i")}><i>I</i></button>
+          <button type="button" title="ফরম্যাট মুছো" onClick={clearFmt}>✖</button>
+        </div>
+      )}
+      <textarea ref={el=>{r.current=el; if(taRef)taRef(el);}} rows={1} className={"ps-in"+(className?" "+className:"")}
+        value={value||""} onChange={onChange} onKeyDown={keyDown}
+        onSelect={sync} onKeyUp={sync} onMouseUp={sync} onBlur={()=>setHasSel(false)}/>
+      {RICH_TAG_RE.test(value||"")&&<div className="ps-pv">{psRichRender(value)}</div>}
+    </div>
+  );
+}
 
 function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading,onRetryRefData,push,sessionCount,setSessionCount,initialPaper,onConsumedInitialPaper}){
   // 🆕 initialPaper — OCR/Import পেজ থেকে প্রি-ফিল্ড ডেটা দিয়ে শুরু করার জন্য
@@ -374,10 +517,22 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
 
   const setCards=(tab,updater)=>setPaper(p=>({...p,[tab]:updater(p[tab])}));
   const updateCard=(tab,cardId,patch)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,...patch}:c));
-  const removeCard=(tab,cardId)=>setCards(tab,cards=>cards.length>1?cards.filter(c=>c.id!==cardId):cards);
-  const addCard=tab=>setCards(tab,cards=>[...cards,tab==="math"?newFlatCard(false):tab==="gk"?newFlatCard(true):newGroupCard()]);
+  // ❌ চাপলে প্রশ্নটা মুছে যায়, নিচের সিরিয়াল অটো ঠিক হয়ে যায় (সিরিয়াল render-এ index থেকে আসে)।
+  // শেষ কার্ডটা মুছলে একটা ফাঁকা নতুন কার্ড থেকে যায় (ট্যাব কখনো একদম খালি থাকে না)।
+  const removeCard=(tab,cardId)=>setCards(tab,cards=>{
+    const rest=cards.filter(c=>c.id!==cardId);
+    if(rest.length) return rest;
+    return [tab==="math"?newFlatCard(false):tab==="gk"?newFlatCard(true):newGroupCard(tplListFor(tab)[0])];
+  });
+  const addCard=tab=>setCards(tab,cards=>{
+    if(tab==="math") return [...cards,newFlatCard(false)];
+    if(tab==="gk") return [...cards,newFlatCard(true)];
+    // নতুন প্রশ্নে এখনো ব্যবহার হয়নি এমন প্রথম হেডিং-টেমপ্লেট বসে (সবই ব্যবহার হলে প্রথমটা)
+    const list=tplListFor(tab), used=cards.map(c=>resolveTpl(c,tab).key);
+    return [...cards,newGroupCard(list.find(x=>!used.includes(x.key))||list[0])];
+  });
   const updateItem=(tab,cardId,itemId,patch)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:c.items.map(it=>it.id===itemId?{...it,...patch}:it)}:c));
-  const addSubItem=(tab,cardId)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:[...c.items,newPaperItem()]}:c));
+  const addSubItem=(tab,cardId)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:[...c.items,resolveTpl(c,tab).mcq?{...newPaperItem(),qtype:"mcq"}:newPaperItem()]}:c));
   const removeSubItem=(tab,cardId,itemId)=>setCards(tab,cards=>cards.map(c=>c.id===cardId?{...c,items:c.items.length>1?c.items.filter(it=>it.id!==itemId):c.items}:c));
 
   /* ── 🆕 MCQ AI-generate — বিদ্যমান plain single-form-এই যেই generate()/
@@ -503,7 +658,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       requestAnimationFrame(()=>flatQRefs.current[lastCard.id]?.focus());
     } else if(card.items&&card.items.length){
       const lastItem=card.items[card.items.length-1];
-      requestAnimationFrame(()=>textareaRefs.current[lastItem.id]?.focus());
+      requestAnimationFrame(()=>(textareaRefs.current[lastItem.id]||answerRefs.current[lastItem.id])?.focus());
     }
     pendingFocusRef.current=null;
   },[paper]);
@@ -589,7 +744,10 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       for(const t of PAPER_TABS){
         for(const card of (paper[t.key]||[])){
           if(t.grouped){
-            const validItems=(card.items||[]).filter(it=>it.question.trim());
+            // cloze (শব্দ-বক্স+অনুচ্ছেদ): প্রতিটা ফাঁকার উত্তর (i),(ii)... লেবেলে সেভ হয়
+            const validItems=resolveTpl(card,t.key).key==="cloze"
+              ? (card.items||[]).map((it,i)=>({...it,question:"("+(RO[i]||i+1)+")"})).filter(it=>it.answer.trim())
+              : (card.items||[]).filter(it=>it.question.trim());
             if(!validItems.length)continue;
             // 🐛 ফিক্স (ভুল/ডুপ্লিকেট Subject): t.subjectChoices থাকলে (বাংলা/ইংরেজি ট্যাব)
             // এই কার্ডের প্রশ্নগুলো ২টা আসল subject-এর (ব্যাকরণ/সাহিত্য) কোনটার নিচে
@@ -627,7 +785,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             if(!topicName)throw locatedError(`"${t.label}" ট্যাবে একটা কার্ডে Topic ফাঁকা আছে — Topic লিখো/বেছে নাও`,t.key,card.id);
             const topicId=await resolveTopicCached(subjId,card.topicSel);
             if(!topicId)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
-            const heading=card.heading.trim();
+            const heading=cardHeadingText(card,t.key).trim();
             const groupId=heading?("GRP_"+Date.now().toString(36).toUpperCase()+Math.random().toString(36).slice(2,6).toUpperCase()):"";
             // 🐛 ফিক্স (Fill-blank/Highlight): এখন formatStyle ড্রপডাউন থেকে বেছে নেওয়া বা
             // 🖍 বাটনে চাপা — কোনোটাই বাধ্যতামূলক না। প্রশ্নের টেক্সটে সরাসরি টাইপ করা
@@ -761,6 +919,365 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     return()=>window.removeEventListener("keydown",onKey);
   },[submitPaper]);
 
+  /* ══════════ 🆕 ছাপা-প্রশ্নপত্র স্টাইলের কার্ড ══════════
+     প্রতিটা প্রশ্নের হেডিং-লাইনের শেষে "Expand ▾" (এই ট্যাবের সব হেডিং সিরিয়ালে দেখায়, বাছলেই
+     ওই নম্বরের হেডিং + ফরম্যাট বদলায়, আগের লেখা হারায় না) আর ❌ (প্রশ্ন মোছা, সিরিয়াল অটো ঠিক)।
+     সিরিয়াল: বাংলা/গণিত/GK → ০১। + ক) | English → 1. + a) */
+  const isEnTab=activeTab==="english";
+  const psLab=i=>isEnTab?String.fromCharCode(97+(i%26))+")":(SUBLABELS[i]||String(i+1))+")";
+  const psNo=n=>isEnTab?n+".":(n<10?"০":"")+toBn(n)+"।";
+  const[pickerOpen,setPickerOpen]=useState(()=>new Set());
+  const togglePicker=id=>setPickerOpen(s=>{const n=new Set(s);if(n.has(id))n.delete(id);else n.add(id);return n;});
+
+  // হেডিং থেকে Topic অটো-ম্যাচ (আগের onBlur লজিকই, শুধু ফাংশন করে রিইউজ)
+  const topicPatchForHeading=(card,heading)=>{
+    if(card.topicSel.name.trim())return null;
+    const options=tabDef.subjectChoices
+      ? mergedTopicOptionsFor(refData,tabDef.subjectChoices.map(c=>subjectOptions.find(s=>s.name===c.name)?.id).filter(Boolean))
+      : topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id);
+    const match=bestTopicMatchForHeading(heading,options);
+    if(!match)return null;
+    const patch={topicSel:{id:match.id,name:match.name},topicAuto:true};
+    if(tabDef.subjectChoices){
+      const ex=(refData?.topics||[]).find(tp=>tp.topic_id===match.id);
+      if(ex){
+        const idx=tabDef.subjectChoices.findIndex(c=>subjectOptions.find(s=>s.name===c.name)?.id===ex.subject_id);
+        if(idx>=0) patch.subjectChoice=tabDef.subjectChoices[idx].key;
+      }
+    }
+    return patch;
+  };
+  // Expand-এ টেমপ্লেট বাছা: হেডিং+ফরম্যাট+লেআউট বদলায়; সাব-পার্টের লেখা (question/answer) থেকে যায়
+  const setTemplate=(tab,card,tpl)=>{
+    const prev=resolveTpl(card,tab);
+    const patch={tplKey:tpl.key};
+    if(tpl.key!=="custom"){ patch.heading=tpl.heading; patch.formatStyle=tpl.fmt; }
+    patch.items=card.items.map(it=>tpl.mcq?{...it,qtype:"mcq"}:(prev.mcq&&it.qtype==="mcq"?{...it,qtype:"written"}:it));
+    if(tpl.key==="cloze"&&!(card.wordBox&&card.wordBox.length)) patch.wordBox=Array(6).fill("");
+    if(tpl.key!=="custom"){
+      const base=card.topicAuto?{...card,topicSel:{id:"",name:""}}:card; // আগেরটা অটো-বসানো হলে নতুন হেডিং অনুযায়ী বদলাবে
+      const tp=topicPatchForHeading(base,tpl.heading);
+      if(tp) Object.assign(patch,tp);
+    }
+    updateCard(tab,card.id,patch);
+  };
+
+  /* ── Tab / Shift+Tab নেভিগেশন (সব লেআউটে একই নিয়ম) ──
+     যেকোনো লেখার ঘরে Tab চাপলে স্ক্রিনের ক্রমে পরের ঘরে যায়: প্রশ্ন → (বাক্য/অপশন) → উত্তর → পরের প্রশ্ন;
+     টেবিলে বাঁ-ঘর → ডান-ঘর → পরের সারি; গণিতে প্রশ্ন → সমাধান → উত্তর → পরের প্রশ্ন। Shift+Tab উল্টো দিকে।
+     ছোট বাটনগুলো (ℹ️ 🖍 ❌) ও Topic বক্স Tab-ক্রমে আসে না। একদম শেষ ঘরে Tab চাপলে নতুন সারি/প্রশ্ন যোগ হয়ে
+     সেখানেই কার্সর যায়। */
+  const psTabNav=e=>{
+    if(e.key!=="Tab"||e.ctrlKey||e.altKey||e.metaKey||e.defaultPrevented)return;
+    const el=e.target;
+    if(!el||!el.classList||!el.classList.contains("ps-in"))return;
+    const fields=[...e.currentTarget.querySelectorAll(".ps-sheet .ps-in")].filter(f=>!f.disabled&&f.offsetParent!==null&&!f.closest(".ps-tp"));
+    const i=fields.indexOf(el);
+    if(i<0)return;
+    if(e.shiftKey){ if(i>0){ e.preventDefault(); fields[i-1].focus(); } return; }
+    e.preventDefault();
+    if(i<fields.length-1){ fields[i+1].focus(); return; }
+    const cards=paper[activeTab]||[], last=cards[cards.length-1];
+    if(!last)return;
+    if(tabDef.grouped){ pendingFocusRef.current={tab:activeTab,cardId:last.id,flat:false}; addSubItem(activeTab,last.id); }
+    else { pendingFocusRef.current={tab:activeTab,cardId:last.id,flat:true}; addCard(activeTab); }
+  };
+
+  const psCtl=(card,it,opts)=>(
+    <span className="ps-ac">
+      {opts.mcqToggle&&(
+        <button type="button" tabIndex={-1} className="ps-mini" title="Written ⇄ MCQ"
+          onClick={()=>updateItem(activeTab,card.id,it.id,{qtype:it.qtype==="mcq"?"written":"mcq"})}>{it.qtype==="mcq"?"❓":"✍️"}</button>
+      )}
+      {opts.hl&&it.qtype!=="mcq"&&(
+        <button type="button" tabIndex={-1} className="ps-mini" title="সিলেক্ট করা অংশ মার্ক করো"
+          onClick={()=>wrapHighlight(activeTab,card.id,it.id,card.formatStyle)}>🖍</button>
+      )}
+      <button type="button" tabIndex={-1} className="ps-mini" title="ব্যাখ্যা / টেকনিক" onClick={()=>toggleExpand(it.id)}>{expandedItems.has(it.id)?"▲":"ℹ️"}</button>
+      {card.items.length>1&&(
+        <button type="button" tabIndex={-1} className="ps-x" title="এই সারি বাদ দাও" onClick={()=>removeSubItem(activeTab,card.id,it.id)}>❌</button>
+      )}
+    </span>
+  );
+  const psExtras=(card,it,tpl)=>expandedItems.has(it.id)&&(
+    <>
+      {!(tpl.third&&tpl.third.field==="explanation")&&(
+        <div className="ps-l2"><span>{isEnTab?"Explanation:":"ব্যাখ্যা:"}</span>
+          <PsTA value={it.explanation} onChange={e=>updateItem(activeTab,card.id,it.id,{explanation:e.target.value})}/></div>
+      )}
+      <div className="ps-l2"><span>{isEnTab?"Technique:":"টেকনিক:"}</span>
+        <PsTA value={it.technique} onChange={e=>updateItem(activeTab,card.id,it.id,{technique:e.target.value})}/></div>
+    </>
+  );
+
+  const renderGroupCard=(card,ci)=>{
+    const tpl=resolveTpl(card,activeTab);
+    const custom=tpl.key==="custom";
+    const open=pickerOpen.has(card.id);
+    const list=tplListFor(activeTab);
+    const lay=custom?(card.formatStyle==="table"?"tbl":"stack"):tpl.lay;
+    const pre=custom?(isEnTab?"Answer:":"উত্তর:"):(tpl.pre||"");
+    const cols=custom?(isEnTab?["Word","Meaning"]:["শব্দ","ব্যাখ্যা"]):tpl.cols;
+    const hl=card.formatStyle==="highlight"||card.formatStyle==="fillblank";
+    const title=card.heading||tpl.heading||(isEnTab?"(heading)":"(হেডিং লিখো)");
+
+    const mkQ=(it,idx,isFill,cls)=>(
+      <PsTA className={cls} taRef={el=>{textareaRefs.current[it.id]=el;}} value={it.question}
+        onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}/>
+    );
+    const mkA=(it,idx)=>(
+      <PsTA taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
+        onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}/>
+    );
+
+    let body=null;
+    if(lay==="cloze"){
+      const wb=card.wordBox||[];
+      body=(
+        <div style={{marginLeft:6}}>
+          <div className="ps-wb" style={{marginLeft:0,width:"100%"}}>
+            {wb.map((w,wi)=>(
+              <div className="ps-wc" key={wi}>
+                <input className="ps-in" value={w} onChange={e=>updateCard(activeTab,card.id,{wordBox:wb.map((x,k)=>k===wi?e.target.value:x)})}/>
+                <button type="button" tabIndex={-1} className="ps-x" onClick={()=>updateCard(activeTab,card.id,{wordBox:wb.filter((_,k)=>k!==wi)})}>❌</button>
+              </div>
+            ))}
+          </div>
+          <button type="button" className="ps-add" style={{marginLeft:0}} onClick={()=>updateCard(activeTab,card.id,{wordBox:[...wb,""]})}>＋ শব্দ</button>
+          <PsTA className="ps-box" value={card.passage||""} onChange={e=>updateCard(activeTab,card.id,{passage:e.target.value})}/>
+          <div className="ps-h2" style={{marginLeft:0}}>Answer:</div>
+          <div className="ps-an" style={{marginLeft:0}}>
+            {card.items.map((it,idx)=>(
+              <div className="ps-ch" key={it.id}>
+                <b>({RO[idx]||idx+1})</b>
+                <PsTA taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
+                  onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value,question:e.target.value.trim()?"("+(RO[idx]||idx+1)+")":""})}/>
+                {card.items.length>1&&<button type="button" tabIndex={-1} className="ps-x" onClick={()=>removeSubItem(activeTab,card.id,it.id)}>❌</button>}
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    } else if(lay==="tbl"){
+      body=(
+        <table className="ps-tbl">
+          <thead><tr>{cols.map(c=><th key={c}>{c}</th>)}<th className="ps-thx"/></tr></thead>
+          <tbody>
+            {card.items.map((it,idx)=>(
+              <tr key={it.id}>
+                <td>{mkQ(it,idx,false)}</td>
+                <td>{mkA(it,idx)}</td>
+                <td className="xc">{psCtl(card,it,{hl:false,mcqToggle:false})}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      );
+    } else {
+      body=card.items.map((it,idx)=>{
+        const isFill=card.formatStyle==="fillblank"||detectAutoMarkup(it.question).style==="fillblank";
+        const mcq=it.qtype==="mcq";
+        const ctl=psCtl(card,it,{hl,mcqToggle:custom});
+        if(mcq) return (
+          <div className="ps-row st" key={it.id}>
+            <span className="ps-lab">{psLab(idx)}</span>{mkQ(it,idx,true)}{ctl}
+            <div className="ps-l2"><span>Options:</span>
+              <div className="ps-opts">
+                {["opt1","opt2","opt3","opt4"].map((k,oi)=>(
+                  <label key={k}><span>{String.fromCharCode(97+oi)})</span>
+                    <input className={"ps-in"+(it[k].trim()&&norm(it[k])===norm(it.answer)?" ok":"")} value={it[k]}
+                      onChange={e=>updateItem(activeTab,card.id,it.id,{[k]:e.target.value})}/></label>
+                ))}
+              </div>
+            </div>
+            <div className="ps-l2"><span>Answer:</span>{mkA(it,idx)}
+              <button type="button" tabIndex={-1} className="ps-mini" title="AI দিয়ে ৩টা ভুল অপশন বানাও" disabled={mcqGeneratingId===it.id}
+                onClick={()=>generateMcqOptions(activeTab,card.id,it.id,it.question,it.answer,false)}>{mcqGeneratingId===it.id?"⏳":"🤖"}</button>
+            </div>
+            {psExtras(card,it,tpl)}
+          </div>
+        );
+        if(lay==="pair") return (
+          <div className="ps-row" key={it.id}>
+            <span className="ps-lab">{psLab(idx)}</span>{mkQ(it,idx,isFill)}<span className="ps-sep">{tpl.sep}</span>{mkA(it,idx)}{ctl}
+            {tpl.third&&(
+              <div className="ps-l2"><span>{tpl.third.pre}</span>
+                <PsTA value={it[tpl.third.field]} onChange={e=>updateItem(activeTab,card.id,it.id,{[tpl.third.field]:e.target.value})}/>
+                {tpl.third.suf&&<span>{tpl.third.suf}</span>}</div>
+            )}
+            {psExtras(card,it,tpl)}
+          </div>
+        );
+        return (
+          <div className="ps-row st" key={it.id}>
+            <span className="ps-lab">{psLab(idx)}</span>{mkQ(it,idx,isFill)}{ctl}
+            {card.formatStyle==="fillblank"
+              ? <div className="ps-l2 ps-hint" style={{margin:0}}>_ফাঁকা শব্দ_ দিয়ে মার্ক করো — মার্ক করা শব্দই উত্তর</div>
+              : <div className="ps-l2"><span>{pre}</span>{mkA(it,idx)}</div>}
+            {psExtras(card,it,tpl)}
+          </div>
+        );
+      });
+    }
+
+    return (
+      <div key={card.id} className={"ps-sheet"+(isEnTab?" ps-en":"")}>
+        <div className="ps-hd">
+          <div className="ps-h">{psNo(ci+1)} {title}</div>
+          <button type="button" className={"ps-ex"+(open?" on":"")} onClick={()=>togglePicker(card.id)}>{open?"Close ▴":"Expand ▾"}</button>
+          <button type="button" tabIndex={-1} className="ps-x" title="এই প্রশ্নটা বাদ দাও" onClick={()=>removeCard(activeTab,card.id)}>❌</button>
+        </div>
+        {open&&(
+          <div className="ps-pk">
+            {list.map((t,i)=>(
+              <button type="button" key={t.key} className={t.key===tpl.key?"cur":""}
+                onClick={()=>{setTemplate(activeTab,card,t);togglePicker(card.id);}}>{psNo(i+1)} {t.title}</button>
+            ))}
+            <button type="button" className={custom?"cur":""} onClick={()=>{setTemplate(activeTab,card,CUSTOM_TPL);togglePicker(card.id);}}>{CUSTOM_TPL.title}</button>
+          </div>
+        )}
+        {custom&&(
+          <div className="ps-cu">
+            <input className="ps-in" value={card.heading}
+              onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}
+              onBlur={()=>{const tp=topicPatchForHeading(card,card.heading); if(tp)updateCard(activeTab,card.id,tp);}}
+              />
+            <select className="inp" value={card.formatStyle} onChange={e=>updateCard(activeTab,card.id,{formatStyle:e.target.value})}>
+              {formatStylesFor(activeTab).map(f=><option key={f.v} value={f.v}>{f.label}</option>)}
+            </select>
+          </div>
+        )}
+        {body}
+        {lay!=="cloze"&&(
+          <button type="button" className="ps-add" onClick={()=>addSubItem(activeTab,card.id)}>{isEnTab?"＋ Add":"＋ আরেকটা"}</button>
+        )}
+        {lay==="cloze"&&(
+          <button type="button" className="ps-add" onClick={()=>addSubItem(activeTab,card.id)}>＋ উত্তর</button>
+        )}
+        <div className="ps-tp">
+          <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:6,
+                  ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+                  <label style={{margin:0}}>📌 Topic (এই পুরো গ্রুপের জন্য একবারই)</label>
+                  {/* 🆕 বাংলা/ইংরেজি ট্যাবে টপিক-লিস্ট ২টা আসল subject (ব্যাকরণ+সাহিত্য/
+                      Grammar+Literature) মিলিয়ে দেখানো হয় (দেখো mergedTopicOptionsFor)।
+                      বিদ্যমান Topic বেছে নিলে এই টগল অটো বদলে যায় (আসল subject অনুযায়ী);
+                      নতুন Topic টাইপ করলে এই টগল অনুযায়ী subject ঠিক হবে। */}
+                  {tabDef.subjectChoices&&(
+                    <div style={{display:"flex",gap:4}}>
+                      {tabDef.subjectChoices.map(c=>(
+                        <button key={c.key} type="button" onClick={()=>updateCard(activeTab,card.id,{subjectChoice:c.key})}
+                          style={{fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:6,cursor:"pointer",
+                            border:`1px solid ${card.subjectChoice===c.key?PC.ink:PC.border}`,
+                            background:card.subjectChoice===c.key?PC.ink:"transparent",
+                            color:card.subjectChoice===c.key?"#fff":PC.muted}}>{c.short}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <TypeaheadCombo
+                  options={tabDef.subjectChoices
+                    ? mergedTopicOptionsFor(refData,tabDef.subjectChoices.map(c=>subjectOptions.find(s=>s.name===c.name)?.id).filter(Boolean))
+                    : topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
+                  value={card.topicSel}
+                  onChange={sel=>{
+                    const patch={topicSel:sel,topicAuto:false};
+                    if(sel.id&&tabDef.subjectChoices){
+                      const ex=(refData?.topics||[]).find(tp=>tp.topic_id===sel.id);
+                      if(ex){
+                        const idx=tabDef.subjectChoices.findIndex(c=>subjectOptions.find(s=>s.name===c.name)?.id===ex.subject_id);
+                        if(idx>=0) patch.subjectChoice=tabDef.subjectChoices[idx].key;
+                      }
+                    }
+                    updateCard(activeTab,card.id,patch);
+                  }}
+                  placeholder="Topic লিখো বা লিস্ট থেকে বেছে নাও..."
+                  newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে${tabDef.subjectChoices?` (${(tabDef.subjectChoices.find(c=>c.key===card.subjectChoice)||tabDef.subjectChoices[0]).short})`:""}`}
+                  inputStyle={pcField} lightTheme
+                />
+              </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderFlatCard=(card,ci)=>{
+    const isMath=activeTab==="math";
+    const mcq=card.qtype==="mcq";
+    const ex=expandedItems.has(card.id);
+    return (
+      <div key={card.id} className="ps-sheet">
+        <div className="ps-row st" style={{marginLeft:0}}>
+          <span className="ps-lab">{psLab(ci)}</span>
+          <PsTA className="q" taRef={el=>{flatQRefs.current[card.id]=el;}} value={card.question}
+            onChange={e=>updateCard(activeTab,card.id,{question:e.target.value})}/>
+          <span className="ps-ac">
+            <button type="button" tabIndex={-1} className="ps-mini" title="Written ⇄ MCQ" onClick={()=>updateCard(activeTab,card.id,{qtype:mcq?"written":"mcq"})}>{mcq?"❓":"✍️"}</button>
+            <button type="button" tabIndex={-1} className="ps-mini" title="ব্যাখ্যা / টেকনিক" onClick={()=>toggleExpand(card.id)}>{ex?"▲":"ℹ️"}</button>
+            <button type="button" tabIndex={-1} className="ps-x" title="এই প্রশ্নটা বাদ দাও" onClick={()=>removeCard(activeTab,card.id)}>❌</button>
+          </span>
+          {(isMath||ex)&&(
+            <div className="ps-l2">
+              {isMath?<span className="ps-bdg">সমাধান</span>:<span>ব্যাখ্যা:</span>}
+              <PsTA value={card.explanation} onChange={e=>updateCard(activeTab,card.id,{explanation:e.target.value})}/>
+            </div>
+          )}
+          <div className="ps-l2"><span>উত্তর:</span>
+            <PsTA taRef={el=>{flatARefs.current[card.id]=el;}} value={card.answer}
+              onChange={e=>updateCard(activeTab,card.id,{answer:e.target.value})}/>
+            {mcq&&(
+              <button type="button" tabIndex={-1} className="ps-mini" title="AI দিয়ে ৩টা ভুল অপশন বানাও" disabled={mcqGeneratingId===card.id}
+                onClick={()=>generateMcqOptions(activeTab,card.id,card.id,card.question,card.answer,true)}>{mcqGeneratingId===card.id?"⏳":"🤖"}</button>
+            )}
+          </div>
+          {mcq&&(
+            <div className="ps-l2"><span>Options:</span>
+              <div className="ps-opts">
+                {["opt1","opt2","opt3","opt4"].map((k,oi)=>(
+                  <label key={k}><span>{String.fromCharCode(97+oi)})</span>
+                    <input className={"ps-in"+(card[k].trim()&&norm(card[k])===norm(card.answer)?" ok":"")} value={card[k]}
+                      onChange={e=>updateCard(activeTab,card.id,{[k]:e.target.value})}/></label>
+                ))}
+              </div>
+            </div>
+          )}
+          {ex&&(
+            <div className="ps-l2"><span>টেকনিক:</span>
+              <PsTA value={card.technique} onChange={e=>updateCard(activeTab,card.id,{technique:e.target.value})}/></div>
+          )}
+        </div>
+        <div className="ps-tp">
+          {tabDef.gkStyle&&(
+              <div ref={el=>{subjectFieldRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
+                  ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
+                  <label>📚 Subject (real sheet subject — যেমন "সাধারণ বিজ্ঞান")</label>
+                  <TypeaheadCombo
+                    options={subjectOptionsShown}
+                    value={card.subjectSel}
+                    onChange={sel=>updateCard(activeTab,card.id,{subjectSel:sel})}
+                    placeholder="Subject লিখো বা বেছে নাও..."
+                    newLabel={`🆕 "${card.subjectSel.name.trim()}" নতুন Subject হিসেবে যোগ হবে`}
+                    inputStyle={pcField} lightTheme
+                  />
+                </div>
+              )}
+              <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
+                  ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
+                <label>📌 Topic</label>
+                <TypeaheadCombo
+                  options={topicOptionsForShown(tabDef.gkStyle?card.subjectSel.id:subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
+                  value={card.topicSel}
+                  onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel})}
+                  placeholder={tabDef.gkStyle&&!card.subjectSel.name.trim()?"আগে Subject বেছে নাও":"Topic লিখো বা বেছে নাও..."}
+                  newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}
+                  inputStyle={pcField} lightTheme
+                />
+              </div>
+        </div>
+      </div>
+    );
+  };
+
   return(
     <div style={{background:PC.bg,margin:"0 -16px",padding:"14px 14px 4px",borderRadius:0}}>
       {draftBanner&&(
@@ -845,345 +1362,15 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         ))}
       </div>
 
-      {tabDef.grouped ? (
-        <>
-          {(paper[activeTab]||[]).map(card=>(
-            <div key={card.id} style={{background:PC.card,border:`1px solid ${PC.border}`,borderRadius:12,padding:12,marginBottom:12}}>
-              <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}>
-                <button onClick={()=>removeCard(activeTab,card.id)} title="এই প্রশ্ন/গ্রুপ মুছো"
-                  style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:15,padding:"0 2px"}}>🗑</button>
-              </div>
-              <div style={{display:"flex",gap:8,marginBottom:10}}>
-                <div className="fld" style={{marginBottom:0,flex:1}}>
-                  <label>🏷️ গ্রুপ হেডিং (ঐচ্ছিক — খালি = প্রতিটা sub-part স্বাধীন)</label>
-                  <input className="inp" style={pcField} placeholder='যেমন: "সন্ধি বিচ্ছেদ করুন:"' value={card.heading}
-                    onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}
-                    onBlur={()=>{
-                      // 🐛 ফিক্স (ভুল ম্যাচিং — হুবহু-বাক্য না মিলিয়ে বিদ্যমান
-                      // Topic-লিস্টের সাথে fuzzy word-overlap মেলানো হয়, দেখো
-                      // bestTopicMatchForHeading()। কনফিডেন্ট মিল না পেলে Topic
-                      // ফাঁকাই থাকে — নতুন কিছু বসানো হয় না, অ্যাডমিন নিজে বেছে
-                      // নেবে। মিললে subjectChoice টগলও সেই টপিকের আসল subject
-                      // অনুযায়ী অটো বদলে যায়। ──
-                      if(card.topicSel.name.trim())return;
-                      const options=tabDef.subjectChoices
-                        ? mergedTopicOptionsFor(refData,tabDef.subjectChoices.map(c=>subjectOptions.find(s=>s.name===c.name)?.id).filter(Boolean))
-                        : topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id);
-                      const match=bestTopicMatchForHeading(card.heading,options);
-                      if(!match)return; // ভালো মিল পাওয়া যায়নি — ফাঁকাই থাক
-                      const patch={topicSel:{id:match.id,name:match.name}};
-                      if(tabDef.subjectChoices){
-                        const ex=(refData?.topics||[]).find(tp=>tp.topic_id===match.id);
-                        if(ex){
-                          const idx=tabDef.subjectChoices.findIndex(c=>subjectOptions.find(s=>s.name===c.name)?.id===ex.subject_id);
-                          if(idx>=0) patch.subjectChoice=tabDef.subjectChoices[idx].key;
-                        }
-                      }
-                      updateCard(activeTab,card.id,patch);
-                    }}
-                    onKeyDown={e=>{
-                      // 🐛 ফিক্স (হেডিং থেকে Tab মারলে এলোমেলো জায়গায় চলে যাওয়া):
-                      // ব্রাউজারের ডিফল্ট Tab-অর্ডারে হেডিং-এর পরে থাকে ফরম্যাট
-                      // ড্রপডাউন, তারপর Topic — এই দুটোই সাধারণত একবার সেট করে
-                      // রেখে দেওয়া হয়, বারবার ছোঁয়া লাগে না। তাই হেডিং লিখে Tab
-                      // মারলে এখন সরাসরি প্রথম সাব-পার্টের প্রশ্ন-বক্সে চলে যায় —
-                      // ফরম্যাট/Topic ডিঙিয়ে, র‍্যাপিড টাইপিং-এর জন্য। ──
-                      if(e.key==="Tab"&&!e.shiftKey){
-                        e.preventDefault();
-                        const firstItem=card.items&&card.items[0];
-                        if(firstItem) textareaRefs.current[firstItem.id]?.focus();
-                      }
-                    }}/>
-                </div>
-                <div className="fld" style={{marginBottom:0,width:130,flexShrink:0}}>
-                  <label>{activeTab==="english"?"Format":"ফরম্যাট"}</label>
-                  <select className="inp" value={card.formatStyle} onChange={e=>updateCard(activeTab,card.id,{formatStyle:e.target.value})}
-                    style={{...pcField,fontSize:11}} title={formatStylesFor(activeTab).find(f=>f.v===card.formatStyle)?.title}>
-                    {formatStylesFor(activeTab).map(f=>(<option key={f.v} value={f.v} title={f.title}>{f.label}</option>))}
-                  </select>
-                </div>
-              </div>
-              <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:6,
-                  ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
-                  <label style={{margin:0}}>📌 Topic (এই পুরো গ্রুপের জন্য একবারই)</label>
-                  {/* 🆕 বাংলা/ইংরেজি ট্যাবে টপিক-লিস্ট ২টা আসল subject (ব্যাকরণ+সাহিত্য/
-                      Grammar+Literature) মিলিয়ে দেখানো হয় (দেখো mergedTopicOptionsFor)।
-                      বিদ্যমান Topic বেছে নিলে এই টগল অটো বদলে যায় (আসল subject অনুযায়ী);
-                      নতুন Topic টাইপ করলে এই টগল অনুযায়ী subject ঠিক হবে। */}
-                  {tabDef.subjectChoices&&(
-                    <div style={{display:"flex",gap:4}}>
-                      {tabDef.subjectChoices.map(c=>(
-                        <button key={c.key} type="button" onClick={()=>updateCard(activeTab,card.id,{subjectChoice:c.key})}
-                          style={{fontSize:9,fontWeight:700,padding:"2px 8px",borderRadius:6,cursor:"pointer",
-                            border:`1px solid ${card.subjectChoice===c.key?PC.ink:PC.border}`,
-                            background:card.subjectChoice===c.key?PC.ink:"transparent",
-                            color:card.subjectChoice===c.key?"#fff":PC.muted}}>{c.short}</button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <TypeaheadCombo
-                  options={tabDef.subjectChoices
-                    ? mergedTopicOptionsFor(refData,tabDef.subjectChoices.map(c=>subjectOptions.find(s=>s.name===c.name)?.id).filter(Boolean))
-                    : topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
-                  value={card.topicSel}
-                  onChange={sel=>{
-                    const patch={topicSel:sel};
-                    if(sel.id&&tabDef.subjectChoices){
-                      const ex=(refData?.topics||[]).find(tp=>tp.topic_id===sel.id);
-                      if(ex){
-                        const idx=tabDef.subjectChoices.findIndex(c=>subjectOptions.find(s=>s.name===c.name)?.id===ex.subject_id);
-                        if(idx>=0) patch.subjectChoice=tabDef.subjectChoices[idx].key;
-                      }
-                    }
-                    updateCard(activeTab,card.id,patch);
-                  }}
-                  placeholder="Topic লিখো বা লিস্ট থেকে বেছে নাও..."
-                  newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে${tabDef.subjectChoices?` (${(tabDef.subjectChoices.find(c=>c.key===card.subjectChoice)||tabDef.subjectChoices[0]).short})`:""}`}
-                  inputStyle={pcField} lightTheme
-                />
-              </div>
-              {/* 🆕 সরাসরি টাইপ করে মার্ক করার শর্টকাট — ফরম্যাট বদলানো/বাটনে চাপা কোনোটাই
-                  বাধ্যতামূলক না, টাইপ করলেই ধরা পড়ে যায় (দেখো detectAutoMarkup, submitPaper)।
-                  🐛 ফিক্স: blank মার্কার আগে ডাবল আন্ডারস্কোর (__..__) ছিল, এখন একপাশে
-                  একটা করে (_.._) — ফিডব্যাক অনুযায়ী। */}
-              <div style={{fontSize:9.5,color:PC.muted,marginBottom:8,lineHeight:1.5}}>
-                {activeTab==="english"
-                  ? <>💡 Type <code>_word_</code> for a blank, <code>*word*</code> to highlight — no button needed</>
-                  : <>💡 <code>_শব্দ_</code> লিখলে শূন্যস্থান, <code>*শব্দ*</code> লিখলে হাইলাইট — বাটনে চাপা লাগবে না</>}
-              </div>
-
-              {card.items.map((it,idx)=>{
-                const isExpanded=expandedItems.has(it.id);
-                const hasExplTech=it.explanation.trim()||it.technique.trim();
-                const isFillblank=card.formatStyle==="fillblank"||detectAutoMarkup(it.question).style==="fillblank";
-                return (
-                <div key={it.id} style={{display:"flex",gap:8,padding:"8px 0",borderTop:idx>0?`1px dashed ${PC.border}`:"none"}}>
-                  <div style={{width:22,flexShrink:0,fontWeight:800,color:PC.ink,fontSize:12,paddingTop:8}}>{SUBLABELS[idx]||idx+1}.</div>
-                  <div style={{flex:1}}>
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                      <label style={{margin:0,fontSize:10.5,color:PC.muted,fontWeight:700}}>{activeTab==="english"?"Question":"প্রশ্ন"}</label>
-                      <div style={{display:"flex",gap:6}}>
-                        {/* 🆕 প্রতিটা সাব-পার্ট আলাদাভাবে Written/MCQ হতে পারে —
-                            একই গ্রুপে দুই ধরনের প্রশ্ন মিশিয়ে থাকতে বাধা নেই। */}
-                        <button type="button" onClick={()=>updateItem(activeTab,card.id,it.id,{qtype:it.qtype==="mcq"?"written":"mcq"})}
-                          style={{background:it.qtype==="mcq"?"#6d28d922":"transparent",color:it.qtype==="mcq"?"#6d28d9":PC.muted,
-                            border:`1px solid ${it.qtype==="mcq"?"#6d28d944":PC.border}`,borderRadius:6,
-                            fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>
-                          {it.qtype==="mcq"?"❓ MCQ":"✍️ Written"}
-                        </button>
-                        {(card.formatStyle==="highlight"||card.formatStyle==="fillblank")&&it.qtype!=="mcq"&&(
-                          <button onClick={()=>wrapHighlight(activeTab,card.id,it.id,card.formatStyle)}
-                            title={card.formatStyle==="fillblank"?"যে শব্দ blank হবে সেটা সিলেক্ট করে মার্ক করো — এটাই Answer হয়ে সেভ হবে":"সিলেক্ট করা অংশ হাইলাইট/মার্ক করো"}
-                            style={{background:"#facc1522",color:"#facc15",border:"1px solid #facc1544",borderRadius:6,
-                              fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>🖍 {card.formatStyle==="fillblank"?"Blank মার্ক করো":"হাইলাইট করো"}</button>
-                        )}
-                      </div>
-                    </div>
-                    <textarea
-                      ref={el=>{textareaRefs.current[it.id]=el;}}
-                      className="ta" style={{...pcField,minHeight:44,fontSize:12.5}}
-                      value={it.question} onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}
-                      onKeyDown={e=>handleGroupQKeyDown(e,activeTab,card.id,card.items,idx,isFillblank||it.qtype==="mcq")}
-                      placeholder={card.formatStyle==="table"?(activeTab==="english"?"word":"শব্দ (যেমন: অহর্নিশ)"):card.formatStyle==="fillblank"?"_..._ বা 🖍 দিয়ে blank মার্ক করো...":activeTab==="english"?"Type the question...":"প্রশ্ন লিখো..."}/>
-                    {/* 🐛 ফিক্স: Fill-blank সনাক্ত হলে (formatStyle থেকে বা সরাসরি _..._ টাইপ
-                        করা থেকে) আলাদা raw answer বক্সের দরকার নেই — প্রশ্নের ভিতরের মার্ক করা
-                        অংশটাই সাবমিটের সময় Answer হিসেবে auto বসে যায় (দেখো submitPaper)। ── */}
-                    {it.qtype==="mcq" ? (
-                      <>
-                        <label style={{fontSize:10.5,color:PC.muted,fontWeight:700,marginTop:4}}>✅ সঠিক উত্তর</label>
-                        <input
-                          ref={el=>{answerRefs.current[it.id]=el;}}
-                          className="inp" style={{...pcField,fontSize:12.5,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}}
-                          value={it.answer} onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}
-                          onKeyDown={e=>handleGroupAKeyDown(e,activeTab,card.id,card.items,idx)}
-                          placeholder="সঠিক উত্তর লিখো..."/>
-                        <button type="button" onClick={()=>generateMcqOptions(activeTab,card.id,it.id,it.question,it.answer,false)}
-                          disabled={mcqGeneratingId===it.id}
-                          style={{width:"100%",marginTop:6,background:"#6d28d922",color:"#6d28d9",border:"1px solid #6d28d944",
-                            borderRadius:7,fontSize:11,fontWeight:700,padding:"7px 0",cursor:"pointer"}}>
-                          {mcqGeneratingId===it.id?"⏳ তৈরি হচ্ছে...":"🤖 AI দিয়ে ৩টা ভুল অপশন বানাও"}
-                        </button>
-                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:6}}>
-                          {["opt1","opt2","opt3","opt4"].map((k,oi)=>(
-                            <input key={k} className="inp" style={{...pcField,fontSize:11.5,
-                                borderColor:it[k].trim()&&norm(it[k])===norm(it.answer)?"#22c55e":PC.border}}
-                              value={it[k]} onChange={e=>updateItem(activeTab,card.id,it.id,{[k]:e.target.value})}
-                              placeholder={`অপশন ${String.fromCharCode(65+oi)}`}/>
-                          ))}
-                        </div>
-                        {/* কোনো অপশনের টেক্সট বদলে সেটাই সঠিক করতে চাইলে ট্যাপ করলেই
-                            "সঠিক উত্তর" বক্সে বসে যায় — নতুন করে টাইপ করা লাগে না। */}
-                        {(it.opt1.trim()||it.opt2.trim()||it.opt3.trim()||it.opt4.trim())&&(
-                          <div style={{display:"flex",gap:4,marginTop:4,flexWrap:"wrap"}}>
-                            {["opt1","opt2","opt3","opt4"].map(k=>it[k].trim()&&(
-                              <button key={k} type="button" onClick={()=>updateItem(activeTab,card.id,it.id,{answer:it[k]})}
-                                style={{fontSize:9.5,padding:"3px 8px",borderRadius:6,cursor:"pointer",
-                                  border:`1px solid ${norm(it[k])===norm(it.answer)?"#22c55e":PC.border}`,
-                                  background:norm(it[k])===norm(it.answer)?"#22c55e22":"transparent",
-                                  color:norm(it[k])===norm(it.answer)?"#16a34a":PC.muted,fontWeight:700}}>
-                                {it[k].length>16?it[k].slice(0,16)+"…":it[k]}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </>
-                    ) : isFillblank ? (
-                      <div style={{fontSize:10,color:PC.gold,fontWeight:700,marginTop:4}}>
-                        🖍 প্রশ্নে মার্ক করা শব্দই Answer হিসেবে অটো সেভ হবে — আলাদা করে টাইপ করা লাগবে না
-                      </div>
-                    ) : (
-                      <>
-                        <label style={{fontSize:10.5,color:PC.muted,fontWeight:700,marginTop:4}}>{activeTab==="english"?"Answer":"উত্তর"}</label>
-                        <input
-                          ref={el=>{answerRefs.current[it.id]=el;}}
-                          className="inp" style={{...pcField,fontSize:12.5,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}}
-                          value={it.answer} onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}
-                          onKeyDown={e=>handleGroupAKeyDown(e,activeTab,card.id,card.items,idx)}
-                          placeholder={card.formatStyle==="table"?(activeTab==="english"?"meaning":"বিচ্ছেদ/ব্যাখ্যা"):activeTab==="english"?"Type the answer...":"উত্তর লিখো..."}/>
-                      </>
-                    )}
-                    {/* 🐛 ফিক্স (Tab-এ বাধ্যতামূলক নয় এমন বক্সে আটকে যাওয়া): ব্যাখ্যা/টেকনিক
-                        ডিফল্টভাবে লুকানো — একটা ছোট বাটনে চাপলেই এক্সপ্যান্ড হয়ে টাইপ-বক্স
-                        দেখা যায়, তাই সাধারণ Tab-ফ্লো (প্রশ্ন→উত্তর→পরের প্রশ্ন)-এ এসে বাধা দেয় না। */}
-                    <button type="button" onClick={()=>toggleExpand(it.id)}
-                      style={{background:"transparent",border:"none",color:PC.gold,cursor:"pointer",
-                        fontSize:9.5,fontWeight:700,padding:"4px 0 0",display:"flex",alignItems:"center",gap:3}}>
-                      {isExpanded?"▲":"▼"} {activeTab==="english"?"Explanation / Technique":"ব্যাখ্যা / টেকনিক"}{!isExpanded&&hasExplTech?" •":""}
-                    </button>
-                    {isExpanded&&(
-                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:4}}>
-                        <input className="inp" style={{...pcField,fontSize:11}} placeholder={activeTab==="english"?"Explanation (optional)":"ব্যাখ্যা (ঐচ্ছিক)"}
-                          value={it.explanation} onChange={e=>updateItem(activeTab,card.id,it.id,{explanation:e.target.value})}/>
-                        <input className="inp" style={{...pcField,fontSize:11}} placeholder={activeTab==="english"?"Technique (optional)":"টেকনিক (ঐচ্ছিক)"}
-                          value={it.technique} onChange={e=>updateItem(activeTab,card.id,it.id,{technique:e.target.value})}/>
-                      </div>
-                    )}
-                  </div>
-                  {card.items.length>1&&(
-                    <button onClick={()=>removeSubItem(activeTab,card.id,it.id)} style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:12,flexShrink:0,paddingTop:8}}>✕</button>
-                  )}
-                </div>
-              );})}
-              <button onClick={()=>addSubItem(activeTab,card.id)}
-                style={{width:"100%",marginTop:6,background:"transparent",border:`1px dashed ${PC.border}`,borderRadius:8,
-                  color:PC.muted,fontSize:11,fontWeight:700,padding:8,cursor:"pointer"}}>
-                + আরেকটা সাব-পার্ট (ক/খ/গ...) যোগ করো
-              </button>
-            </div>
-          ))}
-        </>
-      ) : (
-        <>
-          {(paper[activeTab]||[]).map((card,ci)=>(
-            <div key={card.id} style={{background:PC.card,border:`1px solid ${PC.border}`,borderRadius:12,padding:12,marginBottom:12}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-                <div style={{fontSize:11,fontWeight:800,color:PC.muted}}>প্রশ্ন {ci+1}</div>
-                <button onClick={()=>removeCard(activeTab,card.id)} style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:15}}>🗑</button>
-              </div>
-              {tabDef.gkStyle&&(
-              <div ref={el=>{subjectFieldRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
-                  ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
-                  <label>📚 Subject (real sheet subject — যেমন "সাধারণ বিজ্ঞান")</label>
-                  <TypeaheadCombo
-                    options={subjectOptionsShown}
-                    value={card.subjectSel}
-                    onChange={sel=>updateCard(activeTab,card.id,{subjectSel:sel})}
-                    placeholder="Subject লিখো বা বেছে নাও..."
-                    newLabel={`🆕 "${card.subjectSel.name.trim()}" নতুন Subject হিসেবে যোগ হবে`}
-                    inputStyle={pcField} lightTheme
-                  />
-                </div>
-              )}
-              <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
-                  ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
-                <label>📌 Topic</label>
-                <TypeaheadCombo
-                  options={topicOptionsForShown(tabDef.gkStyle?card.subjectSel.id:subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
-                  value={card.topicSel}
-                  onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel})}
-                  placeholder={tabDef.gkStyle&&!card.subjectSel.name.trim()?"আগে Subject বেছে নাও":"Topic লিখো বা বেছে নাও..."}
-                  newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}
-                  inputStyle={pcField} lightTheme
-                />
-              </div>
-              <div className="fld" style={{marginBottom:8}}>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
-                  <label style={{margin:0}}>❓ প্রশ্ন</label>
-                  {/* 🆕 flat কার্ডেও (গণিত/GK) Written/MCQ টগল — একই প্যাটার্ন। */}
-                  <button type="button" onClick={()=>updateCard(activeTab,card.id,{qtype:card.qtype==="mcq"?"written":"mcq"})}
-                    style={{background:card.qtype==="mcq"?"#6d28d922":"transparent",color:card.qtype==="mcq"?"#6d28d9":PC.muted,
-                      border:`1px solid ${card.qtype==="mcq"?"#6d28d944":PC.border}`,borderRadius:6,
-                      fontSize:9.5,fontWeight:700,padding:"2px 8px",cursor:"pointer"}}>
-                    {card.qtype==="mcq"?"❓ MCQ":"✍️ Written"}
-                  </button>
-                </div>
-                <textarea
-                  ref={el=>{flatQRefs.current[card.id]=el;}}
-                  className="ta" style={{...pcField,minHeight:70}} value={card.question}
-                  onChange={e=>updateCard(activeTab,card.id,{question:e.target.value})}
-                  onKeyDown={e=>handleFlatQKeyDown(e,card.id)}
-                  placeholder="প্রশ্ন লিখো..."/>
-              </div>
-              <div className="fld" style={{marginBottom:8}}>
-                <label>{card.qtype==="mcq"?"✅ সঠিক উত্তর":"✅ উত্তর"}</label>
-                <textarea
-                  ref={el=>{flatARefs.current[card.id]=el;}}
-                  className="ta" style={{...pcField,minHeight:50,background:PC.answerBg,color:PC.answerText,borderColor:PC.answerText+"55"}} value={card.answer}
-                  onChange={e=>updateCard(activeTab,card.id,{answer:e.target.value})}
-                  onKeyDown={e=>handleFlatAKeyDown(e,activeTab,card.id,paper[activeTab]||[],ci)}
-                  placeholder={card.qtype==="mcq"?"সঠিক উত্তর লিখো...":activeTab==="math"?"চূড়ান্ত উত্তর (ধাপে-ধাপে সমাধান নিচে ব্যাখ্যায়)...":"উত্তর লিখো..."}/>
-                {card.qtype==="mcq"&&(
-                  <>
-                    <button type="button" onClick={()=>generateMcqOptions(activeTab,card.id,card.id,card.question,card.answer,true)}
-                      disabled={mcqGeneratingId===card.id}
-                      style={{width:"100%",marginTop:6,background:"#6d28d922",color:"#6d28d9",border:"1px solid #6d28d944",
-                        borderRadius:7,fontSize:11,fontWeight:700,padding:"7px 0",cursor:"pointer"}}>
-                      {mcqGeneratingId===card.id?"⏳ তৈরি হচ্ছে...":"🤖 AI দিয়ে ৩টা ভুল অপশন বানাও"}
-                    </button>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6,marginTop:6}}>
-                      {["opt1","opt2","opt3","opt4"].map((k,oi)=>(
-                        <input key={k} className="inp" style={{...pcField,fontSize:11.5,
-                            borderColor:card[k].trim()&&norm(card[k])===norm(card.answer)?"#22c55e":PC.border}}
-                          value={card[k]} onChange={e=>updateCard(activeTab,card.id,{[k]:e.target.value})}
-                          placeholder={`অপশন ${String.fromCharCode(65+oi)}`}/>
-                      ))}
-                    </div>
-                    {(card.opt1.trim()||card.opt2.trim()||card.opt3.trim()||card.opt4.trim())&&(
-                      <div style={{display:"flex",gap:4,marginTop:4,flexWrap:"wrap"}}>
-                        {["opt1","opt2","opt3","opt4"].map(k=>card[k].trim()&&(
-                          <button key={k} type="button" onClick={()=>updateCard(activeTab,card.id,{answer:card[k]})}
-                            style={{fontSize:9.5,padding:"3px 8px",borderRadius:6,cursor:"pointer",
-                              border:`1px solid ${norm(card[k])===norm(card.answer)?"#22c55e":PC.border}`,
-                              background:norm(card[k])===norm(card.answer)?"#22c55e22":"transparent",
-                              color:norm(card[k])===norm(card.answer)?"#16a34a":PC.muted,fontWeight:700}}>
-                            {card[k].length>16?card[k].slice(0,16)+"…":card[k]}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
-                <div className="fld" style={{marginBottom:0}}>
-                  <label>📖 {activeTab==="math"?"ধাপে-ধাপে সমাধান":"ব্যাখ্যা"} (ঐচ্ছিক)</label>
-                  <textarea className="ta" style={{...pcField,minHeight:50,fontSize:11.5}} value={card.explanation}
-                    onChange={e=>updateCard(activeTab,card.id,{explanation:e.target.value})}
-                    placeholder={activeTab==="math"?"x^2 এভাবে লিখো, User App-এ x² হয়ে দেখাবে":"ব্যাখ্যা..."}/>
-                </div>
-                <div className="fld" style={{marginBottom:0}}>
-                  <label>💡 টেকনিক (ঐচ্ছিক)</label>
-                  <textarea className="ta" style={{...pcField,minHeight:50,fontSize:11.5}} value={card.technique}
-                    onChange={e=>updateCard(activeTab,card.id,{technique:e.target.value})}
-                    placeholder="শর্টকাট/টেকনিক..."/>
-                </div>
-              </div>
-            </div>
-          ))}
-        </>
+      <style>{PS_CSS}</style>
+      {(instSel.name.trim()||postSel.name.trim()||examYear.trim())&&(
+        <div className="ps-bn"><div className="b1">{instSel.name.trim()||"—"}</div><div className="b2">{postSel.name.trim()||"—"}</div>
+          <div className="b3"><span>{examYear.trim()}</span><span>{tabDef.label}</span></div></div>
       )}
+      <div className="ps-hintbar" style={{color:PC.muted}}>💡 টেক্সট সিলেক্ট করে <b>Ctrl+B</b> বোল্ড · <b>Ctrl+U</b> আন্ডারলাইন · <b>Ctrl+I</b> ইটালিক — অথবা মাউসে সিলেক্ট করলে ভেসে ওঠা B / U / I টুলবার</div>
+      <div onKeyDown={psTabNav}>
+        {(paper[activeTab]||[]).map((card,ci)=>tabDef.grouped?renderGroupCard(card,ci):renderFlatCard(card,ci))}
+      </div>
 
       <button onClick={()=>addCard(activeTab)}
         style={{width:"100%",marginBottom:16,background:"transparent",border:`1.5px dashed ${PC.ink}`,borderRadius:10,
