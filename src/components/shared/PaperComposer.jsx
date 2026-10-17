@@ -8,7 +8,7 @@
    (OCR ইম্পোর্টের জন্য), না দিলে আগের মতোই খালি অবস্থা থেকে শুরু হয় (Single Entry-এর
    জন্য — কোনো behavior change নেই)। ══════════ */
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
-import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText } from "../../core/paperTemplates.js";
+import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText, parseFillMarks } from "../../core/paperTemplates.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../../core/ocrProviders.js";
 import { buildSheetRow, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft } from "../../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
@@ -252,6 +252,7 @@ const PS_CSS=`
 .ps-tb button{background:none;border:0;color:#fff;font-size:13px;min-width:24px;height:22px;cursor:pointer;font-family:Georgia,serif;border-radius:4px}
 .ps-tb button:hover{background:#ffffff33}
 .ps-pv{font-size:12.5px;background:#fffbe0;border-left:3px solid #1F2A6B;padding:1px 6px;margin:1px 0 2px;color:#000;white-space:pre-wrap}
+.ps-auto{font-weight:800;color:#1b6b2f}
 .ps-hintbar{font-size:10.5px;color:#7a6a3a;margin:0 0 6px}
 .ps-tp{background:#FBF7EA;border:1px solid #C9BFA0;border-radius:8px;padding:8px;margin-top:8px}
 `;
@@ -273,8 +274,8 @@ function psRichRender(text){
   });
 }
 // সিলেকশনে ট্যাগ টগল: আগে থেকে মোড়ানো (ভেতরে বা ঠিক বাইরে) থাকলে খুলে ফেলে, নইলে মোড়ায়
-function psToggleTag(el,tag){
-  const v=el.value; let s=el.selectionStart,e=el.selectionEnd;
+function psToggleTag(el,tag){ return psToggleStr(el.value,el.selectionStart,el.selectionEnd,tag); }
+function psToggleStr(v,s,e,tag){
   // সিলেকশনের কোনো প্রান্ত যদি অন্য কোনো ট্যাগের মাঝখানে পড়ে (যেমন <b> এর অর্ধেক), ট্যাগের বাইরে সরিয়ে নাও
   for(const m of v.matchAll(/<\/?[biu]>/g)){
     const ms=m.index, me=ms+m[0].length;
@@ -304,6 +305,15 @@ function PsTA({value,onChange,onKeyDown,taRef,className}){
     requestAnimationFrame(()=>{ const el=r.current; if(el){ el.focus(); el.setSelectionRange(res.s,res.e); } });
   };
   const apply=tag=>{ const el=r.current; if(el)commit(psToggleTag(el,tag)); };
+  // B+U একসাথে (Fill in the blanks-এ blank শব্দ মার্ক করতে) — আগে থেকে B+U থাকলে দুটোই খুলে যায়
+  const applyBoth=()=>{
+    const el=r.current; if(!el)return;
+    const v=el.value,s=el.selectionStart,e=el.selectionEnd; if(s===e)return;
+    const hasU=(v.slice(s,e).startsWith("<u>")&&v.slice(s,e).endsWith("</u>"))||(s>=3&&v.slice(s-3,s)==="<u>"&&v.slice(e,e+4)==="</u>");
+    const first=psToggleStr(v,s,e,hasU?"u":"b"); if(!first)return;
+    const second=psToggleStr(first.value,first.s,first.e,hasU?"b":"u");
+    commit(second||first);
+  };
   const clearFmt=()=>{
     const el=r.current; if(!el||el.selectionStart===el.selectionEnd)return;
     const v=el.value,s=el.selectionStart,e=el.selectionEnd,sel=v.slice(s,e).replace(/<\/?[biu]>/g,"");
@@ -323,6 +333,7 @@ function PsTA({value,onChange,onKeyDown,taRef,className}){
           <button type="button" title="বোল্ড (Ctrl+B)" onClick={()=>apply("b")}><b>B</b></button>
           <button type="button" title="আন্ডারলাইন (Ctrl+U)" onClick={()=>apply("u")}><u>U</u></button>
           <button type="button" title="ইটালিক (Ctrl+I)" onClick={()=>apply("i")}><i>I</i></button>
+          <button type="button" title="Bold + Underline একসাথে (Fill in the blanks-এর blank)" onClick={applyBoth}><b><u>BU</u></b></button>
           <button type="button" title="ফরম্যাট মুছো" onClick={clearFmt}>✖</button>
         </div>
       )}
@@ -812,6 +823,19 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                 }));
                 return;
               }
+              // 🆕 Fill in the blanks (বাক্য-ভিত্তিক): Bold+Underline করা অংশই Answer; প্রশ্নে _শব্দ_ (অ্যাপের fillblank নিয়ম)
+              if(resolveTpl(card,t.key).lay==="fill"){
+                const fm=parseFillMarks(it.question);
+                if(!fm.answers.length)throw new Error(`"${t.label}" ট্যাবে Fill in the blanks-এর একটা বাক্যে blank মার্ক করা হয়নি — যে শব্দ blank হবে সেটা সিলেক্ট করে Bold + Underline (BU) দাও`);
+                allRows.push(buildSheetRow({
+                  item:{q:fm.question.trim(),correct:fm.answers.join(", "),explanation:it.explanation,technique:it.technique},
+                  subject:subjName,subtopic:topicName,qtype:"Written",
+                  audienceTags:selectedTagNames,tagIds:selectedTagIds,mainQpaper:"",subjectId:subjId,topicId,
+                  groupId,subIndex:groupId?(idx+1):null,groupHeading:groupId?heading:"",
+                  formatStyle:"fillblank",
+                }));
+                return;
+              }
               let ansText=it.answer.trim();
               let effFormat=card.formatStyle;
               const auto=detectAutoMarkup(it.question);
@@ -1018,7 +1042,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     const lay=custom?(card.formatStyle==="table"?"tbl":"stack"):tpl.lay;
     const pre=custom?(isEnTab?"Answer:":"উত্তর:"):(tpl.pre||"");
     const cols=custom?(isEnTab?["Word","Meaning"]:["শব্দ","ব্যাখ্যা"]):tpl.cols;
-    const hl=card.formatStyle==="highlight"||card.formatStyle==="fillblank";
+    const hl=(card.formatStyle==="highlight"||card.formatStyle==="fillblank")&&lay!=="fill";
     const title=card.heading||tpl.heading||(isEnTab?"(heading)":"(হেডিং লিখো)");
 
     const mkQ=(it,idx,isFill,cls)=>(
@@ -1097,6 +1121,20 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             {psExtras(card,it,tpl)}
           </div>
         );
+        if(lay==="fill"){
+          const fm=parseFillMarks(it.question);
+          return (
+            <div className="ps-row st" key={it.id}>
+              <span className="ps-lab">{psLab(idx)}</span>{mkQ(it,idx,true)}{psCtl(card,it,{hl:false,mcqToggle:false})}
+              <div className="ps-l2"><span>Ans:</span>
+                {fm.answers.length
+                  ? <span className="ps-auto">{fm.answers.join(", ")}</span>
+                  : <span className="ps-hint" style={{margin:0}}>blank হবে যে শব্দ সেটা সিলেক্ট করে BU (Bold+Underline) দাও — সেটাই Answer</span>}
+              </div>
+              {psExtras(card,it,tpl)}
+            </div>
+          );
+        }
         if(lay==="pair") return (
           <div className="ps-row" key={it.id}>
             <span className="ps-lab">{psLab(idx)}</span>{mkQ(it,idx,isFill)}<span className="ps-sep">{tpl.sep}</span>{mkA(it,idx)}{ctl}
