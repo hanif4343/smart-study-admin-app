@@ -13,6 +13,8 @@ export const PAPER_TEMPLATES={
     {key:"idiom",  title:"বাগধারা",                      heading:"বাগধারা:",                       fmt:"plain",     lay:"pair",  sep:"=", third:{field:"explanation",pre:"বাক্য:"}},
     {key:"sandhi", title:"সন্ধি বিচ্ছেদ করুন",            heading:"সন্ধি বিচ্ছেদ করুন:",             fmt:"table",     lay:"tbl",   cols:["প্রদত্ত শব্দ","সন্ধি বিচ্ছেদ"]},
     {key:"anto",   title:"বিপরীত শব্দ",                   heading:"বিপরীত শব্দ:",                   fmt:"table",     lay:"tbl",   cols:["প্রদত্ত শব্দ","বিপরীত শব্দ"]},
+    {key:"synonym",title:"সমার্থক শব্দ / প্রতিশব্দ লিখুন",     heading:"সমার্থক শব্দ লিখুন:",             fmt:"table",     lay:"tbl",   cols:["প্রদত্ত শব্দ","সমার্থক শব্দ"]},
+    {key:"gender", title:"লিঙ্গ পরিবর্তন করুন",           heading:"লিঙ্গ পরিবর্তন করুন:",            fmt:"table",     lay:"tbl",   cols:["প্রদত্ত শব্দ","লিঙ্গ পরিবর্তন"]},
     {key:"oneword",title:"এক কথায় প্রকাশ",               heading:"এক কথায় প্রকাশ:",               fmt:"plain",     lay:"pair",  sep:"="},
     {key:"spell",  title:"বানান শুদ্ধিকরণ",               heading:"বানান শুদ্ধিকরণ:",               fmt:"table",     lay:"tbl",   cols:["ভুল বানান","শুদ্ধ বানান"]},
     {key:"karak",  title:"কারক ও বিভক্তি নির্ণয় করুন",    heading:"কারক ও বিভক্তি নির্ণয় করুন:",    fmt:"highlight", lay:"pair",  sep:"-"},
@@ -27,14 +29,20 @@ export const PAPER_TEMPLATES={
     {key:"cloze",  title:"Fill in the blanks (word box + passage)", heading:"Fill in the blanks with appropriate word given below:", fmt:"plain", lay:"cloze"},
     {key:"replace",title:"Replace the bracketed wrong word",        heading:"Replace the bracketed wrong word from the options:",   fmt:"plain", lay:"mcq", mcq:true},
     {key:"choose", title:"Choose the correct word",                 heading:"Choose the correct word from the options:",            fmt:"plain", lay:"mcq", mcq:true},
-    {key:"gender", title:"Gender and Plural",                       heading:"Gender and Plural:",         fmt:"table", lay:"tbl", cols:["Given Word","Gender / Plural"]},
-    {key:"meaning",title:"Word Meaning",                            heading:"Word Meaning:",              fmt:"table", lay:"tbl", cols:["Word","Meaning"]},
-    {key:"wspell", title:"Word Spelling",                           heading:"Word Spelling:",             fmt:"table", lay:"tbl", cols:["Wrong Spelling","Correct Spelling"]},
-    {key:"transl", title:"Translation",                             heading:"Translation:",               fmt:"plain", lay:"stack", pre:"Ans:"},
-    {key:"voice",  title:"Voice Change",                            heading:"Voice Change:",              fmt:"plain", lay:"stack", pre:"Ans:"},
-    {key:"correct",title:"Correct the following sentences",         heading:"Correct the following sentences:", fmt:"plain", lay:"stack", pre:"Ans:"},
-    {key:"makesen",title:"Make sentence with following word",       heading:"Make sentence with following word:", fmt:"plain", lay:"pair", sep:"=", third:{field:"explanation",pre:"Sentence:"}},
-    {key:"idiom_en",title:"Idioms and Phrases",                     heading:"Idioms and Phrases:",        fmt:"plain", lay:"pair", sep:"=", third:{field:"explanation",pre:"Sentence:"}},
+    {key:"transl", title:"Translate into English",                heading:"Translate into English:",                         fmt:"plain", lay:"stack", pre:"Ans:"},
+    {key:"gender_en",title:"Change the Gender",                    heading:"Change the Gender:",                              fmt:"table", lay:"tbl", cols:["Given Word","Opposite Gender"]},
+    {key:"plural", title:"Write the plural number",                heading:"Write the plural number:",                        fmt:"table", lay:"tbl", cols:["Singular","Plural"]},
+    {key:"meaning",title:"Word Meaning",                           heading:"Word Meaning:",                                   fmt:"table", lay:"tbl", cols:["Word","Meaning"]},
+    {key:"syn_en", title:"Write the synonym words",                heading:"Write the synonym words:",                        fmt:"table", lay:"tbl", cols:["Given Word","Synonym"]},
+    {key:"wspell", title:"Word Spelling",                          heading:"Word Spelling:",                                  fmt:"table", lay:"tbl", cols:["Wrong Spelling","Correct Spelling"]},
+    {key:"makesen",title:"Make a sentence with the following words",heading:"Make a sentence with the following words:",      fmt:"plain", lay:"pair", sep:"=", third:{field:"explanation",pre:"Sentence:"}},
+    {key:"idiom_en",title:"Idioms and Phrases",                    heading:"Idioms and Phrases:",                             fmt:"plain", lay:"pair", sep:"=", third:{field:"explanation",pre:"Sentence:"}},
+    {key:"prep",   title:"Fill in the blanks — Preposition",       heading:"Fill in the Blanks with appropriate Preposition:", fmt:"fillblank", lay:"fill"},
+    {key:"article",title:"Fill in the blanks — Article",           heading:"Fill in the blanks with the article:",            fmt:"fillblank", lay:"fill"},
+    {key:"transf", title:"Change the sentence as per direction / speech", heading:"Change the sentence as per direction:",    fmt:"plain", lay:"stack", pre:"Ans:"},
+    {key:"voice",  title:"Change the voice",                       heading:"Change the voice:",                               fmt:"plain", lay:"stack", pre:"Ans:"},
+    {key:"correct",title:"Correct the following sentences",        heading:"Correct the following sentences:",                fmt:"plain", lay:"stack", pre:"Ans:"},
+    {key:"para",   title:"Write paragraph",                        heading:"Write paragraph:",                                fmt:"plain", lay:"stack", pre:"Ans:"},
   ],
 };
 export const CUSTOM_TPL={key:"custom",title:"✍️ নিজে হেডিং লিখব (Custom)",heading:"",fmt:"plain",lay:"stack",custom:true};
@@ -71,4 +79,45 @@ export function parseFillMarks(text){
     return "_"+w+"_";
   });
   return {question,answers};
+}
+
+/* ══════════ হেডিং → Topic অটো-সিলেকশন (শুধু বাংলা ও ইংরেজি; গণিত ও GK-তে নেই) ══════════
+   প্রতিটা নিয়মে topic-এর "প্রার্থী নাম" লিস্ট — ডাটাবেজে (refData-র topics) আসলে যেটা আছে সেটাই বসে;
+   কোনোটাই না থাকলে ফাঁকা থাকে (ভুল/নতুন Topic তৈরি হয় না)। ক্রম গুরুত্বপূর্ণ — প্রথম মিলটাই নেওয়া হয়। */
+const TOPIC_RULES={
+  bangla:[
+    {re:/বাগ্?ধারা/,                      topics:["বাগধারা","বাগ্ধারা"]},
+    {re:/এক\s*কথায়/,                      topics:["এক কথায় প্রকাশ","এক কথায়"]},
+    {re:/সন্ধি/,                           topics:["সন্ধি বিচ্ছেদ","সন্ধি"]},
+    {re:/কারক|বিভক্তি/,                    topics:["কারক ও বিভক্তি","কারক-বিভক্তি","কারক"]},
+    {re:/সমাস|ব্যাসবাক্য/,                  topics:["সমাস"]},
+    {re:/বিপরীত/,                          topics:["বিপরীত শব্দ"]},
+    {re:/সমার্থক|প্রতিশব্দ/,                topics:["সমার্থক শব্দ","প্রতিশব্দ"]},
+    {re:/লিঙ্গ|লিংগ/,                       topics:["লিঙ্গ পরিবর্তন","লিঙ্গ"]},
+    {re:/বানান/,                           topics:["বানান শুদ্ধি","বানান শুদ্ধিকরণ","বানান"]},
+    {re:/বাক্য\s*শুদ্ধ/,                   topics:["বাক্য শুদ্ধি","বাক্য শুদ্ধিকরণ"]},
+  ],
+  english:[
+    {re:/voice/i,                                              topics:["Voice Change","Voice"]},
+    {re:/translat|বঙ্গানুবাদ|অনুবাদ/i,                          topics:["Translation/বঙ্গানুবাদ","Translation","বঙ্গানুবাদ"]},
+    {re:/gender/i,                                             topics:["Gender"]},
+    {re:/plural|number/i,                                      topics:["Number"]},
+    {re:/word\s*meaning|meaning/i,                             topics:["Word Meaning"]},
+    {re:/synonym|antonym|antinym|opposite/i,                   topics:["Antinym-Synonym","Antonym-Synonym","Synonym-Antonym","Synonym & Antonym"]},
+    {re:/make\s+(a\s+)?sentence|idiom|phrase/i,                topics:["Idioms & Phrases","Idioms and Phrases"]},
+    {re:/preposition/i,                                        topics:["Preposition"]},
+    {re:/\barticle/i,                                          topics:["Article"]},
+    {re:/transform|as per direction|speech|narration/i,        topics:["Transformation of sentences","Transformation of Sentence","Transformation"]},
+    {re:/paragraph/i,                                          topics:["Paragraph"]},
+    {re:/spelling/i,                                           topics:["Spelling","Word Spelling"]},
+    {re:/correct the following/i,                              topics:["Correction","Sentence Correction","Correction of Sentences"]},
+  ],
+};
+// তুলনার জন্য নাম সমান করা: ছোট হাতের, "&"="and", স্পেস/চিহ্ন বাদ
+export const nzTopic=s=>String(s||"").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9\u0980-\u09FF]+/g,"");
+export function topicCandidatesFromHeading(heading,tab){
+  const rules=TOPIC_RULES[tab]; if(!rules) return [];          // math / gk → কিছু না
+  const h=String(heading||"").replace(/<\/?[biu]>/g,"").trim();
+  const hit=rules.find(r=>r.re.test(h));
+  return hit?hit.topics:[];
 }
