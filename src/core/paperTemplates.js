@@ -21,9 +21,20 @@ export const PAPER_TEMPLATES={
     {key:"short",  title:"সংক্ষিপ্ত প্রশ্নের উত্তর দাও",    heading:"সংক্ষিপ্ত প্রশ্নের উত্তর দাও:",    fmt:"plain",     lay:"stack", pre:"উত্তর:"},
   ],
   english:[
+    // 🆕 Fill in the blanks (বাক্য-ভিত্তিক): বাক্য লিখে যে শব্দ blank হবে সেটা সিলেক্ট করে Bold+Underline (B+U) দাও —
+    //    সেভের সময় সেটাই Answer হয় (parseFillMarks), প্রশ্নে অ্যাপের আগের fillblank নিয়মেই _শব্দ_ হয়ে যায়।
+    {key:"fill",   title:"Fill in the blanks",                      heading:"Fill in the blanks:",                                  fmt:"fillblank", lay:"fill"},
     {key:"cloze",  title:"Fill in the blanks (word box + passage)", heading:"Fill in the blanks with appropriate word given below:", fmt:"plain", lay:"cloze"},
     {key:"replace",title:"Replace the bracketed wrong word",        heading:"Replace the bracketed wrong word from the options:",   fmt:"plain", lay:"mcq", mcq:true},
     {key:"choose", title:"Choose the correct word",                 heading:"Choose the correct word from the options:",            fmt:"plain", lay:"mcq", mcq:true},
+    {key:"gender", title:"Gender and Plural",                       heading:"Gender and Plural:",         fmt:"table", lay:"tbl", cols:["Given Word","Gender / Plural"]},
+    {key:"meaning",title:"Word Meaning",                            heading:"Word Meaning:",              fmt:"table", lay:"tbl", cols:["Word","Meaning"]},
+    {key:"wspell", title:"Word Spelling",                           heading:"Word Spelling:",             fmt:"table", lay:"tbl", cols:["Wrong Spelling","Correct Spelling"]},
+    {key:"transl", title:"Translation",                             heading:"Translation:",               fmt:"plain", lay:"stack", pre:"Ans:"},
+    {key:"voice",  title:"Voice Change",                            heading:"Voice Change:",              fmt:"plain", lay:"stack", pre:"Ans:"},
+    {key:"correct",title:"Correct the following sentences",         heading:"Correct the following sentences:", fmt:"plain", lay:"stack", pre:"Ans:"},
+    {key:"makesen",title:"Make sentence with following word",       heading:"Make sentence with following word:", fmt:"plain", lay:"pair", sep:"=", third:{field:"explanation",pre:"Sentence:"}},
+    {key:"idiom_en",title:"Idioms and Phrases",                     heading:"Idioms and Phrases:",        fmt:"plain", lay:"pair", sep:"=", third:{field:"explanation",pre:"Sentence:"}},
   ],
 };
 export const CUSTOM_TPL={key:"custom",title:"✍️ নিজে হেডিং লিখব (Custom)",heading:"",fmt:"plain",lay:"stack",custom:true};
@@ -45,4 +56,19 @@ export function cardHeadingText(card,tab){
   const words=(card.wordBox||[]).map(w=>String(w).trim()).filter(Boolean).join("  |  ");
   const passage=String(card.passage||"").trim();
   return [base,words,passage].filter(Boolean).join("\n");
+}
+
+// ── Fill in the blanks (বাক্য-ভিত্তিক) ──
+// বাক্যে যে অংশ Bold+Underline (<b><u>..</u></b>, <u><b>..</b></u>, অথবা শুধু <u>..</u>) করা, সেটাই blank/Answer।
+// ফেরত: question (মার্ক করা অংশ অ্যাপের fillblank নিয়মে _শব্দ_), answers (মার্ক করা অংশগুলো ক্রমানুযায়ী)
+const FILL_RE=/<b>\s*<u>([\s\S]*?)<\/u>\s*<\/b>|<u>\s*<b>([\s\S]*?)<\/b>\s*<\/u>|<u>([\s\S]*?)<\/u>/g;
+export function parseFillMarks(text){
+  const answers=[];
+  const question=String(text||"").replace(FILL_RE,(m,a,b,c)=>{
+    const w=String(a??b??c??"").replace(/<\/?[biu]>/g,"").trim();
+    if(!w) return m;
+    answers.push(w);
+    return "_"+w+"_";
+  });
+  return {question,answers};
 }
