@@ -95,7 +95,7 @@ function ArchivePage({push,onSendToBulk}){
     if(!items.length){push("warn","⚠️ কোনো valid প্রশ্ন পাওয়া যায়নি","format ঠিক আছে কিনা দেখুন");return;}
     const subject=String(src.subject||"").trim();
     const subtopic=String(src.subtopic||"").trim()||subject;
-    if(!subject && !items.some(i=>i.subject)){
+    if(targetMode!=="QBank" && !subject && !items.some(i=>i.subject)){
       push("warn","⚠️ Subject লিখুন (উপরে এডিট করে, অথবা প্রতিটা লাইনে Subject;Topic টাইপ করো)","");return;
     }
     if(!refData){push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো","");return;}
@@ -123,7 +123,7 @@ function ArchivePage({push,onSendToBulk}){
     // plain "subject" কলামই নেই) ──
     const r=await resolveSubjectTopicForEntries({
       entries:items, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:targetMode, push,
-      fallbackSubject:subject, fallbackTopic:subtopic,
+      fallbackSubject:subject, fallbackTopic:subtopic, allowBlank:targetMode==="QBank",
     });
     if(!r.ok){ setSubmittingId(null); push("error","❌ "+r.reason,""); return; }
     if(r.anyCreated) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
@@ -133,9 +133,13 @@ function ArchivePage({push,onSendToBulk}){
       qtype:effQtype, audienceTags:[], subjectId, topicId,
     }));
     const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance,source:"Archive_Resubmit"});
+    if(targetMode==="QBank"){
+      if(res.autoClassified>0) push("success",`🤖 ${res.autoClassified}টি প্রশ্ন Topic Tags মিলিয়ে নিজে Subject/Topic পেয়েছে`,"Publish Now দিলে অ্যাপে আসবে");
+      if(res.unclassified>0) push("warn",`⚠ ${res.unclassified}টি প্রশ্নে কোনো ট্যাগ মেলেনি — Subject/Topic ছাড়া সেভ হয়েছে`,"Topic Tags → রান থেকে আবার চালাও, বা হাতে টপিক বসাও");
+    }
     if(res.failedRows.length) pushFailedItems(SRC_NAME,"sheet",targetMode,res.failedRows);
     setSubmittingId(null);
-    const subjLabel=[...new Set(r.resolved.map(x=>x.subjectName))].join(", ");
+    const subjLabel=[...new Set(r.resolved.map(x=>x.subjectName).filter(Boolean))].join(", ")||"Subject ছাড়া (অটো-ক্লাসিফাই)";
     if(res.added>0) push("success",`✅ ${res.added}টি Sheet-এ যোগ হয়েছে!`,`${targetMode} — ${subjLabel}`+(res.skipped?`, ${res.skipped}টা duplicate বাদ পড়েছে`:""));
     // 🐛 ফিক্স: duplicate QBank প্রশ্ন পেলেও এখন appearance হারায় না — বিদ্যমান প্রশ্নের
     // সাথেই জুড়ে যায় (GAS-এর bulk_save_rows-এর একই ফিক্স)।
