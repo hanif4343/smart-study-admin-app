@@ -8,7 +8,7 @@
    (OCR ইম্পোর্টের জন্য), না দিলে আগের মতোই খালি অবস্থা থেকে শুরু হয় (Single Entry-এর
    জন্য — কোনো behavior change নেই)। ══════════ */
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
-import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText, parseFillMarks } from "../../core/paperTemplates.js";
+import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText, parseFillMarks, nzTopic, topicCandidatesFromHeading } from "../../core/paperTemplates.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../../core/ocrProviders.js";
 import { buildSheetRow, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft } from "../../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
@@ -953,24 +953,52 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const[pickerOpen,setPickerOpen]=useState(()=>new Set());
   const togglePicker=id=>setPickerOpen(s=>{const n=new Set(s);if(n.has(id))n.delete(id);else n.add(id);return n;});
 
-  // হেডিং থেকে Topic অটো-ম্যাচ (আগের onBlur লজিকই, শুধু ফাংশন করে রিইউজ)
-  const topicPatchForHeading=(card,heading)=>{
+  // হেডিং থেকে Topic অটো-সিলেক্ট — শুধু বাংলা ও ইংরেজি ট্যাবে (গণিত/GK-তে নেই)।
+  // ১) paperTemplates.js-এর হেডিং→Topic নিয়ম (যেমন "লিঙ্গ পরিবর্তন করুন" → লিঙ্গ পরিবর্তন) — ডাটাবেজে যে Topic আসলে আছে সেটাই;
+  //    নিয়ম মিললেও Topic ডাটাবেজে না থাকলে ফাঁকা (ভুল Topic বসে না, নতুনও তৈরি হয় না)।
+  // ২) কোনো নিয়মই না মিললে আগের মতো হেডিং-টেক্সট ম্যাচ (bestTopicMatchForHeading)।
+  // ইউজার চাইলে পরে হাতে বদলাতে পারে।
+  const topicPatchForHeading=(card,heading,tab)=>{
+    tab=tab||activeTab;
+    if(tab!=="bangla"&&tab!=="english")return null;
     if(card.topicSel.name.trim())return null;
-    const options=tabDef.subjectChoices
-      ? mergedTopicOptionsFor(refData,tabDef.subjectChoices.map(c=>subjectOptions.find(s=>s.name===c.name)?.id).filter(Boolean))
-      : topicOptionsFor(subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id);
-    const match=bestTopicMatchForHeading(heading,options);
+    const td=PAPER_TABS.find(x=>x.key===tab)||tabDef;
+    const options=td.subjectChoices
+      ? mergedTopicOptionsFor(refData,td.subjectChoices.map(c=>subjectOptions.find(s=>s.name===c.name)?.id).filter(Boolean))
+      : topicOptionsFor(subjectOptions.find(s=>s.name===td.fixedSubject)?.id);
+    if(!options||!options.length)return null;
+    let match=null;
+    const cands=topicCandidatesFromHeading(heading,tab);
+    if(cands.length){
+      for(const c of cands){ const k=nzTopic(c); match=options.find(o=>nzTopic(o.name)===k); if(match)break; }
+    } else {
+      match=bestTopicMatchForHeading(heading,options);
+    }
     if(!match)return null;
     const patch={topicSel:{id:match.id,name:match.name},topicAuto:true};
-    if(tabDef.subjectChoices){
+    if(td.subjectChoices){
       const ex=(refData?.topics||[]).find(tp=>tp.topic_id===match.id);
       if(ex){
-        const idx=tabDef.subjectChoices.findIndex(c=>subjectOptions.find(s=>s.name===c.name)?.id===ex.subject_id);
-        if(idx>=0) patch.subjectChoice=tabDef.subjectChoices[idx].key;
+        const idx=td.subjectChoices.findIndex(c=>subjectOptions.find(s=>s.name===c.name)?.id===ex.subject_id);
+        if(idx>=0) patch.subjectChoice=td.subjectChoices[idx].key;
       }
     }
     return patch;
   };
+  // নতুন কার্ড / OCR-ইম্পোর্ট / সেভ-করা ড্রাফট — রেফারেন্স ডাটা (Topic লিস্ট) লোড হলে, Topic ফাঁকা কার্ডে একবার অটো-সিলেক্ট।
+  // topicAutoTried ফ্ল্যাগ থাকায় ইউজার Topic মুছে দিলে বা বদলালে আর জোর করে বসায় না।
+  useEffect(()=>{
+    if(!(refData?.topics||[]).length)return;
+    ["bangla","english"].forEach(tab=>{
+      (paper[tab]||[]).forEach(card=>{
+        if(card.topicAutoTried)return;
+        const heading=String(card.heading||"").trim();
+        if(!heading)return;
+        const tp=topicPatchForHeading(card,heading,tab);
+        updateCard(tab,card.id,{...(tp||{}),topicAutoTried:true});
+      });
+    });
+  },[refData,paper]);
   // Expand-এ টেমপ্লেট বাছা: হেডিং+ফরম্যাট+লেআউট বদলায়; সাব-পার্টের লেখা (question/answer) থেকে যায়
   const setTemplate=(tab,card,tpl)=>{
     const prev=resolveTpl(card,tab);
@@ -982,6 +1010,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       const base=card.topicAuto?{...card,topicSel:{id:"",name:""}}:card; // আগেরটা অটো-বসানো হলে নতুন হেডিং অনুযায়ী বদলাবে
       const tp=topicPatchForHeading(base,tpl.heading);
       if(tp) Object.assign(patch,tp);
+      patch.topicAutoTried=true;
     }
     updateCard(tab,card.id,patch);
   };
