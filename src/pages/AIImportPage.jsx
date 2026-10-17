@@ -158,7 +158,7 @@ function AIImportPage({push,onSendToBulk}){
     // MCQ/Written-এ subject/topic প্রতি লাইনে টাইপ করা থাকতে পারে (নতুন প্যাটার্ন) — তবে
     // লাইনে না থাকলে নিচের global Subject/Sub-topic ফিল্ড বাধ্যতামূলক fallback হিসেবে লাগে,
     // কারণ শেষমেশ subject_id/topic_id ছাড়া কোনো এন্ট্রিই সেভ হবে না।
-    if(!subject.trim() && !getBulkEntries(toParse).some(l=>{const r=parseBulkEntry(l,effQtype);return r.ok&&r.subject;})){
+    if(effMode!=="QBank" && !subject.trim() && !getBulkEntries(toParse).some(l=>{const r=parseBulkEntry(l,effQtype);return r.ok&&r.subject;})){
       push("warn","⚠️ Subject লিখুন (অথবা প্রতিটা লাইনে Subject;Topic টাইপ করো)","");return;
     }
     if(!refData){push("warn","⏳ Reference data এখনো লোড হচ্ছে, একটু পর আবার চেষ্টা করো","");return;}
@@ -192,7 +192,7 @@ function AIImportPage({push,onSendToBulk}){
     // subject_id/topic_id রেজলভ করা হয় — raw text কখনো sheet-এ পাঠানো হয় না ──
     const r=await resolveSubjectTopicForEntries({
       entries, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:effMode, push,
-      fallbackSubject:subject, fallbackTopic:subtopic||subject,
+      fallbackSubject:subject, fallbackTopic:subtopic||subject, allowBlank:effMode==="QBank",
     });
     if(!r.ok){ setDirectRunning(false); push("error","❌ "+r.reason,""); return; }
     if(r.anyCreated) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{}); // নতুন subject/topic হলে refData রিফ্রেশ
@@ -203,10 +203,14 @@ function AIImportPage({push,onSendToBulk}){
       qtype:effQtype, audienceTags, subjectId, topicId,
     }));
     const result=await saveRowsToSheet({rows,targetTab:effMode,gasSecret,push,examAppearance,source:"Single_OCR"});
+    if(effMode==="QBank"){
+      if(result.autoClassified>0) push("success",`🤖 ${result.autoClassified}টি প্রশ্ন Topic Tags মিলিয়ে নিজে Subject/Topic পেয়েছে`,"Publish Now দিলে অ্যাপে আসবে");
+      if(result.unclassified>0) push("warn",`⚠ ${result.unclassified}টি প্রশ্নে কোনো ট্যাগ মেলেনি — Subject/Topic ছাড়া সেভ হয়েছে`,"Topic Tags → রান থেকে আবার চালাও, বা হাতে টপিক বসাও");
+    }
     setDirectProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setDirectRunning(false);
     if(result.failedRows.length) pushFailedItems("AI Import (OCR)","sheet",effMode,result.failedRows);
-    const subjLabel=[...new Set(r.resolved.map(x=>x.subjectName))].join(", ");
+    const subjLabel=[...new Set(r.resolved.map(x=>x.subjectName).filter(Boolean))].join(", ")||"Subject ছাড়া (অটো-ক্লাসিফাই)";
     if(result.added>0) push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${effMode} — ${subjLabel}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:""));
     // 🐛 ফিক্স: duplicate QBank প্রশ্ন পেলেও এখন appearance হারায় না — বিদ্যমান প্রশ্নের
     // সাথেই জুড়ে যায় (BulkUploaderPage-এর মতোই, GAS-এর bulk_save_rows-এর একই ফিক্স)।
