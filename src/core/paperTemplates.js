@@ -23,10 +23,11 @@ export const PAPER_TEMPLATES={
     {key:"short",  title:"সংক্ষিপ্ত প্রশ্নের উত্তর দাও",    heading:"সংক্ষিপ্ত প্রশ্নের উত্তর দাও:",    fmt:"plain",     lay:"stack", pre:"উত্তর:"},
   ],
   english:[
-    // 🆕 Fill in the blanks (বাক্য-ভিত্তিক): বাক্য লিখে যে শব্দ blank হবে সেটা সিলেক্ট করে Bold+Underline (B+U) দাও —
-    //    সেভের সময় সেটাই Answer হয় (parseFillMarks), প্রশ্নে অ্যাপের আগের fillblank নিয়মেই _শব্দ_ হয়ে যায়।
-    {key:"fill",   title:"Fill in the blanks",                      heading:"Fill in the blanks:",                                  fmt:"fillblank", lay:"fill"},
-    {key:"cloze",  title:"Fill in the blanks (word box + passage)", heading:"Fill in the blanks with appropriate word given below:", fmt:"plain", lay:"cloze"},
+    // 🆕 Fill in the blanks (বাক্য-ভিত্তিক) — দুই ধরন আলাদা: (১) prepositions (২) articles।
+    //    বাক্য লিখে যে শব্দ blank হবে সেটা সিলেক্ট করে Bold+Underline (BU) দাও — সেভের সময় সেটাই Answer হয়
+    //    (parseFillMarks), প্রশ্নে অ্যাপের আগের fillblank নিয়মেই _শব্দ_ হয়ে যায়।
+    {key:"prep",   title:"Fill in the blanks — prepositions",    heading:"Fill in the blanks with appropriate prepositions:", fmt:"fillblank", lay:"fill"},
+    {key:"article",title:"Fill in the blanks — articles",        heading:"Fill in the blanks with articles:",                 fmt:"fillblank", lay:"fill"},
     {key:"replace",title:"Replace the bracketed wrong word",        heading:"Replace the bracketed wrong word from the options:",   fmt:"plain", lay:"mcq", mcq:true},
     {key:"choose", title:"Choose the correct word",                 heading:"Choose the correct word from the options:",            fmt:"plain", lay:"mcq", mcq:true},
     {key:"transl", title:"Translate into English",                heading:"Translate into English:",                         fmt:"plain", lay:"stack", pre:"Ans:"},
@@ -37,12 +38,12 @@ export const PAPER_TEMPLATES={
     {key:"wspell", title:"Word Spelling",                          heading:"Word Spelling:",                                  fmt:"table", lay:"tbl", cols:["Wrong Spelling","Correct Spelling"]},
     {key:"makesen",title:"Make a sentence with the following words",heading:"Make a sentence with the following words:",      fmt:"plain", lay:"pair", sep:"=", third:{field:"explanation",pre:"Sentence:"}},
     {key:"idiom_en",title:"Idioms and Phrases",                    heading:"Idioms and Phrases:",                             fmt:"plain", lay:"pair", sep:"=", third:{field:"explanation",pre:"Sentence:"}},
-    {key:"prep",   title:"Fill in the blanks — Preposition",       heading:"Fill in the Blanks with appropriate Preposition:", fmt:"fillblank", lay:"fill"},
-    {key:"article",title:"Fill in the blanks — Article",           heading:"Fill in the blanks with the article:",            fmt:"fillblank", lay:"fill"},
     {key:"transf", title:"Change the sentence as per direction / speech", heading:"Change the sentence as per direction:",    fmt:"plain", lay:"stack", pre:"Ans:"},
     {key:"voice",  title:"Change the voice",                       heading:"Change the voice:",                               fmt:"plain", lay:"stack", pre:"Ans:"},
     {key:"correct",title:"Correct the following sentences",        heading:"Correct the following sentences:",                fmt:"plain", lay:"stack", pre:"Ans:"},
     {key:"para",   title:"Write paragraph",                        heading:"Write paragraph:",                                fmt:"plain", lay:"stack", pre:"Ans:"},
+    {key:"fill",   title:"Fill in the blanks (other)",             heading:"Fill in the blanks:",                             fmt:"fillblank", lay:"fill"},
+    {key:"cloze",  title:"Fill in the blanks (word box + passage)", heading:"Fill in the blanks with appropriate word given below:", fmt:"plain", lay:"cloze"},
   ],
 };
 export const CUSTOM_TPL={key:"custom",title:"✍️ নিজে হেডিং লিখব (Custom)",heading:"",fmt:"plain",lay:"stack",custom:true};
@@ -103,7 +104,7 @@ const TOPIC_RULES={
     {re:/gender/i,                                             topics:["Gender"]},
     {re:/plural|number/i,                                      topics:["Number"]},
     {re:/word\s*meaning|meaning/i,                             topics:["Word Meaning"]},
-    {re:/synonym|antonym|antinym|opposite/i,                   topics:["Antinym-Synonym","Antonym-Synonym","Synonym-Antonym","Synonym & Antonym"]},
+    {re:/synonym|antonym|antinym|opposite/i,                   topics:["Antinym-Synonym","Antonym-Synonym","Synonym-Antonym","Synonym & Antonym"], nameRe:/(?:syn|ant)[a-z]*nym/i},
     {re:/make\s+(a\s+)?sentence|idiom|phrase/i,                topics:["Idioms & Phrases","Idioms and Phrases"]},
     {re:/preposition/i,                                        topics:["Preposition"]},
     {re:/\barticle/i,                                          topics:["Article"]},
@@ -115,6 +116,43 @@ const TOPIC_RULES={
 };
 // তুলনার জন্য নাম সমান করা: ছোট হাতের, "&"="and", স্পেস/চিহ্ন বাদ
 export const nzTopic=s=>String(s||"").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9\u0980-\u09FF]+/g,"");
+// Levenshtein দূরত্ব (বানান-ভুল সহনশীল ম্যাচের জন্য)
+function lev(a,b){
+  const m=a.length,n=b.length; if(!m)return n; if(!n)return m;
+  let prev=Array.from({length:n+1},(_,j)=>j);
+  for(let i=1;i<=m;i++){
+    const cur=[i];
+    for(let j=1;j<=n;j++) cur[j]=Math.min(prev[j]+1,cur[j-1]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));
+    prev=cur;
+  }
+  return prev[n];
+}
+/* ডাটাবেজের topic-লিস্ট (options: [{id,name}]) থেকে প্রার্থী-নামের সবচেয়ে ভালো মিলটা বাছে — বানান ভুল থাকলেও ধরে:
+   ১) হুবহু (স্পেস/চিহ্ন/&-and উপেক্ষা)  ২) নিয়মের nameRe  ৩) একটা অন্যটার ভেতরে (≥৫ অক্ষর)
+   ৪) অল্প বানান-পার্থক্য (≤১ অক্ষর; ৮+ অক্ষরের নামে ≤২) — যেমন Antinym/Antonym। ডাটাবেজে কিছুই না মিললে null। */
+export function pickTopicOption(options,cands,nameRe){
+  const list=(options||[]).map(o=>({o,k:nzTopic(o.name)})).filter(x=>x.k);
+  const ck=(cands||[]).map(nzTopic).filter(Boolean);
+  for(const c of ck){ const h=list.find(x=>x.k===c); if(h) return h.o; }
+  if(nameRe){ const h=list.find(x=>nameRe.test(x.o.name)); if(h) return h.o; }
+  for(const c of ck){
+    if(c.length<5) continue;
+    const h=list.find(x=>x.k.length>=5&&(x.k.includes(c)||c.includes(x.k)));
+    if(h) return h.o;
+  }
+  let best=null,bd=99;
+  for(const c of ck){
+    if(c.length<5) continue;
+    const lim=c.length>=8?2:1;
+    for(const x of list){ const d=lev(c,x.k); if(d<=lim&&d<bd){ bd=d; best=x.o; } }
+  }
+  return best;
+}
+export function topicRuleFromHeading(heading,tab){
+  const rules=TOPIC_RULES[tab]; if(!rules) return null;
+  const h=String(heading||"").replace(/<\/?[biu]>/g,"").trim();
+  return rules.find(r=>r.re.test(h))||null;
+}
 export function topicCandidatesFromHeading(heading,tab){
   const rules=TOPIC_RULES[tab]; if(!rules) return [];          // math / gk → কিছু না
   const h=String(heading||"").replace(/<\/?[biu]>/g,"").trim();
