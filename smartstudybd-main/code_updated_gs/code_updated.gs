@@ -19,7 +19,7 @@
 // build-নামটা দেখা যাবে (secret লাগবেনা) — যদি পুরনো মান দেখা যায় বা এরর আসে,
 // তার মানে নতুন কোড এখনো লাইভ হয়নি (নতুন "deployment" বানানো হয়ে থাকলে সেটার
 // আলাদা URL হয়, পুরনো URL-এই পুরনো কোড থেকে যায় — এই কারণেই এই মার্কার)।
-var GAS_BUILD_VERSION = "2026-10-16-unified-questions-admin-v2";
+var GAS_BUILD_VERSION = "2026-10-17-unified-questions-admin-v4-autoupload";
 
 function getProps() {
   var p = PropertiesService.getScriptProperties();
@@ -795,6 +795,21 @@ function ghGetTree_(owner, repo, branch, token) {
 function computeHash_(str) {
   var digest = Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, str, Utilities.Charset.UTF_8);
   return digest.map(function (b) { var v = (b < 0 ? b + 256 : b).toString(16); return v.length === 1 ? "0" + v : v; }).join("").substring(0, 12);
+}
+
+/* ── 🆕 ghDupSuffix_ — ডুপ্লিকেট-চেকে গ্রুপ-হেডিং বিবেচনা (শুধু "লেবেল-মাত্র" প্রশ্নের জন্য) ──
+   Written ট্যাবের English "Fill in the blanks" (শব্দ-বক্স + অনুচ্ছেদ) প্রশ্নে প্রতিটা ফাঁকার "প্রশ্ন" শুধু
+   (i), (ii), (iii)... — অনুচ্ছেদ/শব্দ-বক্স থাকে group_heading-এ। অথচ ডুপ্লিকেট-চেকের কী ছিল শুধু
+   প্রশ্ন|সাব-টপিক|সাবজেক্ট, তাই দ্বিতীয় যেকোনো অনুচ্ছেদের "(i)" প্রথমটার ডুপ্লিকেট ধরে সাইলেন্টলি
+   স্কিপ হয়ে যেত (এমনকি একই সাবমিটের ভেতরেও)। এখন প্রশ্নটা শুধু লেবেল ((i), a, 1 ইত্যাদি) হলে এবং
+   group_heading থাকলে কী-তে হেডিং-এর হ্যাশ যোগ হয়। বাকি সব প্রশ্নের কী আগের মতোই অপরিবর্তিত।
+   (নতুন "শুধু-প্রশ্ন" existingByQ ম্যাচেও একই সাফিক্স — নইলে Subject/Topic ছাড়া আপলোডে "(i)" সব অনুচ্ছেদে এক হয়ে যেত।) */
+function ghDupSuffix_(question, groupHeading) {
+  var q = String(question == null ? "" : question).trim();
+  var gh = String(groupHeading == null ? "" : groupHeading).replace(/\s+/g, " ").trim().toLowerCase();
+  if (!gh) return "";
+  if (!/^\(?\s*([ivxlcdm]+|[a-z]|\d{1,3})\s*\)?[.:]?$/i.test(q)) return "";
+  return "|g:" + computeHash_(gh);
 }
 
 function countAllQuestions_(ss) {
@@ -2043,14 +2058,15 @@ function qBulkSave_(params, ss) {
     var n = sh.getLastRow() - 1;
     var data = n > 0 ? sh.getRange(2, 1, n, lc).getValues() : [];
     var norm = function (s) { return (s || "").toString().toLowerCase().replace(/\s+/g, " ").trim().substring(0, 100); };
-    var existing = {}, maxQn = 0, idsSeen = {};
-    var cQ = ix["question"], cSt = ix["subtopic"], cSu = ix["subject"], cId = ix["id"];
+    var existing = {}, existingByQ = {}, maxQn = 0, idsSeen = {};
+    var cQ = ix["question"], cSt = ix["subtopic"], cSu = ix["subject"], cId = ix["id"], cGh = ix["groupheading"];
     for (var r = 0; r < data.length; r++) {
       var id = String(data[r][cId] == null ? "" : data[r][cId]).trim(); if (!id) continue;
       idsSeen[id] = 1;
       var m = /^QN(\d+)$/.exec(id); if (m) { var num = parseInt(m[1], 10); if (num > maxQn) maxQn = num; }
-      var k = norm(data[r][cQ]) + "|" + (cSt !== undefined ? norm(data[r][cSt]) : "") + "|" + (cSu !== undefined ? norm(data[r][cSu]) : "");
+      var k = norm(data[r][cQ]) + "|" + (cSt !== undefined ? norm(data[r][cSt]) : "") + "|" + (cSu !== undefined ? norm(data[r][cSu]) : "") + (cGh !== undefined ? ghDupSuffix_(data[r][cQ], data[r][cGh]) : "");
       existing[k] = { id: id, row: r };
+      var qk = norm(data[r][cQ]) + (cGh !== undefined ? ghDupSuffix_(data[r][cQ], data[r][cGh]) : ""); if (norm(data[r][cQ]) && !existingByQ[qk]) existingByQ[qk] = { id: id, row: r };   // শুধু-প্রশ্ন দিয়ে মেলানো (Subject/Topic ছাড়া আপলোডের জন্য)
     }
 
     // Exam_Appearances (v2) সিকোয়েন্স
@@ -2063,17 +2079,22 @@ function qBulkSave_(params, ss) {
       }
     }
 
+    var unclassified = 0;   // নতুন QBank সারি যেগুলো এখনো Subject/Topic পায়নি (রুল মেলেনি)
     var added = 0, skipped = 0, linked = 0, eaRows = [], eaLinked = 0, dirty = {}, newRows = [], resultIds = new Array(rows.length).fill("");
     var toggles = []; // [rowIndexInData, colIndex, "Y"]
     var nowMs = Date.now();
     var setCell = function (arr, key, val) { var c = ix[qNormKey_(key)]; if (c !== undefined) arr[c] = val; };
+    // Topic Tags: QBank আপলোডে Subject/Topic ফাঁকা MCQ-কে রুল দিয়ে আপনা-আপনি বসানো (AutoClassify.gs + সেটিং চালু থাকলে)
+    var acCtx = (tab === "QBank" && typeof ac_uploadContext_ === "function") ? ac_uploadContext_(ss, ix) : null, autoClassified = 0;
 
     for (var bi = 0; bi < rows.length; bi++) {
       var row = rows[bi] || {};
       try {
-        var key = norm(row.question) + "|" + norm(row.sub_topic) + "|" + norm(row.subject);
-        if (row.question && existing[key]) {
-          var ex = existing[key]; skipped++; resultIds[bi] = ex.id;
+        var key = norm(row.question) + "|" + norm(row.sub_topic) + "|" + norm(row.subject) + ghDupSuffix_(row.question, row.group_heading);
+        // Subject/Topic ছাড়া আপলোড (অটো-ক্লাসিফাইয়ের জন্য): আগের যেকোনো সারির সাথে শুধু প্রশ্নের লেখা মিললেই ডুপ্লিকেট
+        var exHit = existing[key] || ((!norm(row.subject) && !norm(row.sub_topic) && norm(row.question)) ? existingByQ[norm(row.question) + ghDupSuffix_(row.question, row.group_heading)] : null);
+        if (row.question && exHit) {
+          var ex = exHit; skipped++; resultIds[bi] = ex.id;
           var exRow = (ex.row >= 0) ? data[ex.row] : null;
           if (exRow) {
             var exWritten = ix["questiontype"] !== undefined && String(exRow[ix["questiontype"]] || "").trim().toLowerCase() === "written";
@@ -2110,6 +2131,21 @@ function qBulkSave_(params, ss) {
         setCell(line, "subject", row.subject || ""); setCell(line, "sub_topic", row.sub_topic || "");
         setCell(line, "classified", cls); setCell(line, "in_quiz", inQuiz); setCell(line, "in_qbank", inQbank);
         setCell(line, "AudienceTags", row.audienceTags || ""); setCell(line, "AudienceTags_ids", row.audienceTagsIds || "");
+        var acMatchedNow = false;
+        if (acCtx && cls === "N" && !isWritten) {
+          var acHit = ac_classify_(acCtx.rules, { id: bId, question: row.question || "", option1: row.opt1, option2: row.opt2, option3: row.opt3, option4: row.opt4, correct: row.correct });
+          if (acHit.status === "match") {
+            var acR = acHit.rule;
+            setCell(line, "subject_id", acR.subject_id); setCell(line, "topic_id", acR.topic_id);
+            setCell(line, "subject", acR.subject_name); setCell(line, "sub_topic", acR.topic_name);
+            setCell(line, "classified", "Y"); setCell(line, "in_quiz", "Y");
+            setCell(line, "auto_rule", acR.rule_id); setCell(line, "auto_matched", acHit.matched.join(", "));
+            setCell(line, "auto_at", Utilities.formatDate(new Date(), "Asia/Dhaka", "yyyy-MM-dd HH:mm:ss"));
+            setCell(line, "auto_prev", [row.subject_id || "", row.topic_id || "", row.subject || "", row.sub_topic || "", inQuiz].join("§"));
+            dirty[acR.topic_id] = 1; autoClassified++; acMatchedNow = true;
+          }
+        }
+        if (tab === "QBank" && cls === "N" && !isWritten && !acMatchedNow) unclassified++;
         setCell(line, "added_by", row.added_by || (row.editId ? "" : (params.source || "")));
         setCell(line, "Timestamp", row.timestamp || new Date().toLocaleString()); setCell(line, "updatedAt", nowMs);
         if (row.topic_id) dirty[String(row.topic_id).trim()] = 1;
@@ -2134,7 +2170,7 @@ function qBulkSave_(params, ss) {
     }
     if (newRows.length || toggles.length) { markTopicsDirty(dirty); qRefreshTopicCounts_(ss); }
     return { result: "success", added: added, skipped: skipped, linkedToExisting: linked, firebaseSynced: true,
-             examAppearancesAdded: eaRows.length, examAppearancesLinkedToExisting: eaLinked, ids: resultIds };
+             examAppearancesAdded: eaRows.length, examAppearancesLinkedToExisting: eaLinked, ids: resultIds, autoClassified: autoClassified, unclassified: unclassified };
   } finally { lock.releaseLock(); }
 }
 
@@ -2172,6 +2208,12 @@ function doGet(e) {
   var receivedSecret = e.parameter.secret || "";
   if (expectedSecret && receivedSecret !== expectedSecret) {
     return json({ status: "error", message: "Unauthorized" });
+  }
+
+  // ── Topic Tags / Auto-Classify (Admin App) — AutoClassify.gs ──
+  if (action.indexOf("tt_")===0) {
+    if (typeof ac_handleAction_!=="function") return json({status:"error",message:"AutoClassify.gs প্রজেক্টে যোগ করা নেই"});
+    return json(ac_handleAction_(action, e.parameter));
   }
 
   // ── verifyLogin ──
@@ -4730,6 +4772,12 @@ function doPost(e) {
       return json({ status: "error", message: "Unauthorized" });
     }
 
+    // ── Topic Tags / Auto-Classify (POST: রুল সেভ ও টেস্ট) ──
+    if (params.type && String(params.type).indexOf("tt_")===0) {
+      if (typeof ac_handleAction_!=="function") return json({status:"error",message:"AutoClassify.gs প্রজেক্টে যোগ করা নেই"});
+      return json(ac_handleAction_(String(params.type), params));
+    }
+
     // ── QBank→Quiz Converter (Admin App AI Job) বাল্ক ইনসার্ট ──
     // এটা শুধু Sheet-এ লেখে, কখনো syncToFirebase() কল করে না — ইচ্ছাকৃতভাবে,
     // কারণ Firebase quota রিসেট না হওয়া পর্যন্ত এই ডেটা শুধু Sheet-এ staging হিসেবে থাকবে।
@@ -5127,6 +5175,7 @@ function doPost(e) {
       var bQIdx=bHdr.indexOf("question"), bSubIdx=bHdr.indexOf("subject"), bStIdx=bHdr.indexOf("sub_topic");
       if(bStIdx===-1)bStIdx=bHdr.indexOf("subtopic");
       var bIdIdx=bHdr.indexOf("id");
+      var bGhIdx=bHdr.indexOf("group_heading"); if(bGhIdx===-1)bGhIdx=bHdr.indexOf("groupheading");
       var bNorm=function(s){return (s||'').toString().toLowerCase().replace(/\s+/g,' ').trim().substring(0,100);};
       // ── FIX (ডুপ্লিকেট প্রশ্নে Appearance যোগ): bExisting আগে শুধু true রাখতো (key
       // মিললেই স্কিপ) — এখন সাথে বিদ্যমান রো-র "id"-ও রাখা হয়, যাতে duplicate ধরা
@@ -5134,7 +5183,7 @@ function doPost(e) {
       var bExisting={};
       if(bQIdx!==-1){
         for(var ber=1;ber<bData.length;ber++){
-          var bek=bNorm(bData[ber][bQIdx])+"|"+(bStIdx!==-1?bNorm(bData[ber][bStIdx]):"")+"|"+(bSubIdx!==-1?bNorm(bData[ber][bSubIdx]):"");
+          var bek=bNorm(bData[ber][bQIdx])+"|"+(bStIdx!==-1?bNorm(bData[ber][bStIdx]):"")+"|"+(bSubIdx!==-1?bNorm(bData[ber][bSubIdx]):"")+(bGhIdx!==-1?ghDupSuffix_(bData[ber][bQIdx],bData[ber][bGhIdx]):"");
           bExisting[bek]=(bIdIdx!==-1?(bData[ber][bIdIdx]||"").toString():true);
         }
       }
@@ -5238,7 +5287,7 @@ function doPost(e) {
         for(var bi=0;bi<bRows.length;bi++){
           var row=bRows[bi]||{};
           try{
-            var bKey=bNorm(row.question)+"|"+bNorm(row.sub_topic)+"|"+bNorm(row.subject);
+            var bKey=bNorm(row.question)+"|"+bNorm(row.sub_topic)+"|"+bNorm(row.subject)+ghDupSuffix_(row.question,row.group_heading);
             if(row.question && bExisting[bKey]){
               bSkipped++;
               var bExistingId0=bExisting[bKey];
