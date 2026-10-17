@@ -449,7 +449,7 @@ function SingleQuestionEntryPage({push}){
       if(!question.trim()){ push("warn","প্রশ্ন লিখো","");qRef.current?.focus();return; }
       if(!correct.trim()){ push("warn","উত্তর লিখো","");correctRef.current?.focus();return; }
     }
-    if(!subjectSel.name.trim()){ push("warn","⚠️ Subject ফাঁকা","আগে পূরণ করো — ফাঁকা থাকলে সাবমিট হবে না"); return; }
+    if(targetMode!=="QBank" && !subjectSel.name.trim()){ push("warn","⚠️ Subject ফাঁকা","আগে পূরণ করো — ফাঁকা থাকলে সাবমিট হবে না"); return; }
     if(targetMode==="QBank"&&!postSel.name.trim()){ push("warn","⚠️ QBank-এ পদ (Post) বাধ্যতামূলক","আগে পূরণ করো"); return; }
     if(targetMode==="QBank"&&!instSel.name.trim()){ push("warn","⚠️ QBank-এ প্রতিষ্ঠান (Institution) বাধ্যতামূলক","আগে পূরণ করো"); return; }
     if(targetMode==="QBank"&&!examYear.trim()){ push("warn","⚠️ QBank-এ সাল বাধ্যতামূলক","আগে পূরণ করো"); return; }
@@ -468,10 +468,12 @@ function SingleQuestionEntryPage({push}){
 
     // ── Subject/Topic টেক্সট থেকে subject_id/topic_id resolve-or-create (একবারই —
     // সারির সবগুলো প্রশ্ন একই subject/topic শেয়ার করে) ──
-    const subjRes=await resolveOrCreateReference({sel:subjectSel,refType:"subjects",options:subjectOptions,gasSecret,sheet:targetMode,push});
+    // QBank + Subject ফাঁকা: Subject/Topic তৈরি/খোঁজা বাদ — Topic Tags রুল GAS-এ নিজে বসাবে (না মিললে Subject ছাড়াই সেভ)
+    const blankSubj=targetMode==="QBank"&&!subjectSel.name.trim();
+    const subjRes=blankSubj?{ok:true,id:"",created:false}:await resolveOrCreateReference({sel:subjectSel,refType:"subjects",options:subjectOptions,gasSecret,sheet:targetMode,push});
     if(!subjRes.ok){ setSaving(false); push("error","❌ Subject যোগ/খুঁজে পাওয়া যায়নি",""); return; }
     const topicName=topicSel.name.trim()||subjectSel.name.trim();
-    const topicRes=await resolveOrCreateReference({sel:topicSel.name.trim()?topicSel:{id:"",name:topicName},refType:"topics",options:topicOptions,gasSecret,parentId:subjRes.id,push});
+    const topicRes=blankSubj?{ok:true,id:"",created:false}:await resolveOrCreateReference({sel:topicSel.name.trim()?topicSel:{id:"",name:topicName},refType:"topics",options:topicOptions,gasSecret,parentId:subjRes.id,push});
     if(!topicRes.ok){ setSaving(false); push("error","❌ Topic যোগ/খুঁজে পাওয়া যায়নি",""); return; }
     if(subjRes.created||topicRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
 
@@ -503,6 +505,10 @@ function SingleQuestionEntryPage({push}){
         groupId, subIndex:groupId?(idx+1):null, groupHeading:groupId?effGroupHeading:"",
       }));
       const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance,source:"Single_Text"});
+      if(targetMode==="QBank"){
+        if(res.autoClassified>0) push("success",`🤖 ${res.autoClassified}টি প্রশ্ন Topic Tags মিলিয়ে নিজে Subject/Topic পেয়েছে`,"Publish Now দিলে অ্যাপে আসবে");
+        if(res.unclassified>0) push("warn",`⚠ ${res.unclassified}টি প্রশ্নে কোনো ট্যাগ মেলেনি — Subject/Topic ছাড়া সেভ হয়েছে`,"Topic Tags → রান থেকে আবার চালাও, বা হাতে টপিক বসাও");
+      }
       if(res.added>0){
         setLastSubmitFailed(false);
         push("success",`✅ ${rows.length>1?rows.length+"টা প্রশ্ন একসাথে":""} যোগ হয়েছে!`,`এই সেশনে মোট ${sessionCount+rows.length}টি`);
