@@ -8,7 +8,7 @@
    (OCR ইম্পোর্টের জন্য), না দিলে আগের মতোই খালি অবস্থা থেকে শুরু হয় (Single Entry-এর
    জন্য — কোনো behavior change নেই)। ══════════ */
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
-import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText, parseFillMarks, nzTopic, topicCandidatesFromHeading } from "../../core/paperTemplates.js";
+import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText, parseFillMarks, nzTopic, topicCandidatesFromHeading, topicRuleFromHeading, pickTopicOption } from "../../core/paperTemplates.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../../core/ocrProviders.js";
 import { buildSheetRow, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft } from "../../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
@@ -60,7 +60,8 @@ const PAPER_TABS = [
     subjectChoices:[{key:"grammar",name:"বাংলা ব্যাকরণ",short:"ব্যাকরণ"},{key:"literature",name:"বাংলা সাহিত্য",short:"সাহিত্য"}] },
   { key:"english", label:"ইংরেজি", grouped:true,  gkStyle:false,
     subjectChoices:[{key:"grammar",name:"English Grammar",short:"Grammar"},{key:"literature",name:"English Literature",short:"Literature"}] },
-  { key:"math",    label:"গণিত",   fixedSubject:"গণিত",    grouped:false, gkStyle:false },
+  { key:"math",    label:"গণিত",   fixedSubject:null,      grouped:false, gkStyle:false, mathStyle:true,
+    subjectChoices:[{key:"arith",name:"পাটিগণিত",short:"পাটিগণিত"},{key:"algebra",name:"বীজগণিত",short:"বীজগণিত"},{key:"geometry",name:"জ্যামিতি",short:"জ্যামিতি"}] },
   { key:"gk",      label:"GK",     fixedSubject:null,      grouped:false, gkStyle:true  },
 ];
 
@@ -117,7 +118,7 @@ const DEFAULT_SUBPARTS=5;
 const newGroupCard=(tpl)=>({id:newPaperId(),formatStyle:tpl?tpl.fmt:"plain",heading:tpl?tpl.heading:"",tplKey:tpl?tpl.key:"",
   wordBox:tpl&&tpl.key==="cloze"?Array(6).fill(""):[],passage:"",topicSel:{id:"",name:""},subjectChoice:"grammar",
   items:Array.from({length:DEFAULT_SUBPARTS},()=>tpl&&tpl.mcq?{...newPaperItem(),qtype:"mcq"}:newPaperItem())});
-const newFlatCard=(isGk)=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:"",qtype:"written",opt1:"",opt2:"",opt3:"",opt4:"",topicSel:{id:"",name:""},...(isGk?{subjectSel:{id:"",name:""}}:{})});
+const newFlatCard=(isGk)=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:"",qtype:"written",opt1:"",opt2:"",opt3:"",opt4:"",topicSel:{id:"",name:""},subjectSel:{id:"",name:""}});
 const makeInitialPaper=()=>({bangla:[newGroupCard(PAPER_TEMPLATES.bangla[0])],english:[newGroupCard(PAPER_TEMPLATES.english[0])],math:[newFlatCard(false)],gk:[newFlatCard(true)]});
 const toBn=n=>String(n).replace(/\d/g,d=>"০১২৩৪৫৬৭৮৯"[d]);
 const SUBLABELS=["ক","খ","গ","ঘ","ঙ","চ","ছ","জ","ঝ","ঞ","ট","ঠ","ড","ঢ"];
@@ -252,6 +253,10 @@ const PS_CSS=`
 .ps-tb button{background:none;border:0;color:#fff;font-size:13px;min-width:24px;height:22px;cursor:pointer;font-family:Georgia,serif;border-radius:4px}
 .ps-tb button:hover{background:#ffffff33}
 .ps-pv{font-size:12.5px;background:#fffbe0;border-left:3px solid #1F2A6B;padding:1px 6px;margin:1px 0 2px;color:#000;white-space:pre-wrap}
+.ps-fr{display:inline-flex;flex-direction:column;vertical-align:middle;text-align:center;margin:0 2px;line-height:1.15;font-size:.95em}
+.ps-fn{border-bottom:1px solid currentColor;padding:0 3px}
+.ps-fd{padding:0 3px}
+.ps-opt{font-size:10px;color:#8a8a8a;font-style:italic;white-space:nowrap}
 .ps-auto{font-weight:800;color:#1b6b2f}
 .ps-hintbar{font-size:10.5px;color:#7a6a3a;margin:0 0 6px}
 .ps-tp{background:#FBF7EA;border:1px solid #C9BFA0;border-radius:8px;padding:8px;margin-top:8px}
@@ -262,16 +267,51 @@ const PS_CSS=`
    ট্যাগে মোড়ানো হয় (আবার চাপলে খুলে যায়)। ডেটাবেজে এই ট্যাগসহ টেক্সটই সেভ হয়।
    ⚠️ ইউজার অ্যাপে এই তিনটা ট্যাগ রেন্ডার করতে হবে (<b> বোল্ড, <u> আন্ডারলাইন, <i> ইটালিক) —
    নইলে ছাত্রদের স্ক্রিনে ট্যাগগুলো লেখা হিসেবেই দেখাবে। আগের *হাইলাইট* ও _ফাঁকা_ মার্কআপ আলাদা, অক্ষত। */
-const RICH_TAG_RE=/<\/?[biu]>/;
+const RICH_TAG_RE=/<\/?(?:[biu]|frac)>/;
 function psRichRender(text){
-  const parts=String(text||"").split(/(<\/?[biu]>)/);
+  const parts=String(text||"").split(/(<frac>[\s\S]*?<\/frac>|<\/?[biu]>)/);
   let b=0,u=0,i=0;
   return parts.map((p,k)=>{
+    const fm=/^<frac>([\s\S]*?)\|([\s\S]*?)<\/frac>$/.exec(p);
+    if(fm) return <span key={k} className="ps-fr"><span className="ps-fn">{fm[1]}</span><span className="ps-fd">{fm[2]}</span></span>;
     const m=/^<(\/?)([biu])>$/.exec(p);
     if(m){ const on=m[1]?0:1; if(m[2]==="b")b=on; else if(m[2]==="u")u=on; else i=on; return null; }
     if(!p)return null;
     return <span key={k} style={{fontWeight:b?800:undefined,textDecoration:u?"underline":undefined,fontStyle:i?"italic":undefined}}>{p}</span>;
   });
+}
+/* ══════════ 🆕 গণিতের লেখার নিয়ম (শুধু গণিত ট্যাবে — PsTA math prop) ══════════
+   * → ×   / → ÷   (ব্যাকস্পেস দিলে সাথে সাথে * বা / ফিরে আসে)
+   "অতএব" লিখে স্পেস দিলে → ∴ (ব্যাকস্পেস দিলে "অতএব" ফিরে আসে)
+   ভগ্নাংশ: স্পেস ছাড়া লিখলে — ১/ক-খ , ৩/৫ — স্পেস/বর্ডারে পৌঁছালে (বা ঘর থেকে বের হলে) ভগ্নাংশ <frac>১|ক-খ</frac> হয়
+            (ব্যাকস্পেসে আবার ১/ক-খ ফিরে আসে)। স্পেস দিয়ে লিখলে (২৫ / ৫) ভাগ চিহ্ন ÷ ই থাকে।
+   ⚠️ ইউজার অ্যাপে <frac>ওপর|নিচ</frac> ট্যাগ ভগ্নাংশ হিসেবে রেন্ডার করতে হবে (প্লেইন টেক্সটে "ওপর|নিচ" দেখায়)। */
+const PS_FR_STOP=/[\s=+\-×÷*\/,;।:<>|{}\[\]]/;
+const PS_FR_DSTOP=/[\s=,;।:<>|×÷*]/;
+function psFracAt(text,i){            // text[i]==="÷"; দুই পাশে স্পেস ছাড়া অপারেন্ড থাকলে {s,e,n,d}
+  let s=i;
+  if(text[i-1]===")"){
+    let depth=0,k=i-1;
+    for(;k>=0;k--){ if(text[k]===")")depth++; else if(text[k]==="("){ depth--; if(depth===0)break; } }
+    if(k<0)return null; s=k;
+  } else { while(s>0&&!PS_FR_STOP.test(text[s-1])&&text[s-1]!=="(")s--; }
+  if(s===i)return null;
+  let e=i+1; while(e<text.length&&!PS_FR_DSTOP.test(text[e]))e++;
+  while(e>i+1&&text[e-1]===".")e--;    // বাক্যের শেষের দাঁড়ি হর-এ ঢুকবে না
+  if(e===i+1)return null;
+  return {s,e,n:text.slice(s,i),d:text.slice(i+1,e)};
+}
+function psFractionize(text){
+  let out=String(text||""),pos=0;
+  for(;;){
+    const i=out.indexOf("÷",pos); if(i<0)break;
+    const f=psFracAt(out,i);
+    if(!f){ pos=i+1; continue; }
+    const repl="<frac>"+f.n+"|"+f.d+"</frac>";
+    out=out.slice(0,f.s)+repl+out.slice(f.e);
+    pos=f.s+repl.length;
+  }
+  return out;
 }
 // সিলেকশনে ট্যাগ টগল: আগে থেকে মোড়ানো (ভেতরে বা ঠিক বাইরে) থাকলে খুলে ফেলে, নইলে মোড়ায়
 function psToggleTag(el,tag){ return psToggleStr(el.value,el.selectionStart,el.selectionEnd,tag); }
@@ -294,10 +334,69 @@ function psToggleStr(v,s,e,tag){
   return {value:v.slice(0,s)+open+sel+close+v.slice(e),s:s+open.length,e:e+open.length};
 }
 // টেক্সট লিখলে নিজে নিজে উচ্চতা বাড়ে (ছাপা লাইনের মতো দেখায়) + Ctrl+B/U/I + সিলেক্ট করলে ভাসমান টুলবার
-function PsTA({value,onChange,onKeyDown,taRef,className}){
+function PsTA({value,onChange,onKeyDown,taRef,className,math}){
   const r=useRef(null);
+  const lastAuto=useRef(null), pendingCaret=useRef(null), onChangeRef=useRef(onChange);
+  onChangeRef.current=onChange;
   const[hasSel,setHasSel]=useState(false);
-  useLayoutEffect(()=>{ const el=r.current; if(el){ el.style.height="auto"; el.style.height=el.scrollHeight+"px"; } },[value]);
+  useLayoutEffect(()=>{
+    const el=r.current; if(!el)return;
+    el.style.height="auto"; el.style.height=el.scrollHeight+"px";
+    if(pendingCaret.current!=null){ const c=pendingCaret.current; pendingCaret.current=null; try{ el.setSelectionRange(c,c); }catch(_){} }
+  },[value]);
+  // ── গণিত: স্বয়ংক্রিয় চিহ্ন + ব্যাকস্পেসে ফেরত ──
+  const commitAuto=(nv,caret,info)=>{ lastAuto.current=info; pendingCaret.current=caret; if(onChange)onChange({target:{value:nv}}); };
+  const handleChange=e=>{
+    if(!math){ if(onChange)onChange(e); return; }
+    const el=e.target, v=el.value, caret=el.selectionStart, ne=e.nativeEvent||{};
+    lastAuto.current=null;
+    if((ne.inputType==="insertText"||ne.inputType==="insertLineBreak")&&!ne.isComposing&&caret>0){
+      const ch=v[caret-1];
+      if(ch==="*"||ch==="/"){
+        const repl=ch==="*"?"×":"÷";
+        commitAuto(v.slice(0,caret-1)+repl+v.slice(caret),caret,{start:caret-1,repl,original:ch,tail:"",caret});
+        return;
+      }
+      if(ch===" "||ch==="\n"){
+        const before=v.slice(0,caret-1), after=v.slice(caret);
+        if(/(^|[\s(,;:।])অতএব$/.test(before)){
+          const start=before.length-"অতএব".length;
+          commitAuto(before.slice(0,start)+"∴"+ch+after,start+2,{start,repl:"∴",original:"অতএব",tail:ch,caret:start+2});
+          return;
+        }
+        const runStart=Math.max(before.lastIndexOf(" "),before.lastIndexOf("\n"))+1;
+        const run=before.slice(runStart);
+        if(run.indexOf("÷")>=0){
+          const conv=psFractionize(run);
+          if(conv!==run){
+            const nc=runStart+conv.length+1;
+            commitAuto(before.slice(0,runStart)+conv+ch+after,nc,{start:runStart,repl:conv,original:run.replace(/÷/g,"/"),tail:ch,caret:nc});
+            return;
+          }
+        }
+      }
+    }
+    if(onChange)onChange(e);
+  };
+  useEffect(()=>{
+    const el=r.current; if(!el||!math)return;
+    const h=ev=>{
+      if(ev.inputType!=="deleteContentBackward")return;
+      const la=lastAuto.current; if(!la)return;
+      if(el.selectionStart!==el.selectionEnd||el.selectionStart!==la.caret)return;
+      const v=el.value; if(v.slice(la.start,la.start+la.repl.length)!==la.repl)return;
+      ev.preventDefault();
+      const nv=v.slice(0,la.start)+la.original+la.tail+v.slice(la.start+la.repl.length+la.tail.length);
+      lastAuto.current=null; pendingCaret.current=la.start+la.original.length+la.tail.length;
+      if(onChangeRef.current)onChangeRef.current({target:{value:nv}});
+    };
+    el.addEventListener("beforeinput",h);
+    return()=>el.removeEventListener("beforeinput",h);
+  },[math]);
+  const handleBlur=()=>{
+    setHasSel(false);
+    if(math){ const el=r.current; if(el){ const nv=psFractionize(el.value); if(nv!==el.value&&onChange)onChange({target:{value:nv}}); } }
+  };
   const sync=()=>{ const el=r.current; setHasSel(!!el&&el.selectionStart!==el.selectionEnd); };
   const commit=res=>{
     if(!res)return;
@@ -320,6 +419,7 @@ function PsTA({value,onChange,onKeyDown,taRef,className}){
     commit({value:v.slice(0,s)+sel+v.slice(e),s,e:s+sel.length});
   };
   const keyDown=e=>{
+    if(["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","Tab"].includes(e.key))lastAuto.current=null;
     if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey){
       const k=String(e.key).toLowerCase(), tag=k==="b"?"b":k==="u"?"u":k==="i"?"i":null;
       if(tag){ e.preventDefault(); apply(tag); return; }
@@ -338,8 +438,8 @@ function PsTA({value,onChange,onKeyDown,taRef,className}){
         </div>
       )}
       <textarea ref={el=>{r.current=el; if(taRef)taRef(el);}} rows={1} className={"ps-in"+(className?" "+className:"")}
-        value={value||""} onChange={onChange} onKeyDown={keyDown}
-        onSelect={sync} onKeyUp={sync} onMouseUp={sync} onBlur={()=>setHasSel(false)}/>
+        value={value||""} onChange={handleChange} onKeyDown={keyDown}
+        onSelect={sync} onKeyUp={sync} onMouseUp={sync} onMouseDown={()=>{lastAuto.current=null;}} onBlur={handleBlur}/>
       {RICH_TAG_RE.test(value||"")&&<div className="ps-pv">{psRichRender(value)}</div>}
     </div>
   );
@@ -569,6 +669,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     // ট্যাব বদলের পর নতুন ট্যাবের DOM রেন্ডার হতে এক টিক সময় দেওয়া হচ্ছে
     requestAnimationFrame(()=>{
       setTimeout(()=>{
+        if(field==="answer"){ const el=flatARefs.current[cardId]; if(el){ el.scrollIntoView({behavior:"smooth",block:"center"}); el.focus(); return; } }
         const refMap=field==="subject"?subjectFieldRefs:topicRefs;
         refMap.current[cardId]?.scrollIntoView({behavior:"smooth",block:"center"});
       },60);
@@ -860,10 +961,10 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
           } else {
             if(!card.question.trim())continue;
             let subjId;
-            if(t.gkStyle){
-              const subjName=(card.subjectSel.name||"").trim();
-              if(!subjName)throw locatedError(`GK ট্যাবে একটা প্রশ্নে Subject ফাঁকা আছে — কোন real subject (যেমন "সাধারণ বিজ্ঞান") সেটা বেছে দাও`,t.key,card.id,"subject");
-              subjId=await resolveSubjectCached(subjName);
+            const flatSubjName=((card.subjectSel&&card.subjectSel.name)||"").trim();
+            if(t.gkStyle||t.mathStyle){
+              if(!flatSubjName)throw locatedError(t.mathStyle?`গণিত ট্যাবে একটা প্রশ্নে Subject বাছা হয়নি — পাটিগণিত / বীজগণিত / জ্যামিতি বেছে নাও`:`GK ট্যাবে একটা প্রশ্নে Subject ফাঁকা আছে — কোন real subject (যেমন "সাধারণ বিজ্ঞান") সেটা বেছে দাও`,t.key,card.id,"subject");
+              subjId=await resolveSubjectCached(flatSubjName);
             } else {
               subjId=await resolveFixedSubject(t.fixedSubject);
             }
@@ -871,6 +972,8 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             if(!topicName)throw locatedError(`"${t.label}" ট্যাবে একটা প্রশ্নে Topic ফাঁকা আছে`,t.key,card.id);
             const topicId=await resolveTopicCached(subjId,card.topicSel);
             if(!topicId)throw new Error(`"${topicName}" Topic resolve ব্যর্থ`);
+            // গণিত/GK (Written): প্রশ্ন ও উত্তর বাধ্যতামূলক; সমাধান/ব্যাখ্যা/টেকনিক ঐচ্ছিক — ফাঁকা থাকলেও সেভ হবে
+            if(card.qtype!=="mcq"&&!card.answer.trim())throw locatedError(`"${t.label}" ট্যাবে একটা প্রশ্নের উত্তর ফাঁকা — উত্তর দেওয়া বাধ্যতামূলক (সমাধান ঐচ্ছিক)`,t.key,card.id,"answer");
             if(card.qtype==="mcq"){
               const opts=[card.opt1,card.opt2,card.opt3,card.opt4].map(o=>o.trim());
               if(opts.some(o=>!o))throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে ৪টা অপশনের কোনোটা ফাঁকা — 🤖 Generate চাপো অথবা নিজে পূরণ করো`);
@@ -879,7 +982,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               if(!opts.some(o=>norm(o)===norm(ansTrim)))throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে সঠিক উত্তর ৪টা অপশনের কোনোটার সাথেই মিলছে না`);
               allRows.push(buildSheetRow({
                 item:{q:card.question.trim(),correct:ansTrim,opt1:opts[0],opt2:opts[1],opt3:opts[2],opt4:opts[3],explanation:card.explanation,technique:card.technique},
-                subject:t.gkStyle?card.subjectSel.name.trim():t.fixedSubject,subtopic:topicName,qtype:"MCQ",
+                subject:(t.gkStyle||t.mathStyle)?flatSubjName:t.fixedSubject,subtopic:topicName,qtype:"MCQ",
                 audienceTags:selectedTagNames,tagIds:selectedTagIds,mainQpaper:"",subjectId:subjId,topicId,
                 groupId:"",subIndex:null,groupHeading:"",formatStyle:"",
               }));
@@ -887,7 +990,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             }
             allRows.push(buildSheetRow({
               item:{q:card.question.trim(),correct:card.answer.trim(),explanation:card.explanation,technique:card.technique},
-              subject:t.gkStyle?card.subjectSel.name.trim():t.fixedSubject,subtopic:topicName,qtype:"Written",
+              subject:(t.gkStyle||t.mathStyle)?flatSubjName:t.fixedSubject,subtopic:topicName,qtype:"Written",
               audienceTags:selectedTagNames,tagIds:selectedTagIds,mainQpaper:"",subjectId:subjId,topicId,
               groupId:"",subIndex:null,groupHeading:"",formatStyle:"",
             }));
@@ -968,9 +1071,9 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       : topicOptionsFor(subjectOptions.find(s=>s.name===td.fixedSubject)?.id);
     if(!options||!options.length)return null;
     let match=null;
-    const cands=topicCandidatesFromHeading(heading,tab);
-    if(cands.length){
-      for(const c of cands){ const k=nzTopic(c); match=options.find(o=>nzTopic(o.name)===k); if(match)break; }
+    const rule=topicRuleFromHeading(heading,tab);
+    if(rule){
+      match=pickTopicOption(options,rule.topics,rule.nameRe);   // বানান-ভুল সহনশীল
     } else {
       match=bestTopicMatchForHeading(heading,options);
     }
@@ -1276,7 +1379,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       <div key={card.id} className="ps-sheet">
         <div className="ps-row st" style={{marginLeft:0}}>
           <span className="ps-lab">{psLab(ci)}</span>
-          <PsTA className="q" taRef={el=>{flatQRefs.current[card.id]=el;}} value={card.question}
+          <PsTA math={isMath} className="q" taRef={el=>{flatQRefs.current[card.id]=el;}} value={card.question}
             onChange={e=>updateCard(activeTab,card.id,{question:e.target.value})}/>
           <span className="ps-ac">
             <button type="button" tabIndex={-1} className="ps-mini" title="Written ⇄ MCQ" onClick={()=>updateCard(activeTab,card.id,{qtype:mcq?"written":"mcq"})}>{mcq?"❓":"✍️"}</button>
@@ -1285,12 +1388,12 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
           </span>
           {(isMath||ex)&&(
             <div className="ps-l2">
-              {isMath?<span className="ps-bdg">সমাধান</span>:<span>ব্যাখ্যা:</span>}
-              <PsTA value={card.explanation} onChange={e=>updateCard(activeTab,card.id,{explanation:e.target.value})}/>
+              {isMath?<><span className="ps-bdg">সমাধান</span><span className="ps-opt">ঐচ্ছিক</span></>:<span>ব্যাখ্যা:</span>}
+              <PsTA math={isMath} value={card.explanation} onChange={e=>updateCard(activeTab,card.id,{explanation:e.target.value})}/>
             </div>
           )}
-          <div className="ps-l2"><span>উত্তর:</span>
-            <PsTA taRef={el=>{flatARefs.current[card.id]=el;}} value={card.answer}
+          <div className="ps-l2"><span>উত্তর<b style={{color:"#c0392b"}}>*</b>:</span>
+            <PsTA math={isMath} taRef={el=>{flatARefs.current[card.id]=el;}} value={card.answer}
               onChange={e=>updateCard(activeTab,card.id,{answer:e.target.value})}/>
             {mcq&&(
               <button type="button" tabIndex={-1} className="ps-mini" title="AI দিয়ে ৩টা ভুল অপশন বানাও" disabled={mcqGeneratingId===card.id}
@@ -1310,10 +1413,27 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
           )}
           {ex&&(
             <div className="ps-l2"><span>টেকনিক:</span>
-              <PsTA value={card.technique} onChange={e=>updateCard(activeTab,card.id,{technique:e.target.value})}/></div>
+              <PsTA math={isMath} value={card.technique} onChange={e=>updateCard(activeTab,card.id,{technique:e.target.value})}/></div>
           )}
         </div>
         <div className="ps-tp">
+          {tabDef.mathStyle&&(
+            <div ref={el=>{subjectFieldRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
+                ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
+              <label>📚 Subject — আগে বেছে নাও, তারপর সেই অনুযায়ী Topic আসবে</label>
+              <div style={{display:"flex",gap:6}}>
+                {tabDef.subjectChoices.map(c=>{
+                  const on=((card.subjectSel&&card.subjectSel.name)||"")===c.name;
+                  return (
+                    <button type="button" key={c.key}
+                      onClick={()=>{ if(on)return; const s=subjectOptions.find(x=>x.name===c.name);
+                        updateCard(activeTab,card.id,{subjectSel:{id:s?s.id:"",name:c.name},topicSel:{id:"",name:""}}); }}
+                      style={{flex:1,padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?PC.ink:PC.border}`,background:on?PC.ink:"#fff",color:on?"#fff":PC.ink,fontWeight:800,fontSize:13,cursor:"pointer"}}>{c.short}</button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {tabDef.gkStyle&&(
               <div ref={el=>{subjectFieldRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
                   ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
@@ -1332,10 +1452,10 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                 <label>📌 Topic</label>
                 <TypeaheadCombo
-                  options={topicOptionsForShown(tabDef.gkStyle?card.subjectSel.id:subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
+                  options={topicOptionsForShown((tabDef.gkStyle||tabDef.mathStyle)?(((card.subjectSel&&card.subjectSel.id)||subjectOptions.find(s=>s.name===(card.subjectSel&&card.subjectSel.name))?.id)):subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
                   value={card.topicSel}
                   onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel})}
-                  placeholder={tabDef.gkStyle&&!card.subjectSel.name.trim()?"আগে Subject বেছে নাও":"Topic লিখো বা বেছে নাও..."}
+                  placeholder={(tabDef.gkStyle||tabDef.mathStyle)&&!((card.subjectSel&&card.subjectSel.name)||"").trim()?"আগে Subject বেছে নাও":"Topic লিখো বা বেছে নাও..."}
                   newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}
                   inputStyle={pcField} lightTheme
                 />
@@ -1435,6 +1555,9 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
           <div className="b3"><span>{examYear.trim()}</span><span>{tabDef.label}</span></div></div>
       )}
       <div className="ps-hintbar" style={{color:PC.muted}}>💡 টেক্সট সিলেক্ট করে <b>Ctrl+B</b> বোল্ড · <b>Ctrl+U</b> আন্ডারলাইন · <b>Ctrl+I</b> ইটালিক — অথবা মাউসে সিলেক্ট করলে ভেসে ওঠা B / U / I টুলবার</div>
+      {activeTab==="math"&&(
+        <div className="ps-hintbar" style={{color:PC.muted}}>🧮 <b>*</b> → × · <b>/</b> → ÷ · <b>অতএব</b>+স্পেস → ∴ (ব্যাকস্পেসে আগের লেখা ফিরে আসে) · স্পেস ছাড়া <b>১/ক-খ</b>, <b>৩/৫</b> → ভগ্নাংশ</div>
+      )}
       <div onKeyDown={psTabNav}>
         {(paper[activeTab]||[]).map((card,ci)=>tabDef.grouped?renderGroupCard(card,ci):renderFlatCard(card,ci))}
       </div>
