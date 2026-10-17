@@ -24,7 +24,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও"); return{added:0,skipped:0,failedRows:rows}; }
   const CHUNK=Math.max(1,chunkSize||100); // চাইলে ছোট চাংক (৫-১০, এমনকি ১) দিয়ে বেশি live প্রোগ্রেস আপডেট পাওয়া যায় — trade-off: ছোট চাংক = বেশি রিকোয়েস্ট = মোট সময় একটু বেশি
   const totalChunks=Math.ceil(rows.length/CHUNK);
-  let added=0,skipped=0,firebaseSyncFailed=false,examAppearancesAdded=0,examAppearancesLinkedToExisting=0; const failedRows=[];
+  let added=0,skipped=0,firebaseSyncFailed=false,examAppearancesAdded=0,examAppearancesLinkedToExisting=0,autoClassified=0,unclassified=0; const failedRows=[];
   // 🆕 প্রতিটা ইনপুট row-এর ফলাফল id (নতুন তৈরি বা duplicate-matched বিদ্যমান) —
   // chunk-অনুযায়ী GAS-এর bResultIds concat হয়ে rows.length-এর সমান লম্বা থাকে।
   // SingleQuestionEntryPage-এ MCQ সাবমিটের পর option/explanation-generator
@@ -57,6 +57,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
         added+=(data.added||0); skipped+=(data.skipped||0);
         examAppearancesAdded+=(data.examAppearancesAdded||0);
         examAppearancesLinkedToExisting+=(data.examAppearancesLinkedToExisting||0);
+        autoClassified+=(data.autoClassified||0); unclassified+=(data.unclassified||0);   // Topic Tags অটো-ক্লাসিফাই (QBank)
         resultIds.push(...(Array.isArray(data.ids)?data.ids:chunk.map(()=>"")));
         if(isLast && data.firebaseSynced===false) firebaseSyncFailed=true;
         ok=true;
@@ -69,7 +70,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   // ⚡ Sheet-এ সেভ ঠিকই হয়ে গেছে, কিন্তু GAS-এর Firebase mirror-sync ব্যর্থ হলে dedupe-এর
   // "Quiz-এ আছে" কাউন্ট আর existingQuizKeys পুরনো থেকে যাবে — সেটা এখন চুপচাপ না থেকে জানানো হয়।
   if(firebaseSyncFailed) push?.("error","⚠️ Sheet-এ সেভ হয়েছে কিন্তু Firebase sync ব্যর্থ","'Quiz-এ আছে' কাউন্ট পুরনো থাকতে পারে — একটু পরে আবার চেষ্টা করো, বা GAS Executions log চেক করো");
-  return{added,skipped,failedRows,examAppearancesAdded,examAppearancesLinkedToExisting,ids:resultIds};
+  return{added,skipped,failedRows,examAppearancesAdded,examAppearancesLinkedToExisting,autoClassified,unclassified,ids:resultIds};
 }
 
 /* ── Firebase-এ bulk rows সেভ — প্রতিটা row আলাদা push, ব্যর্থগুলো ফেরত দেয় (retry-এর জন্য) ──
