@@ -667,7 +667,7 @@ function MultiSubjectImportPage({push}){
     // এখন group তখনই আটকাবে যখন অন্তত একটা row-এর নিজস্ব subject নেই এবং fallback-ও ফাঁকা।
     // subjectCovered() — একই শর্ত UI (নিচে) আর submit-validation দুই জায়গাতেই ব্যবহার হয়,
     // যাতে দুটো জায়গায় ভিন্ন ফলাফল না দেখায়। ──
-    const subjectCovered=g=>g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim());
+    const subjectCovered=g=>targetMode==="QBank"||g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim());
     // ── MCQ mode-এ প্রতিটা প্রশ্নের সঠিক উত্তর বসানো না থাকলে সেই group ব্লক থাকবে —
     // নাহলে ফাঁকা "correct"-সহ প্রশ্ন Sheet-এ চলে যাবে, লাইভ কুইজে ভুল/ফাঁকা উত্তর দেখাবে ──
     const mcqCorrectCovered=g=>qType!=="MCQ"||g.rows.every(r=>r.correct&&r.correct.trim());
@@ -712,7 +712,7 @@ function MultiSubjectImportPage({push}){
     // তাই আগের মতো একটামাত্র ব্যাচ-ওয়াইড examAppearance দিয়ে হবে না — প্রতিটা group-এর
     // জন্য আলাদা saveRowsToSheet কল হয়, নিজের পদ/প্রতিষ্ঠান/সাল দিয়ে। ফলাফলগুলো একসাথে
     // যোগ করে শেষে একটা সামারি দেখানো হয়। ──
-    let totalAdded=0, totalSkipped=0, totalFailed=[], totalLinkedExisting=0;
+    let totalAdded=0, totalSkipped=0, totalFailed=[], totalLinkedExisting=0, totalAuto=0, totalUnclassified=0;
     const submittedGroupIds=[];
     for(const g of readyGroups){
       let examAppearance=null;
@@ -743,7 +743,7 @@ function MultiSubjectImportPage({push}){
 
       const resolveResult=await resolveSubjectTopicForEntries({
         entries, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:targetMode, push,
-        fallbackSubject:subject, fallbackTopic:topicOverride||subject,
+        fallbackSubject:subject, fallbackTopic:topicOverride||subject, allowBlank:targetMode==="QBank",
       });
       if(!resolveResult.ok){ push("error",`❌ "${subject||"(subject-less group)"}" গ্রুপে সমস্যা: `+resolveResult.reason,""); continue; }
       if(resolveResult.anyCreated) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
@@ -760,6 +760,7 @@ function MultiSubjectImportPage({push}){
       const res=await saveRowsToSheet({rows,targetTab:targetMode,gasSecret,push,examAppearance,source:"Bulk_OCR"});
       totalAdded+=res.added||0; totalSkipped+=res.skipped||0;
       totalLinkedExisting+=res.examAppearancesLinkedToExisting||0;
+      totalAuto+=res.autoClassified||0; totalUnclassified+=res.unclassified||0;
       if(res.failedRows.length) totalFailed=totalFailed.concat(res.failedRows);
       if(res.added>0||res.skipped>0) submittedGroupIds.push(g.id);
     }
@@ -776,6 +777,10 @@ function MultiSubjectImportPage({push}){
       `${submittedGroupIds.length}টি group`+(totalSkipped?`, ${totalSkipped}টা duplicate বাদ পড়েছে`:""));
     // 🐛 ফিক্স: duplicate QBank প্রশ্ন পেলেও এখন appearance হারায় না — বিদ্যমান প্রশ্নের
     // সাথেই জুড়ে যায় (BulkUploaderPage-এর মতোই, GAS-এর bulk_save_rows-এর একই ফিক্স)।
+    if(targetMode==="QBank"){
+      if(totalAuto>0) push("success",`🤖 ${totalAuto}টি প্রশ্ন Topic Tags মিলিয়ে নিজে Subject/Topic পেয়েছে`,"Publish Now দিলে অ্যাপে আসবে");
+      if(totalUnclassified>0) push("warn",`⚠ ${totalUnclassified}টি প্রশ্নে কোনো ট্যাগ মেলেনি — Subject/Topic ছাড়া সেভ হয়েছে`,"Topic Tags → রান থেকে আবার চালাও, বা হাতে টপিক বসাও");
+    }
     if(totalLinkedExisting>0) push("success",`🔗 ${totalLinkedExisting}টা প্রশ্ন আগে থেকেই QBank-এ ছিল`,"নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
     if(totalFailed.length) push("error",`${totalFailed.length}টি ব্যর্থ হয়েছে`,"নিচে ক্যাশ থেকে আবার পাঠানো যাবে");
     if(totalAdded>0||totalSkipped>0){
@@ -867,7 +872,7 @@ function MultiSubjectImportPage({push}){
           {draftGroups.map(g=>{
             const needsAppearance=targetMode==="QBank";
             // 🐛 ফিক্স: group.subject খালি হলেও, সব row-এর নিজস্ব subject থাকলে এটা "সমস্যা" না
-            const subjectOk=g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim());
+            const subjectOk=targetMode==="QBank"||g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim());
             const mcqOk=qType!=="MCQ"||g.rows.every(r=>r.correct&&r.correct.trim());
             const isEmpty=!subjectOk || !mcqOk || (needsAppearance&&(!g.post.trim()||!g.institution.trim()||!g.year.trim()));
             const imgsOpen=expandedGroupId===g.id;
@@ -1068,7 +1073,7 @@ function MultiSubjectImportPage({push}){
           {(()=>{
             const incGroups=draftGroups.filter(g=>g.included);
             const needsAppearance2=targetMode==="QBank";
-            const isReady=g=>(g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim())) && (qType!=="MCQ"||g.rows.every(r=>r.correct&&r.correct.trim())) && (!needsAppearance2 || (g.post.trim()&&g.institution.trim()&&g.year.trim()));
+            const isReady=g=>(targetMode==="QBank"||g.subject.trim()||g.rows.every(r=>r.subject&&r.subject.trim())) && (qType!=="MCQ"||g.rows.every(r=>r.correct&&r.correct.trim())) && (!needsAppearance2 || (g.post.trim()&&g.institution.trim()&&g.year.trim()));
             const readyG=incGroups.filter(isReady);
             const blockedG=incGroups.filter(g=>!isReady(g));
             const readyQ=readyG.reduce((s,g)=>s+g.rows.length,0);
