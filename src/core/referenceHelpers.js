@@ -75,7 +75,7 @@ async function resolveOrCreateReference({sel,refType,options,gasSecret,push,pare
  * ফেরত (dryRun হলে): {ok:true, wouldCreate:[{type,name,sheet?,parentSubjectName?,similarTo?}]}
  *      | {ok:false, reason}
  */
-async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,gasSecret,sheet,push,fallbackSubject,fallbackTopic,dryRun}){
+async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,gasSecret,sheet,push,fallbackSubject,fallbackTopic,dryRun,allowBlank}){
   const subjCache=new Map(); // norm(name) -> subject_id
   const topicCache=new Map(); // subject_id+"|"+norm(name) -> topic_id
   let curSubjects=subjectOptions||[], curTopics=topicsAll||[];
@@ -85,6 +85,9 @@ async function resolveSubjectTopicForEntries({entries,subjectOptions,topicsAll,g
   for(const item of entries){
     const sName=((item.subject&&String(item.subject).trim())||fallbackSubject||"").trim();
     const tName=((item.topic&&String(item.topic).trim())||fallbackTopic||"").trim();
+    // allowBlank (QBank + Topic Tags অটো-ক্লাসিফাই): Subject ও Topic দুটোই ফাঁকা থাকলে আটকাবে না — ফাঁকা id নিয়ে যাবে,
+    // GAS রুল মিলিয়ে নিজে বসাবে; না মিললে Subject ছাড়াই সেভ হবে। শুধু একটা ফাঁকা থাকলে আগের মতোই ত্রুটি।
+    if(allowBlank && !sName && !tName){ resolved.push({item,subjectId:"",topicId:"",subjectName:"",topicName:""}); continue; }
     if(!sName||!tName) return{ok:false,reason:`"${(item.q||"").substring(0,40)}..." — Subject/Topic নেই (লাইনে টাইপ করো, অথবা ওপরের ফিল্ড পূরণ করো)`};
     const sKey=norm(sName);
     let sId=subjCache.get(sKey);
