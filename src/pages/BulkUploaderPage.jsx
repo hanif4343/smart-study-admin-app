@@ -205,7 +205,8 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       if(r.ok && isInlineEff){
         const sName=((r.subject&&r.subject.trim())||fs||"").trim();
         const tName=((r.topic&&r.topic.trim())||ft||"").trim();
-        if(!sName||!tName) return{idx:i+1, entry:e, ok:false, err:true, skip:false,
+        if(m==="QBank" && !sName && !tName){ /* QBank: Subject/Topic ফাঁকা চলবে — Topic Tags রুল নিজে বসাবে */ }
+        else if(!sName||!tName) return{idx:i+1, entry:e, ok:false, err:true, skip:false,
           reason:"Subject/Topic নেই — লাইনে ;;Subject;;Topic যোগ করো, অথবা উপরে Fallback ফিল্ড ভরো"};
       }
       return{idx:i+1, entry:e, ...r};
@@ -246,7 +247,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         if(!entries.length){ if(!cancelled){ setDupPreview(null);} return; }
         const res=await resolveSubjectTopicForEntries({
           entries, subjectOptions, topicsAll:refData?.topics||[], sheet:mode,
-          fallbackSubject, fallbackTopic, dryRun:true,
+          fallbackSubject, fallbackTopic, dryRun:true, allowBlank:mode==="QBank",
         });
         if(cancelled)return;
         setDupPreview(res.ok?res:null);
@@ -417,7 +418,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
      (raw text কখনো sheet-এ যায় না — QBank-এ তো plain subject কলামই নেই)। ── */
   const resolveSubjectTopicPerEntry=(entries)=>resolveSubjectTopicForEntries({
     entries, subjectOptions, topicsAll:refData?.topics||[], gasSecret, sheet:mode, push,
-    fallbackSubject, fallbackTopic,
+    fallbackSubject, fallbackTopic, allowBlank:mode==="QBank",
   });
 
   /* Main upload */
@@ -560,12 +561,17 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
     setProgress({done:entries.length,total:entries.length,sent:result.added,failed:result.failedRows.length});
     setDone(true);
     if(result.failedRows.length) pushFailedItems("বাল্ক আপলোডার","sheet",mode,result.failedRows);
-    const subjLabel=isInline?[...new Set(perEntry.map(p=>p.subjectName))].join(", "):subjectName;
+    const subjLabel=isInline?([...new Set(perEntry.map(p=>p.subjectName).filter(Boolean))].join(", ")||"Subject ছাড়া (অটো-ক্লাসিফাই)"):subjectName;
     if(result.added>0)push("success",`✅ ${result.added}টি Sheet-এ যোগ হয়েছে!`,`${mode} — ${subjLabel}`+(result.skipped?`, ${result.skipped}টা duplicate বাদ পড়েছে`:"")+(batchGroupId?` · group: ${batchGroupId}`:""));
     // 🐛 ফিক্স: আগে duplicate পেলে appearance হারিয়ে যেত (স্রেফ skip)। এখন
     // examAppearancesLinkedToExisting দিয়ে বোঝা যায় কতগুলো প্রশ্ন "আগে থেকেই ছিল,
     // নতুন appearance জুড়ে দেওয়া হয়েছে" — এটা duplicate-skip আর নতুন-প্রশ্নের
     // appearance থেকে আলাদা করে দেখানো হয়, যাতে অ্যাডমিন বুঝতে পারে কোনটা কী হলো।
+    // Topic Tags: কয়টা প্রশ্ন রুল মিলিয়ে নিজে Subject/Topic পেল, কয়টা পেল না (QBank)
+    if(mode==="QBank" && (result.autoClassified>0||result.unclassified>0)){
+      if(result.autoClassified>0) push("success",`🤖 ${result.autoClassified}টি প্রশ্ন Topic Tags মিলিয়ে নিজে Subject/Topic পেয়েছে`,"Publish Now দিলে অ্যাপে আসবে");
+      if(result.unclassified>0) push("warn",`⚠ ${result.unclassified}টি প্রশ্নে কোনো ট্যাগ মেলেনি — Subject/Topic ছাড়া সেভ হয়েছে`,"Topic Tags → রান থেকে আবার চালাও, বা হাতে টপিক বসাও");
+    }
     if(result.examAppearancesLinkedToExisting>0) push("success",`🔗 ${result.examAppearancesLinkedToExisting}টা প্রশ্ন আগে থেকেই QBank-এ ছিল`,"নতুন করে যোগ হয়নি (duplicate হয়নি) — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
     if(examAppearance && !result.examAppearancesAdded && !result.examAppearancesLinkedToExisting) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
     if(result.examAppearancesAdded>result.examAppearancesLinkedToExisting)push("success",`🧾 ${result.examAppearancesAdded-result.examAppearancesLinkedToExisting}টা নতুন প্রশ্নে Exam Appearance যোগ হয়েছে`,`পদ/প্রতিষ্ঠান/সাল — এই ব্যাচের সব প্রশ্নে`);
@@ -776,6 +782,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
         <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:12,padding:"10px 14px",marginBottom:12}}>
           <div style={{fontSize:11,fontWeight:800,color:C.text,marginBottom:6}}>📚 Fallback Subject/Topic (ঐচ্ছিক)</div>
           <div style={{fontSize:10,color:C.muted,marginBottom:8,lineHeight:1.5}}>যেসব লাইনে ;;Subject;;Topic দেওয়া নেই, সেগুলোর জন্য এটা ব্যবহার হবে — সব লাইনে বারবার লিখতে হবে না।</div>
+          {mode==="QBank"&&<div style={{fontSize:10,color:C.success,marginBottom:8,lineHeight:1.5}}>🤖 QBank-এ Fallback ফাঁকা রাখলেও চলবে — Topic Tags রুল মিললে প্রশ্ন নিজে Subject/Topic পাবে, না মিললে Subject ছাড়াই সেভ হবে। ( Fallback দিলে প্রশ্ন ওই Topic-এই যাবে, অটো-ক্লাসিফাই চলবে না — শুধু পুল Subject দিলে চলবে )</div>}
           <div style={{display:"flex",gap:8}}>
             <div style={{position:"relative",flex:1}}>
               <input ref={fbSubjInputRef} className="inp" style={{width:"100%"}} placeholder="Fallback Subject" value={fallbackSubject}
