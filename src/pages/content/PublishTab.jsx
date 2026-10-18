@@ -39,7 +39,7 @@ const CHECKLIST_ITEMS = [
   "GitHub token এখনো valid/expired না তো?",
 ];
 
-function PublishTab({push}){
+function PublishTab({push,onFixOrphans}){
   const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
@@ -337,9 +337,14 @@ function PublishTab({push}){
       <div className="card" style={{marginBottom:12,border:totalOrphan>0?`1px solid ${tint(C.warning,"40")}`:undefined}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
           <div style={{fontSize:13,fontWeight:700}}>🧟 Orphan প্রশ্ন</div>
-          <button className="btn bg" style={{fontSize:11,padding:"4px 9px"}} onClick={refreshOrphan} disabled={loadingOrphan}>
-            {loadingOrphan?"⏳":"🔄"} রিফ্রেশ
-          </button>
+          <div style={{display:"flex",gap:6}}>
+            {totalOrphan>0&&onFixOrphans&&(
+              <button className="btn bp" style={{fontSize:11,padding:"4px 10px",fontWeight:700}} onClick={onFixOrphans}>✏️ ঠিক করো</button>
+            )}
+            <button className="btn bg" style={{fontSize:11,padding:"4px 9px"}} onClick={refreshOrphan} disabled={loadingOrphan}>
+              {loadingOrphan?"⏳":"🔄"} রিফ্রেশ
+            </button>
+          </div>
         </div>
         {orphanStats===null ? (
           <div style={{fontSize:12,color:C.muted}}>{loadingOrphan?"লোড হচ্ছে...":"এখনো চেক করা হয়নি"}</div>
@@ -348,7 +353,7 @@ function PublishTab({push}){
         ) : (
           <>
             <div style={{fontSize:11,color:C.muted,marginBottom:8,lineHeight:1.5}}>
-              এই প্রশ্নগুলোর topic_id দেওয়া আছে কিন্তু সেই টপিক Topics শিটে নেই (মুছে/rename হয়ে গেছে) — CDN publish-এ এগুলো নেওয়া যায় না। (ফাঁকা topic_id-এর প্রশ্ন এখানে দেখানো হয় না — সেগুলো Review ট্যাবে ঠিক করার জন্য।)
+              ✏️ মোছার আগে "ঠিক করো" দিয়ে সঠিক Subject/Topic বসিয়ে দেখো — তাহলে প্রশ্ন না হারিয়েই Orphan শেষ। এই প্রশ্নগুলোর topic_id দেওয়া আছে কিন্তু সেই টপিক Topics শিটে নেই (মুছে/rename হয়ে গেছে) — CDN publish-এ এগুলো নেওয়া যায় না। (ফাঁকা topic_id-এর প্রশ্ন এখানে দেখানো হয় না — সেগুলো Review ট্যাবে ঠিক করার জন্য।)
             </div>
             {["Quiz","QBank","Study"].map(sheetName=>{
               const s=orphanStats[sheetName];
