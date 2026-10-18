@@ -117,7 +117,7 @@ const DEFAULT_SUBPARTS=5;
 // ভেতরের সাব-পার্ট বক্স সব ফাঁকা (কোনো স্যাম্পল/প্লেসহোল্ডার টেক্সট নেই)। না দিলে আগের মতোই (OCR ইম্পোর্ট)।
 const newGroupCard=(tpl)=>({id:newPaperId(),formatStyle:tpl?tpl.fmt:"plain",heading:tpl?tpl.heading:"",tplKey:tpl?tpl.key:"",
   wordBox:tpl&&tpl.key==="cloze"?Array(6).fill(""):[],passage:"",topicSel:{id:"",name:""},subjectChoice:"grammar",
-  items:Array.from({length:DEFAULT_SUBPARTS},()=>tpl&&tpl.mcq?{...newPaperItem(),qtype:"mcq"}:newPaperItem())});
+  items:Array.from({length:(tpl&&tpl.rows)||DEFAULT_SUBPARTS},()=>tpl&&tpl.mcq?{...newPaperItem(),qtype:"mcq"}:newPaperItem())});
 const newFlatCard=(isGk)=>({id:newPaperId(),question:"",answer:"",explanation:"",technique:"",qtype:"written",opt1:"",opt2:"",opt3:"",opt4:"",topicSel:{id:"",name:""},subjectSel:{id:"",name:""}});
 const makeInitialPaper=()=>({bangla:[newGroupCard(PAPER_TEMPLATES.bangla[0])],english:[newGroupCard(PAPER_TEMPLATES.english[0])],math:[newFlatCard(false)],gk:[newFlatCard(true)]});
 const toBn=n=>String(n).replace(/\d/g,d=>"০১২৩৪৫৬৭৮৯"[d]);
@@ -225,7 +225,7 @@ const PS_CSS=`
 .ps-l2>span{white-space:nowrap}
 .ps-in{display:block;width:100%;min-width:0;background:transparent;border:0;border-bottom:1px dotted #bbb;border-radius:0;font:inherit;color:#000;padding:2px 1px;outline:none;resize:none;overflow:hidden;line-height:1.35}
 .ps-in:focus{background:#fffbe0;border-bottom:1px solid #1F2A6B}
-.ps-in.q{font-weight:700}
+.ps-in.q{text-shadow:.5px 0 0 currentColor}   /* বোল্ড-লুক, কিন্তু font-weight বদলায় না — নইলে Ctrl+B উল্টো আনবোল্ড করে */
 .ps-in.ok{border-bottom:1px solid #22a559}
 .ps-bdg{background:#000;color:#fff;padding:0 5px;border-radius:3px;font-size:12px}
 .ps-opts{flex:1;display:grid;grid-template-columns:1fr 1fr;gap:2px 10px}
@@ -253,33 +253,127 @@ const PS_CSS=`
 .ps-tb button{background:none;border:0;color:#fff;font-size:13px;min-width:24px;height:22px;cursor:pointer;font-family:Georgia,serif;border-radius:4px}
 .ps-tb button:hover{background:#ffffff33}
 .ps-pv{font-size:12.5px;background:#fffbe0;border-left:3px solid #1F2A6B;padding:1px 6px;margin:1px 0 2px;color:#000;white-space:pre-wrap}
+.ps-rt{white-space:pre-wrap;word-break:break-word;min-height:1.45em;cursor:text;-webkit-user-select:text;user-select:text}
+.ps-rt b{font-weight:800}
+.ps-rt u{text-decoration:underline}
+.ps-rt .ps-fr{user-select:none;cursor:default}
 .ps-fr{display:inline-flex;flex-direction:column;vertical-align:middle;text-align:center;margin:0 2px;line-height:1.15;font-size:.95em}
 .ps-fn{border-bottom:1px solid currentColor;padding:0 3px}
 .ps-fd{padding:0 3px}
+.ps-qa{margin:0 0 10px 6px}
+.ps-qar{display:flex;gap:5px;align-items:flex-start;margin-bottom:4px}
+.ps-qal{font-weight:700;white-space:nowrap;padding-top:3px;min-width:52px}
 .ps-opt{font-size:10px;color:#8a8a8a;font-style:italic;white-space:nowrap}
 .ps-auto{font-weight:800;color:#1b6b2f}
 .ps-hintbar{font-size:10.5px;color:#7a6a3a;margin:0 0 6px}
 .ps-tp{background:#FBF7EA;border:1px solid #C9BFA0;border-radius:8px;padding:8px;margin-top:8px}
 `;
-/* ══════════ 🆕 Bold / Underline / Italic (রিচ-টেক্সট) ══════════
-   টেক্সট সিলেক্ট করে Ctrl+B (বোল্ড) / Ctrl+U (আন্ডারলাইন) / Ctrl+I (ইটালিক) চাপলে, অথবা মাউস দিয়ে
-   সিলেক্ট করলে ভেসে ওঠা টুলবারের B / U / I চাপলে — সিলেক্ট করা অংশ <b>..</b> / <u>..</u> / <i>..</i>
-   ট্যাগে মোড়ানো হয় (আবার চাপলে খুলে যায়)। ডেটাবেজে এই ট্যাগসহ টেক্সটই সেভ হয়।
-   ⚠️ ইউজার অ্যাপে এই তিনটা ট্যাগ রেন্ডার করতে হবে (<b> বোল্ড, <u> আন্ডারলাইন, <i> ইটালিক) —
-   নইলে ছাত্রদের স্ক্রিনে ট্যাগগুলো লেখা হিসেবেই দেখাবে। আগের *হাইলাইট* ও _ফাঁকা_ মার্কআপ আলাদা, অক্ষত। */
-const RICH_TAG_RE=/<\/?(?:[biu]|frac)>/;
-function psRichRender(text){
-  const parts=String(text||"").split(/(<frac>[\s\S]*?<\/frac>|<\/?[biu]>)/);
-  let b=0,u=0,i=0;
-  return parts.map((p,k)=>{
+/* ══════════ 🆕 রিচ-টেক্সট ঘর (Bold / Underline / Italic / ভগ্নাংশ — লেখার সময়ই সত্যিকারের চেহারায়) ══════════
+   আগে ঘরে কাঁচা ট্যাগ (<b>শব্দ</b>) দেখাত আর নিচে আলাদা প্রিভিউ। এখন ঘরটা নিজেই রিচ-এডিটর: টেক্সট সিলেক্ট করে
+   Ctrl+B / Ctrl+U / Ctrl+I (বা ভেসে ওঠা B U I BU টুলবার) দিলে ঘরেই বোল্ড/আন্ডারলাইন/ইটালিক দেখায়, ভগ্নাংশ ওপর-নিচ
+   আকারে দেখায় — কোনো কোড দেখা যায় না।
+   ডেটাবেজ/স্টেট আগের মতোই ট্যাগসহ স্ট্রিং: <b>..</b> <u>..</u> <i>..</i> <frac>ওপর|নিচ</frac> (value/onChange একই)।
+   ⚠️ ইউজার অ্যাপে এই চারটা ট্যাগ রেন্ডার করতে হবে। ঘরের ভেতরের কাজ: স্ট্রিং ⇄ DOM রূপান্তর (psToHTML / psSerialize),
+   আর স্ট্রিং-ইনডেক্স ⇄ কার্সর (psIndexOf / psPointFromIndex) — wrapHighlight (🖍), গণিতের স্বয়ংক্রিয় চিহ্ন, Tab-ক্রম
+   সবাই আগের মতোই el.value / selectionStart / setSelectionRange দিয়ে কাজ করে (ঘরে এই প্রপার্টিগুলো শিম করা আছে)। */
+const PS_TOK=/(<frac>[\s\S]*?<\/frac>|<\/?[biu]>)/;
+const psEsc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+function psToHTML(value){
+  const v=String(value||"");
+  let out=v.split(PS_TOK).map(p=>{
+    if(!p) return "";
     const fm=/^<frac>([\s\S]*?)\|([\s\S]*?)<\/frac>$/.exec(p);
-    if(fm) return <span key={k} className="ps-fr"><span className="ps-fn">{fm[1]}</span><span className="ps-fd">{fm[2]}</span></span>;
-    const m=/^<(\/?)([biu])>$/.exec(p);
-    if(m){ const on=m[1]?0:1; if(m[2]==="b")b=on; else if(m[2]==="u")u=on; else i=on; return null; }
-    if(!p)return null;
-    return <span key={k} style={{fontWeight:b?800:undefined,textDecoration:u?"underline":undefined,fontStyle:i?"italic":undefined}}>{p}</span>;
-  });
+    if(fm) return '<span class="ps-fr" contenteditable="false" data-n="'+psEsc(fm[1])+'" data-d="'+psEsc(fm[2])+'"><span class="ps-fn">'+psEsc(fm[1])+'</span><span class="ps-fd">'+psEsc(fm[2])+'</span></span>';
+    if(/^<\/?[biu]>$/.test(p)) return p;
+    return psEsc(p).replace(/\n/g,"<br>");
+  }).join("");
+  if(v.endsWith("\n")) out+="<br>";            // শেষের নতুন-লাইনের জন্য প্লেসহোল্ডার
+  return out;
 }
+function psFmt(n){                              // কোন কোন ফরম্যাট এই এলিমেন্টে: {b,u,i}
+  const tag=n.tagName.toLowerCase(), st=n.style||{};
+  return {
+    b:tag==="b"||tag==="strong"||st.fontWeight==="bold"||parseInt(st.fontWeight,10)>=600,
+    u:tag==="u"||String(st.textDecorationLine||st.textDecoration||"").indexOf("underline")>=0,
+    i:tag==="i"||tag==="em"||st.fontStyle==="italic",
+  };
+}
+function psSerNodes(nodes){ let s=""; for(const n of nodes) s+=psSerNode(n); return s; }
+function psSerNode(n){
+  if(n.nodeType===3) return n.nodeValue.replace(/\u00a0/g," ").replace(/\u200b/g,"");
+  if(n.nodeType!==1) return "";
+  const tag=n.tagName.toLowerCase();
+  if(tag==="br") return "\n";
+  if(n.classList&&n.classList.contains("ps-fr")) return "<frac>"+(n.getAttribute("data-n")||"")+"|"+(n.getAttribute("data-d")||"")+"</frac>";
+  let inner=psSerNodes(n.childNodes);
+  if(tag==="div"||tag==="p") return "\n"+inner;   // নিরাপত্তা-জাল (Enter আমরা <br> দিয়েই নিই)
+  const f=psFmt(n);
+  if(f.u) inner="<u>"+inner+"</u>";
+  if(f.i) inner="<i>"+inner+"</i>";
+  if(f.b) inner="<b>"+inner+"</b>";
+  return inner;
+}
+function psSerialize(host){
+  let s=psSerNodes(host.childNodes);
+  if(s.endsWith("\n")) s=s.slice(0,-1);   // শেষের নতুন-লাইনের প্লেসহোল্ডার (দেখাতে একটা বাড়তি \n/<br> লাগে) বাদ
+  return s;
+}
+// DOM-বিন্দু → স্ট্রিং-ইনডেক্স (ট্যাগসহ স্ট্রিং-এর হিসাবে)
+function psIndexOf(host,container,offset){
+  const r=document.createRange(); r.setStart(host,0);
+  try{ r.setEnd(container,offset); }catch(_){ return 0; }
+  let len=psSerNodes(r.cloneContents().childNodes).length;
+  let el=container.nodeType===1?container:container.parentNode;       // ক্লোনে বন্ধ-হওয়া আগের ট্যাগের ক্লোজিং বাদ
+  while(el&&el!==host){ if(el.nodeType===1){ const f=psFmt(el); len-=4*((f.b?1:0)+(f.u?1:0)+(f.i?1:0)); } el=el.parentNode; }
+  return Math.max(0,len);
+}
+// স্ট্রিং-ইনডেক্স → DOM-বিন্দু
+function psPointFromIndex(host,idx){
+  let rem=idx;
+  const walk=parent=>{
+    const kids=parent.childNodes;
+    for(let i=0;i<kids.length;i++){
+      const n=kids[i];
+      if(n.nodeType===3){ const L=n.nodeValue.length; if(rem<=L) return {node:n,offset:rem}; rem-=L; }
+      else if(n.nodeType===1){
+        if(n.nodeName==="BR"){ if(rem===0) return {node:parent,offset:i}; rem-=1; continue; }
+        if(n.classList.contains("ps-fr")){
+          const L=("<frac>"+(n.getAttribute("data-n")||"")+"|"+(n.getAttribute("data-d")||"")+"</frac>").length;
+          if(rem===0) return {node:parent,offset:i};
+          if(rem<L) return {node:parent,offset:i+1};
+          rem-=L; continue;
+        }
+        const f=psFmt(n), k=(f.b?1:0)+(f.u?1:0)+(f.i?1:0), oc=3*k, cc=4*k;
+        if(rem<oc) return {node:parent,offset:i};
+        rem-=oc;
+        const r=walk(n); if(r) return r;
+        if(rem<cc) return {node:parent,offset:i+1};
+        rem-=cc;
+      }
+    }
+    return null;
+  };
+  return walk(host)||{node:host,offset:host.childNodes.length};
+}
+function psCaret(host){
+  const sel=window.getSelection(); if(!sel||!sel.rangeCount) return null;
+  const r=sel.getRangeAt(0); if(!host.contains(r.startContainer)||!host.contains(r.endContainer)) return null;
+  const total=psSerialize(host).length;
+  return {s:Math.min(total,psIndexOf(host,r.startContainer,r.startOffset)),e:Math.min(total,psIndexOf(host,r.endContainer,r.endOffset))};
+}
+function psSetCaret(host,a,b){
+  const p=psPointFromIndex(host,a), q=psPointFromIndex(host,b==null?a:b);
+  const r=document.createRange(); r.setStart(p.node,p.offset); r.setEnd(q.node,q.offset);
+  const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+}
+function psFracBefore(host){                      // কার্সরের ঠিক আগে ভগ্নাংশ-এলিমেন্ট থাকলে সেটা
+  const sel=window.getSelection(); if(!sel||!sel.rangeCount||!sel.isCollapsed) return null;
+  const r=sel.getRangeAt(0); let n=null;
+  if(r.startContainer.nodeType===1&&r.startOffset>0) n=r.startContainer.childNodes[r.startOffset-1];
+  else if(r.startContainer.nodeType===3&&r.startOffset===0) n=r.startContainer.previousSibling;
+  return n&&n.nodeType===1&&n.classList&&n.classList.contains("ps-fr")?n:null;
+}
+
 /* ══════════ 🆕 গণিতের লেখার নিয়ম (শুধু গণিত ট্যাবে — PsTA math prop) ══════════
    * → ×   / → ÷   (ব্যাকস্পেস দিলে সাথে সাথে * বা / ফিরে আসে)
    "অতএব" লিখে স্পেস দিলে → ∴ (ব্যাকস্পেস দিলে "অতএব" ফিরে আসে)
@@ -313,134 +407,155 @@ function psFractionize(text){
   }
   return out;
 }
-// সিলেকশনে ট্যাগ টগল: আগে থেকে মোড়ানো (ভেতরে বা ঠিক বাইরে) থাকলে খুলে ফেলে, নইলে মোড়ায়
-function psToggleTag(el,tag){ return psToggleStr(el.value,el.selectionStart,el.selectionEnd,tag); }
-function psToggleStr(v,s,e,tag){
-  // সিলেকশনের কোনো প্রান্ত যদি অন্য কোনো ট্যাগের মাঝখানে পড়ে (যেমন <b> এর অর্ধেক), ট্যাগের বাইরে সরিয়ে নাও
-  for(const m of v.matchAll(/<\/?[biu]>/g)){
-    const ms=m.index, me=ms+m[0].length;
-    if(s>ms&&s<me)s=me;
-    if(e>ms&&e<me)e=ms;
-  }
-  if(s>=e)return null;
-  const open="<"+tag+">",close="</"+tag+">",sel=v.slice(s,e);
-  if(sel.length>=open.length+close.length&&sel.startsWith(open)&&sel.endsWith(close)){
-    const inner=sel.slice(open.length,sel.length-close.length);
-    return {value:v.slice(0,s)+inner+v.slice(e),s,e:s+inner.length};
-  }
-  if(s>=open.length&&v.slice(s-open.length,s)===open&&v.slice(e,e+close.length)===close){
-    return {value:v.slice(0,s-open.length)+sel+v.slice(e+close.length),s:s-open.length,e:e-open.length};
-  }
-  return {value:v.slice(0,s)+open+sel+close+v.slice(e),s:s+open.length,e:e+open.length};
-}
-// টেক্সট লিখলে নিজে নিজে উচ্চতা বাড়ে (ছাপা লাইনের মতো দেখায়) + Ctrl+B/U/I + সিলেক্ট করলে ভাসমান টুলবার
+// ── রিচ-টেক্সট ঘর ──
 function PsTA({value,onChange,onKeyDown,taRef,className,math}){
-  const r=useRef(null);
-  const lastAuto=useRef(null), pendingCaret=useRef(null), onChangeRef=useRef(onChange);
-  onChangeRef.current=onChange;
+  const hostRef=useRef(null), lastAuto=useRef(null), skipN=useRef(0), onChangeRef=useRef(onChange), mathRef=useRef(!!math);
+  onChangeRef.current=onChange; mathRef.current=!!math;
   const[hasSel,setHasSel]=useState(false);
+  const[focused,setFocused]=useState(false);
+
+  // value (স্ট্রিং) → DOM: DOM আগে থেকেই একই হলে (নিজের টাইপ করা) কিছু ছোঁয়া হয় না
   useLayoutEffect(()=>{
-    const el=r.current; if(!el)return;
-    el.style.height="auto"; el.style.height=el.scrollHeight+"px";
-    if(pendingCaret.current!=null){ const c=pendingCaret.current; pendingCaret.current=null; try{ el.setSelectionRange(c,c); }catch(_){} }
+    const h=hostRef.current; if(!h)return;
+    const nv=String(value||"");
+    if(psSerialize(h)===nv)return;
+    const was=document.activeElement===h?psCaret(h):null;
+    h.innerHTML=psToHTML(nv);
+    if(was) psSetCaret(h,Math.min(was.s,nv.length),Math.min(was.e,nv.length));
   },[value]);
-  // ── গণিত: স্বয়ংক্রিয় চিহ্ন + ব্যাকস্পেসে ফেরত ──
-  const commitAuto=(nv,caret,info)=>{ lastAuto.current=info; pendingCaret.current=caret; if(onChange)onChange({target:{value:nv}}); };
-  const handleChange=e=>{
-    if(!math){ if(onChange)onChange(e); return; }
-    const el=e.target, v=el.value, caret=el.selectionStart, ne=e.nativeEvent||{};
-    lastAuto.current=null;
-    if((ne.inputType==="insertText"||ne.inputType==="insertLineBreak")&&!ne.isComposing&&caret>0){
-      const ch=v[caret-1];
-      if(ch==="*"||ch==="/"){
-        const repl=ch==="*"?"×":"÷";
-        commitAuto(v.slice(0,caret-1)+repl+v.slice(caret),caret,{start:caret-1,repl,original:ch,tail:"",caret});
-        return;
-      }
-      if(ch===" "||ch==="\n"){
-        const before=v.slice(0,caret-1), after=v.slice(caret);
-        if(/(^|[\s(,;:।])অতএব$/.test(before)){
-          const start=before.length-"অতএব".length;
-          commitAuto(before.slice(0,start)+"∴"+ch+after,start+2,{start,repl:"∴",original:"অতএব",tail:ch,caret:start+2});
-          return;
+
+  // textarea-র মতো el.value / selectionStart / selectionEnd / setSelectionRange (wrapHighlight ইত্যাদি এগুলোই ব্যবহার করে)
+  const setRef=el=>{
+    hostRef.current=el;
+    if(el&&!el.__psShim){
+      el.__psShim=true;
+      Object.defineProperties(el,{
+        value:{get(){ return psSerialize(el); },set(v){ el.innerHTML=psToHTML(v); },configurable:true},
+        selectionStart:{get(){ const c=psCaret(el); return c?c.s:psSerialize(el).length; },configurable:true},
+        selectionEnd:{get(){ const c=psCaret(el); return c?c.e:psSerialize(el).length; },configurable:true},
+        setSelectionRange:{value:(a,b)=>psSetCaret(el,a,b),configurable:true},
+      });
+    }
+    if(taRef)taRef(el);
+  };
+
+  const emit=v=>{ if(onChangeRef.current)onChangeRef.current({target:{value:v}}); };
+  const exec=(cmd)=>{ const h=hostRef.current; if(!h)return; h.focus(); try{ document.execCommand("styleWithCSS",false,false); }catch(_){} document.execCommand(cmd,false,null); };
+  const applyBoth=()=>{
+    const h=hostRef.current; if(!h)return; h.focus();
+    const b=document.queryCommandState("bold"), u=document.queryCommandState("underline");
+    if(b&&u){ exec("underline"); exec("bold"); } else { if(!b)exec("bold"); if(!u)exec("underline"); }
+  };
+
+  // beforeinput: Enter → <br>, গণিতের স্বয়ংক্রিয় চিহ্ন + ব্যাকস্পেসে ফেরত (native listener, যাতে preventDefault নির্ভরযোগ্য হয়)
+  useEffect(()=>{
+    const h=hostRef.current; if(!h)return;
+    const handler=ev=>{
+      const it=ev.inputType, comp=ev.isComposing;
+      const isNL=(it==="insertParagraph"||it==="insertLineBreak");
+      if(mathRef.current&&!comp){
+        const c=psCaret(h);
+        if(it==="insertText"&&(ev.data==="*"||ev.data==="/")&&c&&c.s===c.e){
+          ev.preventDefault();
+          const repl=ev.data==="*"?"×":"÷";
+          lastAuto.current={start:c.s,repl,original:ev.data,tail:"",caret:c.s+1}; skipN.current=1;
+          document.execCommand("insertText",false,repl); return;
         }
-        const runStart=Math.max(before.lastIndexOf(" "),before.lastIndexOf("\n"))+1;
-        const run=before.slice(runStart);
-        if(run.indexOf("÷")>=0){
-          const conv=psFractionize(run);
-          if(conv!==run){
-            const nc=runStart+conv.length+1;
-            commitAuto(before.slice(0,runStart)+conv+ch+after,nc,{start:runStart,repl:conv,original:run.replace(/÷/g,"/"),tail:ch,caret:nc});
-            return;
+        if(((it==="insertText"&&ev.data===" ")||isNL)&&c&&c.s===c.e){
+          const v=psSerialize(h), before=v.slice(0,c.s), tail=isNL?"\n":" ";
+          const put=()=>{ if(isNL) document.execCommand("insertLineBreak"); else document.execCommand("insertText",false," "); };
+          if(/(^|[\s(,;:।])অতএব$/.test(before)){
+            ev.preventDefault();
+            const start=before.length-"অতএব".length;
+            psSetCaret(h,start,c.s);
+            lastAuto.current={start,repl:"∴",original:"অতএব",tail,caret:start+2}; skipN.current=2;
+            document.execCommand("insertText",false,"∴"); put(); return;
+          }
+          const runStart=Math.max(before.lastIndexOf(" "),before.lastIndexOf("\n"))+1, run=before.slice(runStart);
+          if(run.indexOf("÷")>=0){
+            const conv=psFractionize(run);
+            if(conv!==run){
+              ev.preventDefault();
+              psSetCaret(h,runStart,c.s);
+              lastAuto.current={start:runStart,repl:conv,original:run.replace(/÷/g,"/"),tail,caret:runStart+conv.length+1}; skipN.current=2;
+              document.execCommand("insertHTML",false,psToHTML(conv));
+              psSetCaret(h,runStart+conv.length);          // ভগ্নাংশের পরে কার্সর, তারপর বাউন্ডারি অক্ষর
+              put(); return;
+            }
+          }
+        }
+        if(it==="deleteContentBackward"){
+          const la=lastAuto.current, cc=psCaret(h);
+          if(la&&cc&&cc.s===cc.e&&cc.s===la.caret&&psSerialize(h).slice(la.start,la.start+la.repl.length)===la.repl){
+            ev.preventDefault();
+            psSetCaret(h,la.start,la.start+la.repl.length);
+            lastAuto.current=null; skipN.current=1;
+            document.execCommand("insertText",false,la.original);
+            psSetCaret(h,la.start+la.original.length+la.tail.length); return;
           }
         }
       }
-    }
-    if(onChange)onChange(e);
-  };
-  useEffect(()=>{
-    const el=r.current; if(!el||!math)return;
-    const h=ev=>{
-      if(ev.inputType!=="deleteContentBackward")return;
-      const la=lastAuto.current; if(!la)return;
-      if(el.selectionStart!==el.selectionEnd||el.selectionStart!==la.caret)return;
-      const v=el.value; if(v.slice(la.start,la.start+la.repl.length)!==la.repl)return;
-      ev.preventDefault();
-      const nv=v.slice(0,la.start)+la.original+la.tail+v.slice(la.start+la.repl.length+la.tail.length);
-      lastAuto.current=null; pendingCaret.current=la.start+la.original.length+la.tail.length;
-      if(onChangeRef.current)onChangeRef.current({target:{value:nv}});
+      // ভগ্নাংশের ঠিক পরে ব্যাকস্পেস → কাঁচা "ওপর/নিচ" টেক্সট ফিরে আসে (ঠিক করার জন্য)
+      if(it==="deleteContentBackward"){
+        const fr=psFracBefore(h);
+        if(fr){
+          ev.preventDefault();
+          const r=document.createRange(); r.selectNode(fr);
+          const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+          lastAuto.current=null; skipN.current=1;
+          document.execCommand("insertText",false,(fr.getAttribute("data-n")||"")+"/"+(fr.getAttribute("data-d")||"")); return;
+        }
+      }
+      if(isNL){ ev.preventDefault(); document.execCommand("insertLineBreak"); }
     };
-    el.addEventListener("beforeinput",h);
-    return()=>el.removeEventListener("beforeinput",h);
-  },[math]);
+    h.addEventListener("beforeinput",handler);
+    return()=>h.removeEventListener("beforeinput",handler);
+  },[]);
+
+  // ভাসমান টুলবার: ঘরে ফোকাস থাকলে সিলেকশন বদলালে দেখাও/লুকাও
+  useEffect(()=>{
+    if(!focused)return;
+    const h=hostRef.current;
+    const sync=()=>{ const sel=window.getSelection(); setHasSel(!!(sel&&sel.rangeCount&&!sel.isCollapsed&&h&&h.contains(sel.anchorNode)&&h.contains(sel.focusNode))); };
+    document.addEventListener("selectionchange",sync);
+    return()=>document.removeEventListener("selectionchange",sync);
+  },[focused]);
+
+  const handleInput=()=>{
+    const h=hostRef.current; if(!h)return;
+    if(skipN.current>0) skipN.current--; else lastAuto.current=null;
+    const nv=psSerialize(h);
+    if(nv!==String(value||"")) emit(nv);
+  };
   const handleBlur=()=>{
-    setHasSel(false);
-    if(math){ const el=r.current; if(el){ const nv=psFractionize(el.value); if(nv!==el.value&&onChange)onChange({target:{value:nv}}); } }
+    setFocused(false); setHasSel(false);
+    const h=hostRef.current; if(!h||!mathRef.current)return;
+    const cur=psSerialize(h), nv=psFractionize(cur);
+    if(nv!==cur){ h.innerHTML=psToHTML(nv); emit(nv); }
   };
-  const sync=()=>{ const el=r.current; setHasSel(!!el&&el.selectionStart!==el.selectionEnd); };
-  const commit=res=>{
-    if(!res)return;
-    if(onChange)onChange({target:{value:res.value}});
-    requestAnimationFrame(()=>{ const el=r.current; if(el){ el.focus(); el.setSelectionRange(res.s,res.e); } });
-  };
-  const apply=tag=>{ const el=r.current; if(el)commit(psToggleTag(el,tag)); };
-  // B+U একসাথে (Fill in the blanks-এ blank শব্দ মার্ক করতে) — আগে থেকে B+U থাকলে দুটোই খুলে যায়
-  const applyBoth=()=>{
-    const el=r.current; if(!el)return;
-    const v=el.value,s=el.selectionStart,e=el.selectionEnd; if(s===e)return;
-    const hasU=(v.slice(s,e).startsWith("<u>")&&v.slice(s,e).endsWith("</u>"))||(s>=3&&v.slice(s-3,s)==="<u>"&&v.slice(e,e+4)==="</u>");
-    const first=psToggleStr(v,s,e,hasU?"u":"b"); if(!first)return;
-    const second=psToggleStr(first.value,first.s,first.e,hasU?"b":"u");
-    commit(second||first);
-  };
-  const clearFmt=()=>{
-    const el=r.current; if(!el||el.selectionStart===el.selectionEnd)return;
-    const v=el.value,s=el.selectionStart,e=el.selectionEnd,sel=v.slice(s,e).replace(/<\/?[biu]>/g,"");
-    commit({value:v.slice(0,s)+sel+v.slice(e),s,e:s+sel.length});
+  const handlePaste=e=>{
+    e.preventDefault();
+    const text=((e.clipboardData||window.clipboardData).getData("text/plain")||"").replace(/\r\n?/g,"\n");
+    text.split("\n").forEach((line,i)=>{ if(i>0)document.execCommand("insertLineBreak"); if(line)document.execCommand("insertText",false,line); });
   };
   const keyDown=e=>{
     if(["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","Tab"].includes(e.key))lastAuto.current=null;
-    if((e.ctrlKey||e.metaKey)&&!e.altKey&&!e.shiftKey){
-      const k=String(e.key).toLowerCase(), tag=k==="b"?"b":k==="u"?"u":k==="i"?"i":null;
-      if(tag){ e.preventDefault(); apply(tag); return; }
-    }
     if(onKeyDown)onKeyDown(e);
   };
   return (
     <div className="ps-w">
       {hasSel&&(
         <div className="ps-tb" onMouseDown={e=>e.preventDefault()}>
-          <button type="button" title="বোল্ড (Ctrl+B)" onClick={()=>apply("b")}><b>B</b></button>
-          <button type="button" title="আন্ডারলাইন (Ctrl+U)" onClick={()=>apply("u")}><u>U</u></button>
-          <button type="button" title="ইটালিক (Ctrl+I)" onClick={()=>apply("i")}><i>I</i></button>
+          <button type="button" title="বোল্ড (Ctrl+B)" onClick={()=>exec("bold")}><b>B</b></button>
+          <button type="button" title="আন্ডারলাইন (Ctrl+U)" onClick={()=>exec("underline")}><u>U</u></button>
+          <button type="button" title="ইটালিক (Ctrl+I)" onClick={()=>exec("italic")}><i>I</i></button>
           <button type="button" title="Bold + Underline একসাথে (Fill in the blanks-এর blank)" onClick={applyBoth}><b><u>BU</u></b></button>
-          <button type="button" title="ফরম্যাট মুছো" onClick={clearFmt}>✖</button>
+          <button type="button" title="ফরম্যাট মুছো" onClick={()=>exec("removeFormat")}>✖</button>
         </div>
       )}
-      <textarea ref={el=>{r.current=el; if(taRef)taRef(el);}} rows={1} className={"ps-in"+(className?" "+className:"")}
-        value={value||""} onChange={handleChange} onKeyDown={keyDown}
-        onSelect={sync} onKeyUp={sync} onMouseUp={sync} onMouseDown={()=>{lastAuto.current=null;}} onBlur={handleBlur}/>
-      {RICH_TAG_RE.test(value||"")&&<div className="ps-pv">{psRichRender(value)}</div>}
+      <div ref={setRef} className={"ps-in ps-rt"+(className?" "+className:"")} contentEditable suppressContentEditableWarning spellCheck={false}
+        onInput={handleInput} onKeyDown={keyDown} onPaste={handlePaste}
+        onFocus={()=>setFocused(true)} onBlur={handleBlur} onMouseDown={()=>{lastAuto.current=null;}}/>
     </div>
   );
 }
@@ -937,6 +1052,18 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                 }));
                 return;
               }
+              // 🆕 Plain প্রশ্ন-উত্তর (পত্র/অনুচ্ছেদ…): প্রশ্ন ও উত্তর দুটোই বাধ্যতামূলক; মার্কআপ-অনুমান (* বা _) বন্ধ; format_style=plainqa
+              if(resolveTpl(card,t.key).key==="plainqa"){
+                if(!it.answer.trim())throw locatedError(`"${t.label}" ট্যাবে Plain প্রশ্ন-উত্তরের একটা প্রশ্নে উত্তর ফাঁকা — প্রশ্ন ও উত্তর দুটোই লাগবে`,t.key,card.id);
+                allRows.push(buildSheetRow({
+                  item:{q:it.question.trim(),correct:it.answer.trim(),explanation:it.explanation,technique:it.technique},
+                  subject:subjName,subtopic:topicName,qtype:"Written",
+                  audienceTags:selectedTagNames,tagIds:selectedTagIds,mainQpaper:"",subjectId:subjId,topicId,
+                  groupId,subIndex:groupId?(idx+1):null,groupHeading:groupId?heading:"",
+                  formatStyle:"plainqa",
+                }));
+                return;
+              }
               let ansText=it.answer.trim();
               let effFormat=card.formatStyle;
               const auto=detectAutoMarkup(it.question);
@@ -1106,10 +1233,21 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const setTemplate=(tab,card,tpl)=>{
     const prev=resolveTpl(card,tab);
     const patch={tplKey:tpl.key};
-    if(tpl.key!=="custom"){ patch.heading=tpl.heading; patch.formatStyle=tpl.fmt; }
+    if(tpl.key!=="custom"&&!tpl.editableHeading){ patch.heading=tpl.heading; patch.formatStyle=tpl.fmt; }
+    if(tpl.editableHeading){
+      patch.formatStyle=tpl.fmt;
+      // আগের টেমপ্লেট রেডিমেড হেডিং-এর হলে (যেমন "বাগধারা:") সেটা আর থাকবে না, ইউজারের নিজের লেখা হেডিং (Custom/Plain থেকে এলে) থাকবে;
+      // অটো-বসানো Topic-ও পরিষ্কার হয় — নতুন হেডিং লিখে বের হলে (blur) আবার অটো-সিলেক্ট হবে
+      if(!prev.custom&&!prev.editableHeading){
+        patch.heading="";
+        if(card.topicAuto) patch.topicSel={id:"",name:""};
+      }
+    }
     patch.items=card.items.map(it=>tpl.mcq?{...it,qtype:"mcq"}:(prev.mcq&&it.qtype==="mcq"?{...it,qtype:"written"}:it));
     if(tpl.key==="cloze"&&!(card.wordBox&&card.wordBox.length)) patch.wordBox=Array(6).fill("");
-    if(tpl.key!=="custom"){
+    // সব সারি ফাঁকা থাকলে টেমপ্লেটের নিজস্ব সারি-সংখ্যা (যেমন পত্র/অনুচ্ছেদে ১টা) রাখো
+    if(tpl.rows&&patch.items.every(it=>!it.question.trim()&&!it.answer.trim())) patch.items=patch.items.slice(0,tpl.rows);
+    if(tpl.key!=="custom"&&!tpl.editableHeading){
       const base=card.topicAuto?{...card,topicSel:{id:"",name:""}}:card; // আগেরটা অটো-বসানো হলে নতুন হেডিং অনুযায়ী বদলাবে
       const tp=topicPatchForHeading(base,tpl.heading);
       if(tp) Object.assign(patch,tp);
@@ -1169,9 +1307,10 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const renderGroupCard=(card,ci)=>{
     const tpl=resolveTpl(card,activeTab);
     const custom=tpl.key==="custom";
+    const editHead=custom||!!tpl.editableHeading;       // হেডিং নিজে লেখার টেমপ্লেট (Custom / Plain প্রশ্ন-উত্তর)
     const open=pickerOpen.has(card.id);
     const list=tplListFor(activeTab);
-    const lay=custom?(card.formatStyle==="table"?"tbl":"stack"):tpl.lay;
+    const lay=custom?(card.formatStyle==="table"?"tbl":"stack"):tpl.lay;   // (plainqa → "qa")
     const pre=custom?(isEnTab?"Answer:":"উত্তর:"):(tpl.pre||"");
     const cols=custom?(isEnTab?["Word","Meaning"]:["শব্দ","ব্যাখ্যা"]):tpl.cols;
     const hl=(card.formatStyle==="highlight"||card.formatStyle==="fillblank")&&lay!=="fill";
@@ -1181,8 +1320,8 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       <PsTA className={cls} taRef={el=>{textareaRefs.current[it.id]=el;}} value={it.question}
         onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}/>
     );
-    const mkA=(it,idx)=>(
-      <PsTA taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
+    const mkA=(it,idx,cls)=>(
+      <PsTA className={cls} taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
         onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}/>
     );
 
@@ -1253,6 +1392,13 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             {psExtras(card,it,tpl)}
           </div>
         );
+        if(lay==="qa") return (
+          <div className="ps-qa" key={it.id}>
+            <div className="ps-qar"><span className="ps-qal">{isEnTab?"Question:":"প্রশ্ন:"}</span>{mkQ(it,idx,false)}{psCtl(card,it,{hl:false,mcqToggle:false})}</div>
+            <div className="ps-qar"><span className="ps-qal">{isEnTab?"Ans:":"উত্তর:"}</span>{mkA(it,idx,"ps-box")}</div>
+            {psExtras(card,it,tpl)}
+          </div>
+        );
         if(lay==="fill"){
           const fm=parseFillMarks(it.question);
           return (
@@ -1306,15 +1452,17 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             <button type="button" className={custom?"cur":""} onClick={()=>{setTemplate(activeTab,card,CUSTOM_TPL);togglePicker(card.id);}}>{CUSTOM_TPL.title}</button>
           </div>
         )}
-        {custom&&(
+        {editHead&&(
           <div className="ps-cu">
             <input className="ps-in" value={card.heading}
               onChange={e=>updateCard(activeTab,card.id,{heading:e.target.value})}
               onBlur={()=>{const tp=topicPatchForHeading(card,card.heading); if(tp)updateCard(activeTab,card.id,tp);}}
               />
-            <select className="inp" value={card.formatStyle} onChange={e=>updateCard(activeTab,card.id,{formatStyle:e.target.value})}>
-              {formatStylesFor(activeTab).map(f=><option key={f.v} value={f.v}>{f.label}</option>)}
-            </select>
+            {custom&&(
+              <select className="inp" value={card.formatStyle} onChange={e=>updateCard(activeTab,card.id,{formatStyle:e.target.value})}>
+                {formatStylesFor(activeTab).map(f=><option key={f.v} value={f.v}>{f.label}</option>)}
+              </select>
+            )}
           </div>
         )}
         {body}
