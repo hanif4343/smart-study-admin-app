@@ -21,6 +21,8 @@ export const PAPER_TEMPLATES={
     {key:"sentfix",title:"বাক্য শুদ্ধ করে লিখুন",          heading:"বাক্য শুদ্ধ করে লিখুন:",          fmt:"plain",     lay:"stack", pre:"সঠিক-"},
     {key:"samas",  title:"ব্যাসবাক্যসহ সমাস নির্ণয় কর",    heading:"ব্যাসবাক্যসহ সমাস নির্ণয় কর:",    fmt:"highlight", lay:"pair",  sep:"-", third:{field:"explanation",pre:"(",suf:")"}},
     {key:"short",  title:"সংক্ষিপ্ত প্রশ্নের উত্তর দাও",    heading:"সংক্ষিপ্ত প্রশ্নের উত্তর দাও:",    fmt:"plain",     lay:"stack", pre:"উত্তর:"},
+    // 🆕 সাধারণ প্রশ্ন-উত্তর (পত্র / অনুচ্ছেদ / ভাব-সম্প্রসারণ…): হেডিং নিজে লেখা, প্রশ্ন ও উত্তর দুটোই লাগে, সাব-নম্বর (ক/খ/গ) নেই
+    {key:"plainqa",title:"সাধারণ প্রশ্ন-উত্তর (পত্র / অনুচ্ছেদ…) — হেডিং নিজে লিখব", heading:"", fmt:"plainqa", lay:"qa", editableHeading:true, rows:1},
   ],
   english:[
     // 🆕 Fill in the blanks (বাক্য-ভিত্তিক) — দুই ধরন আলাদা: (১) prepositions (২) articles।
@@ -42,6 +44,8 @@ export const PAPER_TEMPLATES={
     {key:"voice",  title:"Change the voice",                       heading:"Change the voice:",                               fmt:"plain", lay:"stack", pre:"Ans:"},
     {key:"correct",title:"Correct the following sentences",        heading:"Correct the following sentences:",                fmt:"plain", lay:"stack", pre:"Ans:"},
     {key:"para",   title:"Write paragraph",                        heading:"Write paragraph:",                                fmt:"plain", lay:"stack", pre:"Ans:"},
+    // 🆕 Plain question & answer (Letter / Paragraph…): নিজের হেডিং, প্রশ্ন ও উত্তর দুটোই লাগে, সাব-নম্বর (a/b/c) নেই
+    {key:"plainqa",title:"Plain question & answer (Letter / Paragraph…) — own heading", heading:"", fmt:"plainqa", lay:"qa", editableHeading:true, rows:1},
     {key:"fill",   title:"Fill in the blanks (other)",             heading:"Fill in the blanks:",                             fmt:"fillblank", lay:"fill"},
     {key:"cloze",  title:"Fill in the blanks (word box + passage)", heading:"Fill in the blanks with appropriate word given below:", fmt:"plain", lay:"cloze"},
   ],
@@ -97,6 +101,11 @@ const TOPIC_RULES={
     {re:/লিঙ্গ|লিংগ/,                       topics:["লিঙ্গ পরিবর্তন","লিঙ্গ"]},
     {re:/বানান/,                           topics:["বানান শুদ্ধি","বানান শুদ্ধিকরণ","বানান"]},
     {re:/বাক্য\s*শুদ্ধ/,                   topics:["বাক্য শুদ্ধি","বাক্য শুদ্ধিকরণ"]},
+    {re:/অনুচ্ছেদ/,                        topics:["অনুচ্ছেদ","অনুচ্ছেদ রচনা"]},
+    {re:/ভাব\s*-?\s*সম্প্রসারণ/,            topics:["ভাব-সম্প্রসারণ","ভাবসম্প্রসারণ","ভাব সম্প্রসারণ"]},
+    {re:/পত্র|চিঠি|আবেদন/,                 topics:["পত্র","পত্র / আবেদন","পত্র/আবেদন","আবেদনপত্র","চিঠি"]},
+    {re:/সারাংশ|সারমর্ম/,                  topics:["সারাংশ","সারমর্ম","সারাংশ/সারমর্ম"]},
+    {re:/রচনা/,                            topics:["রচনা"]},
   ],
   english:[
     {re:/voice/i,                                              topics:["Voice Change","Voice"]},
@@ -112,6 +121,8 @@ const TOPIC_RULES={
     {re:/paragraph/i,                                          topics:["Paragraph"]},
     {re:/spelling/i,                                           topics:["Spelling","Word Spelling"]},
     {re:/correct the following/i,                              topics:["Correction","Sentence Correction","Correction of Sentences"]},
+    {re:/letter|application/i,                                 topics:["Letter","Application","Letter/Application","Letter & Application"]},
+    {re:/composition|essay/i,                                  topics:["Composition","Essay"]},
   ],
 };
 // তুলনার জন্য নাম সমান করা: ছোট হাতের, "&"="and", স্পেস/চিহ্ন বাদ
