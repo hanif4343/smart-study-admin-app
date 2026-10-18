@@ -18,6 +18,7 @@ import { TopicTagsTab } from "./content/TopicTagsTab.jsx";
 import { BulkQTypeTab } from "./BulkQTypeTab.jsx";
 import { DeleteTab } from "./content/DeleteTab.jsx";
 import { PublishTab } from "./content/PublishTab.jsx";
+import { OrphanFixTab } from "./content/OrphanFixTab.jsx";
 import { ArchivePage } from "./ArchivePage.jsx";
 
 /* 🐛 IA পুনর্গঠন: "Model Test" এখান থেকে সরিয়ে "তৈরি করুন" হাবে নেওয়া হলো (generative
@@ -31,6 +32,7 @@ const CONTENT_TOOL_SECTIONS=[
     {page:"audience",    icon:"🎯",label:"Audience",     desc:"Audience ট্যাগ রিনেম"},
     {page:"qtype",       icon:"🏷️",label:"QType",       desc:"বাল্ক প্রশ্নের ধরন বদলান"},
     {page:"topictags",   icon:"🤖",label:"Topic Tags",   desc:"ট্যাগ-রুল দিয়ে QBank MCQ অটো Subject/Topic-এ বসান"},
+    {page:"orphan",      icon:"🧟",label:"Orphan ঠিক করো", desc:"Topic হারানো প্রশ্নে সঠিক Subject/Topic বসান — মুছতে হবে না"},
   ]},
   {key:"archive",title:"🗄️ আর্কাইভ",color:"#a78bfa",items:[
     {page:"archive", icon:"🗄️",label:"Archive", desc:"সংরক্ষিত পুরনো OCR/AI কন্টেন্ট দেখুন"},
@@ -46,6 +48,7 @@ const TOOL_LABELS={
   audience:{icon:"🎯",label:"Audience"},
   qtype:{icon:"🏷️",label:"QType"},
   topictags:{icon:"🤖",label:"Topic Tags"},
+  orphan:{icon:"🧟",label:"Orphan ঠিক করো"},
   archive:{icon:"🗄️",label:"Archive"},
   delete:{icon:"🗑️",label:"Delete"},
 };
@@ -93,7 +96,7 @@ function ContentManagerPage({push,tick,pushLayer,onSendToBulk}){
             <button className="icon-btn" onClick={()=>setTab("browse")}>←</button>
             <div className="sub-head-title">🚀 CDN Publish</div>
           </div>
-          <PublishTab push={push}/>
+          <PublishTab push={push} onFixOrphans={()=>goTool("orphan")}/>
         </>
       )}
 
@@ -119,6 +122,7 @@ function ContentManagerPage({push,tick,pushLayer,onSendToBulk}){
           {tab==="audience"    && <AudienceTagRenameTab push={push} tick={tick}/>}
           {tab==="qtype"       && <BulkQTypeTab push={push} tick={tick}/>}
           {tab==="topictags"   && <TopicTagsTab push={push}/>}
+          {tab==="orphan"      && <OrphanFixTab push={push} tick={tick}/>}
           {tab==="archive"     && <ArchivePage push={push} onSendToBulk={onSendToBulk}/>}
           {tab==="delete"      && <DeleteTab push={push} tick={tick}/>}
         </>
