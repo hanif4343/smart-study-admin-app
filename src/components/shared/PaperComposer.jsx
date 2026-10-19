@@ -62,7 +62,15 @@ const PAPER_TABS = [
     subjectChoices:[{key:"grammar",name:"English Grammar",short:"Grammar"},{key:"literature",name:"English Literature",short:"Literature"}] },
   { key:"math",    label:"গণিত",   fixedSubject:null,      grouped:false, gkStyle:false, mathStyle:true,
     subjectChoices:[{key:"arith",name:"পাটিগণিত",short:"পাটিগণিত"},{key:"algebra",name:"বীজগণিত",short:"বীজগণিত"},{key:"geometry",name:"জ্যামিতি",short:"জ্যামিতি"}] },
-  { key:"gk",      label:"GK",     fixedSubject:null,      grouped:false, gkStyle:true  },
+  { key:"gk",      label:"GK",     fixedSubject:null,      grouped:false, gkStyle:false, mathStyle:true,
+    // GK-তে শুধু এই ৪টা Subject (বাকি সব Subject-এর দরকার নেই) — aliases/kw: ডাটাবেজে বানান একটু আলাদা থাকলেও (বিষয়াবলী/বিষয়াবলি,
+    // "আন্তর্জাতিক বিষয়াবলী", "কম্পিউটার ও আইসিটি") ঠিক ওই Subject ধরে; কিছুই না মিললে এই নামেই নতুন Subject হিসেবে যায়
+    subjectChoices:[
+      {key:"gk",   name:"সাধারণ জ্ঞান",        short:"সাধারণ জ্ঞান",        aliases:["সাধারণ জ্ঞান","General Knowledge"]},
+      {key:"bd",   name:"বাংলাদেশ বিষয়াবলী",   short:"বাংলাদেশ বিষয়াবলী",   aliases:["বাংলাদেশ বিষয়াবলী","বাংলাদেশ বিষয়াবলি","বাংলাদেশ"], kw:["বাংলাদেশ"]},
+      {key:"intl", name:"আন্তর্জাতিক",          short:"আন্তর্জাতিক",          aliases:["আন্তর্জাতিক","আন্তর্জাতিক বিষয়াবলী","আন্তর্জাতিক বিষয়াবলি","International"], kw:["আন্তর্জাতিক","international"]},
+      {key:"comp", name:"কম্পিউটার",            short:"কম্পিউটার",            aliases:["কম্পিউটার","Computer","কম্পিউটার ও আইসিটি","কম্পিউটার ও তথ্যপ্রযুক্তি","আইসিটি","ICT"], kw:["কম্পিউটার","computer","আইসিটি"]},
+    ] },
 ];
 
 // 🐛 ফিক্স (হিজিবিজি/ভুল-ভাষার হিন্টস): আগে একটাই বাংলা-ভাষার FORMAT_STYLES লিস্ট
@@ -1090,7 +1098,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             let subjId;
             const flatSubjName=((card.subjectSel&&card.subjectSel.name)||"").trim();
             if(t.gkStyle||t.mathStyle){
-              if(!flatSubjName)throw locatedError(t.mathStyle?`গণিত ট্যাবে একটা প্রশ্নে Subject বাছা হয়নি — পাটিগণিত / বীজগণিত / জ্যামিতি বেছে নাও`:`GK ট্যাবে একটা প্রশ্নে Subject ফাঁকা আছে — কোন real subject (যেমন "সাধারণ বিজ্ঞান") সেটা বেছে দাও`,t.key,card.id,"subject");
+              if(!flatSubjName)throw locatedError(`"${t.label}" ট্যাবে একটা প্রশ্নে Subject বাছা হয়নি — ${(t.subjectChoices||[]).map(c=>c.short).join(" / ")} থেকে বেছে নাও`,t.key,card.id,"subject");
               subjId=await resolveSubjectCached(flatSubjName);
             } else {
               subjId=await resolveFixedSubject(t.fixedSubject);
@@ -1255,6 +1263,35 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     }
     updateCard(tab,card.id,patch);
   };
+
+  // Subject-পিল → ডাটাবেজের আসল Subject: aliases হুবহু মিললে সেটা; না মিললে kw (শুধু যদি ঠিক একটাই Subject মেলে); কিছুই না মিললে পিলের নামেই
+  const resolveSubjectChoice=c=>{
+    const al=[c.name,...(c.aliases||[])].map(nzTopic);
+    let hit=subjectOptions.find(s=>al.includes(nzTopic(s.name)));
+    if(!hit&&c.kw){
+      const ks=c.kw.map(nzTopic), m=subjectOptions.filter(s=>ks.some(k=>nzTopic(s.name).includes(k)));
+      if(m.length===1) hit=m[0];
+    }
+    return hit?{id:hit.id,name:hit.name}:{id:"",name:c.name};
+  };
+  // GK কার্ডে (OCR-ইম্পোর্ট/পুরোনো ড্রাফট) অন্য Subject থাকলে ৪টার একটায় নামিয়ে আনা — বাংলাদেশ/আন্তর্জাতিক/কম্পিউটার মিললে সেটায়, বাকি সব "সাধারণ জ্ঞান"-এ
+  // (অ্যাপের নিজস্ব নিয়ম: বাকি সবকিছু সাধারণ জ্ঞানের অধীনে)। Subject ফাঁকা থাকলে ইউজার নিজে বাছবে।
+  useEffect(()=>{
+    if(!(refData?.subjects||[]).length)return;
+    const td=PAPER_TABS.find(x=>x.key==="gk"); if(!td||!td.subjectChoices)return;
+    (paper.gk||[]).forEach(card=>{
+      if(card.subjNormTried)return;
+      const cur=((card.subjectSel&&card.subjectSel.name)||"").trim();
+      if(!cur)return;
+      const resolved=td.subjectChoices.map(resolveSubjectChoice);
+      let hit=resolved.find(r=>nzTopic(r.name)===nzTopic(cur));
+      if(!hit){
+        const c=td.subjectChoices.find(c=>[c.name,...(c.aliases||[])].some(a=>nzTopic(a)===nzTopic(cur))||(c.kw||[]).some(k=>nzTopic(cur).includes(nzTopic(k))));
+        hit=resolveSubjectChoice(c||td.subjectChoices[0]);
+      }
+      updateCard("gk",card.id,{subjectSel:hit,subjNormTried:true});
+    });
+  },[refData,paper]);
 
   /* ── Tab / Shift+Tab নেভিগেশন (সব লেআউটে একই নিয়ম) ──
      যেকোনো লেখার ঘরে Tab চাপলে স্ক্রিনের ক্রমে পরের ঘরে যায়: প্রশ্ন → (বাক্য/অপশন) → উত্তর → পরের প্রশ্ন;
@@ -1569,34 +1606,20 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             <div ref={el=>{subjectFieldRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
                 ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
               <label>📚 Subject — আগে বেছে নাও, তারপর সেই অনুযায়ী Topic আসবে</label>
-              <div style={{display:"flex",gap:6}}>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                 {tabDef.subjectChoices.map(c=>{
-                  const on=((card.subjectSel&&card.subjectSel.name)||"")===c.name;
+                  const rs=resolveSubjectChoice(c);
+                  const on=nzTopic((card.subjectSel&&card.subjectSel.name)||"")===nzTopic(rs.name);
                   return (
                     <button type="button" key={c.key}
-                      onClick={()=>{ if(on)return; const s=subjectOptions.find(x=>x.name===c.name);
-                        updateCard(activeTab,card.id,{subjectSel:{id:s?s.id:"",name:c.name},topicSel:{id:"",name:""}}); }}
-                      style={{flex:1,padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?PC.ink:PC.border}`,background:on?PC.ink:"#fff",color:on?"#fff":PC.ink,fontWeight:800,fontSize:13,cursor:"pointer"}}>{c.short}</button>
+                      onClick={()=>{ if(on)return; updateCard(activeTab,card.id,{subjectSel:rs,topicSel:{id:"",name:""}}); }}
+                      style={{flex:tabDef.subjectChoices.length>3?"1 1 calc(50% - 6px)":1,padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?PC.ink:PC.border}`,background:on?PC.ink:"#fff",color:on?"#fff":PC.ink,fontWeight:800,fontSize:13,cursor:"pointer"}}>{c.short}</button>
                   );
                 })}
               </div>
             </div>
           )}
-          {tabDef.gkStyle&&(
-              <div ref={el=>{subjectFieldRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
-                  ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
-                  <label>📚 Subject (real sheet subject — যেমন "সাধারণ বিজ্ঞান")</label>
-                  <TypeaheadCombo
-                    options={subjectOptionsShown}
-                    value={card.subjectSel}
-                    onChange={sel=>updateCard(activeTab,card.id,{subjectSel:sel})}
-                    placeholder="Subject লিখো বা বেছে নাও..."
-                    newLabel={`🆕 "${card.subjectSel.name.trim()}" নতুন Subject হিসেবে যোগ হবে`}
-                    inputStyle={pcField} lightTheme
-                  />
-                </div>
-              )}
-              <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
+          <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
                   ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                 <label>📌 Topic</label>
                 <TypeaheadCombo
