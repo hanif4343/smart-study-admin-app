@@ -62,14 +62,14 @@ const PAPER_TABS = [
     subjectChoices:[{key:"grammar",name:"English Grammar",short:"Grammar"},{key:"literature",name:"English Literature",short:"Literature"}] },
   { key:"math",    label:"গণিত",   fixedSubject:null,      grouped:false, gkStyle:false, mathStyle:true,
     subjectChoices:[{key:"arith",name:"পাটিগণিত",short:"পাটিগণিত"},{key:"algebra",name:"বীজগণিত",short:"বীজগণিত"},{key:"geometry",name:"জ্যামিতি",short:"জ্যামিতি"}] },
-  { key:"gk",      label:"GK",     fixedSubject:null,      grouped:false, gkStyle:false, mathStyle:true,
-    // GK-তে শুধু এই ৪টা Subject (বাকি সব Subject-এর দরকার নেই) — aliases/kw: ডাটাবেজে বানান একটু আলাদা থাকলেও (বিষয়াবলী/বিষয়াবলি,
-    // "আন্তর্জাতিক বিষয়াবলী", "কম্পিউটার ও আইসিটি") ঠিক ওই Subject ধরে; কিছুই না মিললে এই নামেই নতুন Subject হিসেবে যায়
+  { key:"gk",      label:"GK",     fixedSubject:null,      grouped:false, gkStyle:false, mathStyle:true, moreSubjects:true,
+    // GK-তে সবসময় প্রথমে এই ৪টা Subject-পিল; বাকি সব Subject "More subject ›" চাপলে। aliases: ডাটাবেজে বানান একটু আলাদা থাকলেও
+    // (বিষয়াবলি/বিষয়াবলী, "কম্পিউটার ও আইসিটি") ঠিক ওই Subject ধরে; কিছুই না মিললে পিলের নামেই নতুন Subject হিসেবে যায়
     subjectChoices:[
-      {key:"gk",   name:"সাধারণ জ্ঞান",        short:"সাধারণ জ্ঞান",        aliases:["সাধারণ জ্ঞান","General Knowledge"]},
-      {key:"bd",   name:"বাংলাদেশ বিষয়াবলী",   short:"বাংলাদেশ বিষয়াবলী",   aliases:["বাংলাদেশ বিষয়াবলী","বাংলাদেশ বিষয়াবলি","বাংলাদেশ"], kw:["বাংলাদেশ"]},
-      {key:"intl", name:"আন্তর্জাতিক",          short:"আন্তর্জাতিক",          aliases:["আন্তর্জাতিক","আন্তর্জাতিক বিষয়াবলী","আন্তর্জাতিক বিষয়াবলি","International"], kw:["আন্তর্জাতিক","international"]},
-      {key:"comp", name:"কম্পিউটার",            short:"কম্পিউটার",            aliases:["কম্পিউটার","Computer","কম্পিউটার ও আইসিটি","কম্পিউটার ও তথ্যপ্রযুক্তি","আইসিটি","ICT"], kw:["কম্পিউটার","computer","আইসিটি"]},
+      {key:"bd",   name:"বাংলাদেশ বিষয়াবলি",    short:"বাংলাদেশ বিষয়াবলি",    aliases:["বাংলাদেশ বিষয়াবলি","বাংলাদেশ বিষয়াবলী"]},
+      {key:"intl", name:"আন্তর্জাতিক বিষয়াবলি",  short:"আন্তর্জাতিক বিষয়াবলি",  aliases:["আন্তর্জাতিক বিষয়াবলি","আন্তর্জাতিক বিষয়াবলী","আন্তর্জাতিক","International"]},
+      {key:"gk",   name:"সাধারণ জ্ঞান",          short:"সাধারণ জ্ঞান",          aliases:["সাধারণ জ্ঞান","সাধারন জ্ঞান","General Knowledge"]},
+      {key:"comp", name:"কম্পিউটার",              short:"কম্পিউটার",              aliases:["কম্পিউটার","Computer","কম্পিউটার ও আইসিটি","কম্পিউটার ও তথ্যপ্রযুক্তি","আইসিটি","ICT"]},
     ] },
 ];
 
@@ -264,6 +264,9 @@ const PS_CSS=`
 .ps-rt{white-space:pre-wrap;word-break:break-word;min-height:1.45em;cursor:text;-webkit-user-select:text;user-select:text}
 .ps-rt b{font-weight:800}
 .ps-rt u{text-decoration:underline}
+.ps-rt sup,.ps-rt sub{font-size:.72em;line-height:0}
+.ps-sqrt{border-top:1.5px solid currentColor;padding:0 1px;margin-left:1px}
+.ps-sqrt::before{content:"√";margin-right:1px}
 .ps-rt .ps-fr{user-select:none;cursor:default}
 .ps-fr{display:inline-flex;flex-direction:column;vertical-align:middle;text-align:center;margin:0 2px;line-height:1.15;font-size:.95em}
 .ps-fn{border-bottom:1px solid currentColor;padding:0 3px}
@@ -284,28 +287,37 @@ const PS_CSS=`
    ⚠️ ইউজার অ্যাপে এই চারটা ট্যাগ রেন্ডার করতে হবে। ঘরের ভেতরের কাজ: স্ট্রিং ⇄ DOM রূপান্তর (psToHTML / psSerialize),
    আর স্ট্রিং-ইনডেক্স ⇄ কার্সর (psIndexOf / psPointFromIndex) — wrapHighlight (🖍), গণিতের স্বয়ংক্রিয় চিহ্ন, Tab-ক্রম
    সবাই আগের মতোই el.value / selectionStart / setSelectionRange দিয়ে কাজ করে (ঘরে এই প্রপার্টিগুলো শিম করা আছে)। */
-const PS_TOK=/(<frac>[\s\S]*?<\/frac>|<\/?[biu]>)/;
+const PS_TOK=/(<frac>[\s\S]*?<\/frac>|<\/?(?:b|u|i|sup|sub|sqrt)>)/;
 const psEsc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
-function psToHTML(value){
-  const v=String(value||"");
-  let out=v.split(PS_TOK).map(p=>{
+// স্ট্রিং → HTML (শেষের নতুন-লাইনের প্লেসহোল্ডার ছাড়া); <sqrt> → span.ps-sqrt (√ ও ওপরের দাগ CSS দিয়ে), ভগ্নাংশের ওপর/নিচও রিচ
+function psInline(v){
+  return String(v||"").split(PS_TOK).map(p=>{
     if(!p) return "";
     const fm=/^<frac>([\s\S]*?)\|([\s\S]*?)<\/frac>$/.exec(p);
-    if(fm) return '<span class="ps-fr" contenteditable="false" data-n="'+psEsc(fm[1])+'" data-d="'+psEsc(fm[2])+'"><span class="ps-fn">'+psEsc(fm[1])+'</span><span class="ps-fd">'+psEsc(fm[2])+'</span></span>';
-    if(/^<\/?[biu]>$/.test(p)) return p;
+    if(fm) return '<span class="ps-fr" contenteditable="false" data-n="'+psEsc(fm[1])+'" data-d="'+psEsc(fm[2])+'"><span class="ps-fn">'+psInline(fm[1])+'</span><span class="ps-fd">'+psInline(fm[2])+'</span></span>';
+    if(p==="<sqrt>") return '<span class="ps-sqrt">';
+    if(p==="</sqrt>") return "</span>";
+    if(/^<\/?(?:b|u|i|sup|sub)>$/.test(p)) return p;
     return psEsc(p).replace(/\n/g,"<br>");
   }).join("");
-  if(v.endsWith("\n")) out+="<br>";            // শেষের নতুন-লাইনের জন্য প্লেসহোল্ডার
+}
+function psToHTML(value){
+  const v=String(value||"");
+  return psInline(v)+(v.endsWith("\n")?"<br>":"");            // শেষের নতুন-লাইনের জন্য প্লেসহোল্ডার
+}
+// এলিমেন্টটা সিরিয়ালাইজে কোন কোন ট্যাগ হবে (বাইরে → ভেতরে): b, i, u, sup, sub, sqrt
+function psTags(n){
+  const tag=n.tagName.toLowerCase(), st=n.style||{}, out=[];
+  if(tag==="b"||tag==="strong"||st.fontWeight==="bold"||parseInt(st.fontWeight,10)>=600) out.push("b");
+  if(tag==="i"||tag==="em"||st.fontStyle==="italic") out.push("i");
+  if(tag==="u"||String(st.textDecorationLine||st.textDecoration||"").indexOf("underline")>=0) out.push("u");
+  if(tag==="sup") out.push("sup");
+  else if(tag==="sub") out.push("sub");
+  else if(n.classList&&n.classList.contains("ps-sqrt")) out.push("sqrt");
   return out;
 }
-function psFmt(n){                              // কোন কোন ফরম্যাট এই এলিমেন্টে: {b,u,i}
-  const tag=n.tagName.toLowerCase(), st=n.style||{};
-  return {
-    b:tag==="b"||tag==="strong"||st.fontWeight==="bold"||parseInt(st.fontWeight,10)>=600,
-    u:tag==="u"||String(st.textDecorationLine||st.textDecoration||"").indexOf("underline")>=0,
-    i:tag==="i"||tag==="em"||st.fontStyle==="italic",
-  };
-}
+const psOpenLen=n=>psTags(n).reduce((a,t)=>a+t.length+2,0);
+const psCloseLen=n=>psTags(n).reduce((a,t)=>a+t.length+3,0);
 function psSerNodes(nodes){ let s=""; for(const n of nodes) s+=psSerNode(n); return s; }
 function psSerNode(n){
   if(n.nodeType===3) return n.nodeValue.replace(/\u00a0/g," ").replace(/\u200b/g,"");
@@ -315,10 +327,8 @@ function psSerNode(n){
   if(n.classList&&n.classList.contains("ps-fr")) return "<frac>"+(n.getAttribute("data-n")||"")+"|"+(n.getAttribute("data-d")||"")+"</frac>";
   let inner=psSerNodes(n.childNodes);
   if(tag==="div"||tag==="p") return "\n"+inner;   // নিরাপত্তা-জাল (Enter আমরা <br> দিয়েই নিই)
-  const f=psFmt(n);
-  if(f.u) inner="<u>"+inner+"</u>";
-  if(f.i) inner="<i>"+inner+"</i>";
-  if(f.b) inner="<b>"+inner+"</b>";
+  const tg=psTags(n);
+  for(let k=tg.length-1;k>=0;k--) inner="<"+tg[k]+">"+inner+"</"+tg[k]+">";
   return inner;
 }
 function psSerialize(host){
@@ -332,7 +342,7 @@ function psIndexOf(host,container,offset){
   try{ r.setEnd(container,offset); }catch(_){ return 0; }
   let len=psSerNodes(r.cloneContents().childNodes).length;
   let el=container.nodeType===1?container:container.parentNode;       // ক্লোনে বন্ধ-হওয়া আগের ট্যাগের ক্লোজিং বাদ
-  while(el&&el!==host){ if(el.nodeType===1){ const f=psFmt(el); len-=4*((f.b?1:0)+(f.u?1:0)+(f.i?1:0)); } el=el.parentNode; }
+  while(el&&el!==host){ if(el.nodeType===1) len-=psCloseLen(el); el=el.parentNode; }
   return Math.max(0,len);
 }
 // স্ট্রিং-ইনডেক্স → DOM-বিন্দু
@@ -351,7 +361,7 @@ function psPointFromIndex(host,idx){
           if(rem<L) return {node:parent,offset:i+1};
           rem-=L; continue;
         }
-        const f=psFmt(n), k=(f.b?1:0)+(f.u?1:0)+(f.i?1:0), oc=3*k, cc=4*k;
+        const oc=psOpenLen(n), cc=psCloseLen(n);
         if(rem<oc) return {node:parent,offset:i};
         rem-=oc;
         const r=walk(n); if(r) return r;
@@ -391,14 +401,27 @@ function psFracBefore(host){                      // কার্সরের �
 const PS_FR_STOP=/[\s=+\-×÷*\/,;।:<>|{}\[\]]/;
 const PS_FR_DSTOP=/[\s=,;।:<>|×÷*]/;
 function psFracAt(text,i){            // text[i]==="÷"; দুই পাশে স্পেস ছাড়া অপারেন্ড থাকলে {s,e,n,d}
-  let s=i;
-  if(text[i-1]===")"){
-    let depth=0,k=i-1;
-    for(;k>=0;k--){ if(text[k]===")")depth++; else if(text[k]==="("){ depth--; if(depth===0)break; } }
-    if(k<0)return null; s=k;
-  } else { while(s>0&&!PS_FR_STOP.test(text[s-1])&&text[s-1]!=="(")s--; }
+  let s=i, moved=true;
+  while(moved){                       // বাঁ দিকে: একের পর এক ট্যাগ-গ্রুপ (x<sup>2</sup>), বন্ধনী-গ্রুপ, বা অপারেন্ড-রান
+    moved=false;
+    const before=text.slice(0,s), tm=/<\/(sup|sub|sqrt)>$/.exec(before);
+    if(tm){ const k=before.lastIndexOf("<"+tm[1]+">"); if(k<0)return null; s=k; moved=true; continue; }
+    if(text[s-1]===")"){
+      let depth=0,k=s-1;
+      for(;k>=0;k--){ if(text[k]===")")depth++; else if(text[k]==="("){ depth--; if(depth===0)break; } }
+      if(k<0)return null; s=k; moved=true; continue;
+    }
+    const s0=s; while(s>0&&!PS_FR_STOP.test(text[s-1])&&text[s-1]!=="(")s--;
+    if(s<s0) moved=true;
+  }
   if(s===i)return null;
-  let e=i+1; while(e<text.length&&!PS_FR_DSTOP.test(text[e]))e++;
+  let e=i+1;                          // ডান দিকে: <sup>..</sup> ইত্যাদি গ্রুপ পুরোটা হর-এর অংশ
+  while(e<text.length){
+    const om=/^<(sup|sub|sqrt)>/.exec(text.slice(e));
+    if(om){ const close="</"+om[1]+">", k=text.indexOf(close,e); if(k<0)break; e=k+close.length; continue; }
+    if(PS_FR_DSTOP.test(text[e]))break;
+    e++;
+  }
   while(e>i+1&&text[e-1]===".")e--;    // বাক্যের শেষের দাঁড়ি হর-এ ঢুকবে না
   if(e===i+1)return null;
   return {s,e,n:text.slice(s,i),d:text.slice(i+1,e)};
@@ -415,6 +438,24 @@ function psFractionize(text){
   }
   return out;
 }
+/* ── গণিতের আরও রেন্ডার (স্পেস/Enter/ঘর-ছাড়ার সময় একটা শব্দ-খণ্ডে, ব্যাকস্পেসে কাঁচা লেখা ফিরে আসে) ──
+   root7 , root(a+b) → √ (ওপরে দাগসহ) <sqrt>7</sqrt>      a^2 , x^n , a^(n+1) , a^{-2} → ঘাত <sup>2</sup>
+   x_1 , a_n → নিচের ছোট অক্ষর <sub>1</sub>               তারপর ÷ → ভগ্নাংশ (a^2/b → a² ওপরে, b নিচে)
+   ⚠️ ইউজার অ্যাপে <sup> <sub> <sqrt> ট্যাগও রেন্ডার করতে হবে (<sup>/<sub> স্ট্যান্ডার্ড HTML; <sqrt> = বর্গমূল-চিহ্ন + ওপরে দাগ) */
+function psMathConvert(run){
+  let s=String(run);
+  s=s.replace(/(^|[^A-Za-z])root\(([^()]*)\)/g,(m,p,a)=>p+"<sqrt>"+a+"</sqrt>");
+  s=s.replace(/(^|[^A-Za-z])root([০-৯0-9][০-৯0-9.]*|[A-Za-z](?![A-Za-z]))/g,(m,p,a)=>{
+    const dot=/\.$/.test(a)?".":""; return p+"<sqrt>"+a.replace(/\.$/,"")+"</sqrt>"+dot;
+  });
+  s=s.replace(/([A-Za-z০-৯0-9\u0980-\u09FF)\]>])\^(\(([^()]*)\)|\{([^{}]*)\}|[-+]?[০-৯0-9]+|[A-Za-z](?![A-Za-z]))/g,
+    (m,base,ex,pa,br)=>base+"<sup>"+(pa!==undefined?pa:(br!==undefined?br:ex))+"</sup>");
+  s=s.replace(/(^|[^A-Za-z])([A-Za-z])_([০-৯0-9]+|[a-z](?![A-Za-z]))/g,(m,p,a,b)=>p+a+"<sub>"+b+"</sub>");
+  return psFractionize(s);
+}
+const PS_MATH_TRIGGER=/[÷^_]|root/;
+const psMathConvertText=text=>String(text||"").replace(/\S+/g,tok=>PS_MATH_TRIGGER.test(tok)?psMathConvert(tok):tok);
+
 // ── রিচ-টেক্সট ঘর ──
 function PsTA({value,onChange,onKeyDown,taRef,className,math}){
   const hostRef=useRef(null), lastAuto=useRef(null), skipN=useRef(0), onChangeRef=useRef(onChange), mathRef=useRef(!!math);
@@ -449,6 +490,11 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
 
   const emit=v=>{ if(onChangeRef.current)onChangeRef.current({target:{value:v}}); };
   const exec=(cmd)=>{ const h=hostRef.current; if(!h)return; h.focus(); try{ document.execCommand("styleWithCSS",false,false); }catch(_){} document.execCommand(cmd,false,null); };
+  const wrapSqrt=()=>{                                     // সিলেক্ট করা অংশ √-এর ভেতরে (ওপরে দাগসহ)
+    const h=hostRef.current; if(!h)return; h.focus();
+    const sel=window.getSelection(); const txt=sel?sel.toString():""; if(!txt)return;
+    document.execCommand("insertHTML",false,'<span class="ps-sqrt">'+psEsc(txt)+'</span>');
+  };
   const applyBoth=()=>{
     const h=hostRef.current; if(!h)return; h.focus();
     const b=document.queryCommandState("bold"), u=document.queryCommandState("underline");
@@ -480,15 +526,15 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
             document.execCommand("insertText",false,"∴"); put(); return;
           }
           const runStart=Math.max(before.lastIndexOf(" "),before.lastIndexOf("\n"))+1, run=before.slice(runStart);
-          if(run.indexOf("÷")>=0){
-            const conv=psFractionize(run);
+          if(PS_MATH_TRIGGER.test(run)){
+            const conv=psMathConvert(run);
             if(conv!==run){
               ev.preventDefault();
               psSetCaret(h,runStart,c.s);
-              lastAuto.current={start:runStart,repl:conv,original:run.replace(/÷/g,"/"),tail,caret:runStart+conv.length+1}; skipN.current=2;
-              document.execCommand("insertHTML",false,psToHTML(conv));
-              psSetCaret(h,runStart+conv.length);          // ভগ্নাংশের পরে কার্সর, তারপর বাউন্ডারি অক্ষর
-              put(); return;
+              lastAuto.current={start:runStart,repl:conv,original:run.replace(/÷/g,"/"),tail,caret:runStart+conv.length+1}; skipN.current=1;
+              // রূপান্তরিত অংশ + বাউন্ডারি অক্ষর (স্পেস/নতুন-লাইন) একই ইনসার্টে — নইলে কার্সর <sup>/√-এর ভেতরেই থেকে যায় আর পরের লেখা ঘাতের ভেতরে ঢোকে
+              document.execCommand("insertHTML",false,psToHTML(conv)+(isNL?"<br>"+(c.s===v.length?"<br>":""):" "));
+              psSetCaret(h,runStart+conv.length+1); return;
             }
           }
         }
@@ -497,7 +543,11 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
           if(la&&cc&&cc.s===cc.e&&cc.s===la.caret&&psSerialize(h).slice(la.start,la.start+la.repl.length)===la.repl){
             ev.preventDefault();
             psSetCaret(h,la.start,la.start+la.repl.length);
-            lastAuto.current=null; skipN.current=1;
+            lastAuto.current=null; skipN.current=2;
+            document.execCommand("delete");
+            // পুরো √/ঘাত এলিমেন্ট মুছলে ব্রাউজার ফাঁকা খোসা রেখে দিতে পারে — সরিয়ে কাঁচা লেখা বাইরে বসাই (নইলে লেখাটা √-এর ভেতরে ঢোকে)
+            h.querySelectorAll(".ps-sqrt,sup,sub,b,u,i").forEach(el=>{ if(!el.textContent&&!el.querySelector(".ps-fr")) el.remove(); });
+            psSetCaret(h,la.start);
             document.execCommand("insertText",false,la.original);
             psSetCaret(h,la.start+la.original.length+la.tail.length); return;
           }
@@ -511,7 +561,7 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
           const r=document.createRange(); r.selectNode(fr);
           const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
           lastAuto.current=null; skipN.current=1;
-          document.execCommand("insertText",false,(fr.getAttribute("data-n")||"")+"/"+(fr.getAttribute("data-d")||"")); return;
+          document.execCommand("insertHTML",false,psEsc((fr.getAttribute("data-n")||"")+"/"+(fr.getAttribute("data-d")||""))); return;
         }
       }
       if(isNL){ ev.preventDefault(); document.execCommand("insertLineBreak"); }
@@ -538,7 +588,7 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
   const handleBlur=()=>{
     setFocused(false); setHasSel(false);
     const h=hostRef.current; if(!h||!mathRef.current)return;
-    const cur=psSerialize(h), nv=psFractionize(cur);
+    const cur=psSerialize(h), nv=psMathConvertText(cur);
     if(nv!==cur){ h.innerHTML=psToHTML(nv); emit(nv); }
   };
   const handlePaste=e=>{
@@ -558,6 +608,11 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
           <button type="button" title="আন্ডারলাইন (Ctrl+U)" onClick={()=>exec("underline")}><u>U</u></button>
           <button type="button" title="ইটালিক (Ctrl+I)" onClick={()=>exec("italic")}><i>I</i></button>
           <button type="button" title="Bold + Underline একসাথে (Fill in the blanks-এর blank)" onClick={applyBoth}><b><u>BU</u></b></button>
+          {math&&<>
+            <button type="button" title="ঘাত / সুপারস্ক্রিপ্ট (x²)" onClick={()=>exec("superscript")}>x²</button>
+            <button type="button" title="নিচের ছোট অক্ষর (x₂)" onClick={()=>exec("subscript")}>x₂</button>
+            <button type="button" title="বর্গমূল (√)" onClick={wrapSqrt}>√</button>
+          </>}
           <button type="button" title="ফরম্যাট মুছো" onClick={()=>exec("removeFormat")}>✖</button>
         </div>
       )}
@@ -725,6 +780,44 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     push("success","♻️ খসড়া লোড হলো",draftHeadline(entry));
   };
   const deleteNamedDraft=(id)=>{ persistDraftList(draftList.filter(d=>d.id!==id)); };
+  // 🆕 সফল সাবমিটের পর নামসহ খসড়াগুলো থেকে "ডাটাবেজে চলে যাওয়া" কার্ড নিজে মুছে ফেলা।
+  //   মিল = একই ট্যাব + একই হেডিং (বাংলা/ইংরেজি) বা একই প্রশ্ন (গণিত/GK), আর খসড়াটা একই পদ+প্রতিষ্ঠান+সালের —
+  //   অন্য পরীক্ষার খসড়ায় একই হেডিং থাকলে সেটা ছোঁয়া হয় না। কার্ড মুছে খসড়া ফাঁকা হয়ে গেলে খসড়াটাই বাদ।
+  const psHeadKey=s=>String(s||"").replace(/<\/?[a-z]+>/gi,"").replace(/[:：।\s]+$/g,"").replace(/\s+/g," ").trim().toLowerCase();
+  const psQKey=s=>String(s||"").replace(/<[^>]*>/g,"").replace(/\s+/g," ").trim().toLowerCase();
+  const psCtxKey=(post,inst,year)=>[((post&&post.name)||"").trim().toLowerCase(),((inst&&inst.name)||"").trim().toLowerCase(),String(year==null?"":year).trim()].join("|");
+  const pruneNamedDrafts=(submittedPaper,ctx)=>{
+    let list; try{ const raw=localStorage.getItem(LS_DRAFT_PAPER_LIST); list=raw?JSON.parse(raw):[]; }catch{ list=[]; }
+    if(!Array.isArray(list)||!list.length) return {cards:0,drafts:0};
+    const heads={}, qs={};
+    PAPER_TABS.forEach(tb=>{
+      const cards=submittedPaper[tb.key]||[];
+      if(tb.grouped) heads[tb.key]=new Set(cards.filter(c=>psHeadKey(c.heading)&&(c.items||[]).some(it=>(it.question||"").trim()||(it.answer||"").trim())).map(c=>psHeadKey(c.heading)));
+      else qs[tb.key]=new Set(cards.map(c=>psQKey(c.question)).filter(Boolean));
+    });
+    const myCtx=psCtxKey(ctx.postSel,ctx.instSel,ctx.examYear);
+    let removedCards=0, removedDrafts=0, changed=false;
+    const out=[];
+    list.forEach(d=>{
+      if(!d||!d.paper||psCtxKey(d.postSel,d.instSel,d.examYear)!==myCtx){ out.push(d); return; }
+      let removedHere=0;
+      const np={...d.paper};
+      PAPER_TABS.forEach(tb=>{
+        const cards=d.paper[tb.key]||[];
+        const keep=cards.filter(c=>{
+          const hit=tb.grouped?heads[tb.key].has(psHeadKey(c.heading)):qs[tb.key].has(psQKey(c.question));
+          if(hit) removedHere++;
+          return !hit;
+        });
+        if(keep.length!==cards.length) np[tb.key]=keep.length?keep:[tb.grouped?newGroupCard(tplListFor(tb.key)[0]):newFlatCard(tb.key==="gk")];
+      });
+      if(!removedHere){ out.push(d); return; }
+      changed=true; removedCards+=removedHere;
+      if(paperHasContent(np)) out.push({...d,paper:np}); else removedDrafts++;
+    });
+    if(changed) persistDraftList(out);
+    return {cards:removedCards,drafts:removedDrafts};
+  };
   function draftHeadline(d){
     const p=((d.postSel&&d.postSel.name)||"").trim();
     const i=((d.instSel&&d.instSel.name)||"").trim();
@@ -1163,6 +1256,9 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       if(failedCount>0){
         push("error",`⚠️ ${failedCount}টা প্রশ্ন সেভ হয়নি (নেটওয়ার্ক সমস্যা)`,"খাতা খালি করা হয়নি — আবার 🚀 সাবমিট চাপলে শুধু বাকিগুলোই যাবে (আগেরগুলো ডুপ্লিকেট হবে না)");
       } else if(res.added>0 || res.skipped>0){
+        // 🆕 নামসহ খসড়ায় একই হেডিং/প্রশ্ন (একই পদ+প্রতিষ্ঠান+সাল) থাকলে সেগুলো এখন ডাটাবেজে চলে গেছে — খসড়া থেকে নিজে সরাও
+        const pr=pruneNamedDrafts(paper,{postSel,instSel,examYear});
+        if(pr.cards>0) push("info",`🧹 খসড়া থেকে ${toBn(pr.cards)}টা সাবমিট-হওয়া কার্ড সরানো হয়েছে`,pr.drafts>0?`${toBn(pr.drafts)}টা খসড়া সম্পূর্ণ ফাঁকা হয়ে বাদ গেছে`:"একই পদ/প্রতিষ্ঠান/সালের খসড়া থেকে");
         setPaper(makeInitialPaper());
         setActiveTab("bangla");
         clearDraft(LS_DRAFT_PAPER);
@@ -1189,6 +1285,8 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const psLab=i=>isEnTab?String.fromCharCode(97+(i%26))+")":(SUBLABELS[i]||String(i+1))+")";
   const psNo=n=>isEnTab?n+".":(n<10?"০":"")+toBn(n)+"।";
   const[pickerOpen,setPickerOpen]=useState(()=>new Set());
+  const[moreOpen,setMoreOpen]=useState(()=>new Set());     // GK: "More subject ›" খোলা কার্ডগুলো
+  const toggleMore=id=>setMoreOpen(s=>{const n=new Set(s);if(n.has(id))n.delete(id);else n.add(id);return n;});
   const togglePicker=id=>setPickerOpen(s=>{const n=new Set(s);if(n.has(id))n.delete(id);else n.add(id);return n;});
 
   // হেডিং থেকে Topic অটো-সিলেক্ট — শুধু বাংলা ও ইংরেজি ট্যাবে (গণিত/GK-তে নেই)।
@@ -1274,8 +1372,8 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     }
     return hit?{id:hit.id,name:hit.name}:{id:"",name:c.name};
   };
-  // GK কার্ডে (OCR-ইম্পোর্ট/পুরোনো ড্রাফট) অন্য Subject থাকলে ৪টার একটায় নামিয়ে আনা — বাংলাদেশ/আন্তর্জাতিক/কম্পিউটার মিললে সেটায়, বাকি সব "সাধারণ জ্ঞান"-এ
-  // (অ্যাপের নিজস্ব নিয়ম: বাকি সবকিছু সাধারণ জ্ঞানের অধীনে)। Subject ফাঁকা থাকলে ইউজার নিজে বাছবে।
+  // GK কার্ডে (OCR-ইম্পোর্ট/পুরোনো ড্রাফট) Subject-এর নাম ৪টা পিলের কোনোটার (বানান-ভেদসহ) সমান হলে ডাটাবেজের আসল নামে বসিয়ে দেওয়া,
+  // যাতে পিলটা সিলেক্টেড দেখায়। বাকি যেকোনো Subject ("More subject ›"-এর অধীনে) যেমন আছে তেমনই থাকে।
   useEffect(()=>{
     if(!(refData?.subjects||[]).length)return;
     const td=PAPER_TABS.find(x=>x.key==="gk"); if(!td||!td.subjectChoices)return;
@@ -1283,13 +1381,8 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       if(card.subjNormTried)return;
       const cur=((card.subjectSel&&card.subjectSel.name)||"").trim();
       if(!cur)return;
-      const resolved=td.subjectChoices.map(resolveSubjectChoice);
-      let hit=resolved.find(r=>nzTopic(r.name)===nzTopic(cur));
-      if(!hit){
-        const c=td.subjectChoices.find(c=>[c.name,...(c.aliases||[])].some(a=>nzTopic(a)===nzTopic(cur))||(c.kw||[]).some(k=>nzTopic(cur).includes(nzTopic(k))));
-        hit=resolveSubjectChoice(c||td.subjectChoices[0]);
-      }
-      updateCard("gk",card.id,{subjectSel:hit,subjNormTried:true});
+      const c=td.subjectChoices.find(c=>[c.name,...(c.aliases||[])].some(a=>nzTopic(a)===nzTopic(cur)));
+      updateCard("gk",card.id,{...(c?{subjectSel:resolveSubjectChoice(c)}:{}),subjNormTried:true});
     });
   },[refData,paper]);
 
@@ -1602,23 +1695,51 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
           )}
         </div>
         <div className="ps-tp">
-          {tabDef.mathStyle&&(
-            <div ref={el=>{subjectFieldRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
-                ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
-              <label>📚 Subject — আগে বেছে নাও, তারপর সেই অনুযায়ী Topic আসবে</label>
-              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-                {tabDef.subjectChoices.map(c=>{
-                  const rs=resolveSubjectChoice(c);
-                  const on=nzTopic((card.subjectSel&&card.subjectSel.name)||"")===nzTopic(rs.name);
-                  return (
-                    <button type="button" key={c.key}
-                      onClick={()=>{ if(on)return; updateCard(activeTab,card.id,{subjectSel:rs,topicSel:{id:"",name:""}}); }}
-                      style={{flex:tabDef.subjectChoices.length>3?"1 1 calc(50% - 6px)":1,padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?PC.ink:PC.border}`,background:on?PC.ink:"#fff",color:on?"#fff":PC.ink,fontWeight:800,fontSize:13,cursor:"pointer"}}>{c.short}</button>
-                  );
-                })}
+          {tabDef.mathStyle&&(()=>{
+            const curName=(card.subjectSel&&card.subjectSel.name)||"";
+            const resolved=tabDef.subjectChoices.map(resolveSubjectChoice);
+            const isPill=resolved.some(r=>nzTopic(r.name)===nzTopic(curName));
+            const custom=!!curName.trim()&&!isPill;                      // পিলের বাইরের Subject (More subject-এর অধীনে)
+            const showMore=tabDef.moreSubjects&&(moreOpen.has(card.id)||custom);
+            const pillIds=new Set(resolved.map(r=>String(r.id)).filter(Boolean));
+            const moreOptions=subjectOptionsShown.filter(s=>!pillIds.has(String(s.id)));
+            const many=tabDef.subjectChoices.length>3;
+            return (
+              <div ref={el=>{subjectFieldRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
+                  ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
+                <label>📚 Subject — আগে বেছে নাও, তারপর সেই অনুযায়ী Topic আসবে</label>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {tabDef.subjectChoices.map((c,ci2)=>{
+                    const rs=resolved[ci2];
+                    const on=nzTopic(curName)===nzTopic(rs.name);
+                    return (
+                      <button type="button" key={c.key}
+                        onClick={()=>{ if(on)return; updateCard(activeTab,card.id,{subjectSel:rs,topicSel:{id:"",name:""}}); }}
+                        style={{flex:many?"1 1 calc(50% - 6px)":1,padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?PC.ink:PC.border}`,background:on?PC.ink:"#fff",color:on?"#fff":PC.ink,fontWeight:800,fontSize:13,cursor:"pointer"}}>{c.short}</button>
+                    );
+                  })}
+                  {tabDef.moreSubjects&&(
+                    <button type="button" onClick={()=>toggleMore(card.id)}
+                      style={{flex:"1 1 100%",padding:"7px 4px",borderRadius:8,border:`1.5px dashed ${custom?PC.ink:PC.border}`,background:custom?"#eef1fb":"transparent",color:PC.ink,fontWeight:700,fontSize:12,cursor:"pointer"}}>
+                      {showMore?"More subject ▾":"More subject ›"}{custom?` — ${curName}`:""}
+                    </button>
+                  )}
+                </div>
+                {showMore&&(
+                  <div style={{marginTop:6}}>
+                    <TypeaheadCombo
+                      options={moreOptions}
+                      value={custom?card.subjectSel:{id:"",name:""}}
+                      onChange={sel=>updateCard(activeTab,card.id,{subjectSel:sel,topicSel:{id:"",name:""}})}
+                      placeholder="অন্য Subject লিখো বা বেছে নাও..."
+                      newLabel={`🆕 "${((custom?card.subjectSel.name:"")||"").trim()}" নতুন Subject হিসেবে যোগ হবে`}
+                      inputStyle={pcField} lightTheme
+                    />
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            );
+          })()}
           <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
                   ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                 <label>📌 Topic</label>
