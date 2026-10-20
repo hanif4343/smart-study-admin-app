@@ -9,7 +9,7 @@
    ফিক্স করলে আরেকটা বাদ পড়ার ঝুঁকি থাকে)। ── */
 import { addReferenceItem } from "./sheetSave.js";
 
-const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+const norm=s=>String(s||"").normalize("NFC").trim().toLowerCase().replace(/\s+/g," ");
 
 // 🆕 ফাজি "did you mean?" ম্যাচার — Single Entry-এর heading→Topic ম্যাচিং-এ যেই
 // word-overlap স্কোরিং ব্যবহার হয়েছিল, ঠিক সেই একই পদ্ধতি এখানেও (শেয়ার্ড, তাই
