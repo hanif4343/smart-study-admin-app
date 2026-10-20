@@ -10,7 +10,7 @@
 import React, { useState, useRef, useEffect, useMemo } from "react";
 import { C } from "../../core/config.js";
 
-const norm=s=>String(s||"").trim().toLowerCase().replace(/\s+/g," ");
+const norm=s=>String(s||"").normalize("NFC").trim().toLowerCase().replace(/\s+/g," ");
 
 function TypeaheadCombo({options,value,onChange,placeholder,newLabel,emptyLabel,inputStyle,lightTheme,tabIndex}){
   // options: [{id,name}]   value: {id,name}
