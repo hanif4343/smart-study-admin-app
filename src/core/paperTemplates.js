@@ -126,7 +126,8 @@ const TOPIC_RULES={
   ],
 };
 // তুলনার জন্য নাম সমান করা: ছোট হাতের, "&"="and", স্পেস/চিহ্ন বাদ
-export const nzTopic=s=>String(s||"").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9\u0980-\u09FF]+/g,"");
+// NFC: "য়" (U+09DF) আর "য"+"়" (U+09AF U+09BC) একই ধরা হয় — নইলে বিষয়াবলি-র নাম মেলে না, Topic আসে না
+export const nzTopic=s=>String(s||"").normalize("NFC").toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9\u0980-\u09FF]+/g,"");
 // Levenshtein দূরত্ব (বানান-ভুল সহনশীল ম্যাচের জন্য)
 function lev(a,b){
   const m=a.length,n=b.length; if(!m)return n; if(!n)return m;
