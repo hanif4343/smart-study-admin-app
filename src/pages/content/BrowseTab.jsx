@@ -26,6 +26,7 @@ import { InlineEditModal } from "./InlineEditModal.jsx";
 import { ReformatReviewModal } from "./ReformatReviewModal.jsx";
 import { AppearanceQuickModal } from "./AppearanceQuickModal.jsx";
 import { useModalBack } from "../../hooks/useModalBack.js";
+import { RichText, clipRich } from "../../components/shared/RichText.jsx";
 
 /* ── প্রশ্নের group_id/sub_index — sheet header যেই casing-এই থাকুক (snake_case
    canonical, কিন্তু defensively কয়েকটা variant চেক করা হলো, বাকি ফিল্ডগুলোর
@@ -787,7 +788,7 @@ function BrowseTab({push,tick}){
        filtered.length===0?<div className="empty"><div className="ei">📋</div><p>{!gasSecret?"GAS Secret Key দাও":"কিছু নেই"}</p></div>:
        pageSlice.map((q,i)=>{
         const qid=(q.ID||q.id||"").toString();
-        const qtext=(q.Question||q.question||"(নোট)").slice(0,80);
+        const qtext=clipRich(q.Question||q.question||"(নোট)",80);
         const qFullLen=String(q.Question||q.question||"").trim().length;
         const isSuspicious=qFullLen>0&&qFullLen<4; // "৬"-এর মতো stray/ভাঙা নয়েজ এন্ট্রি ধরার জন্য
         const sub=(q.Subject||q.subject||"—");
@@ -838,7 +839,7 @@ function BrowseTab({push,tick}){
             </div>
             <div className="qcard-q">
               {isSuspicious&&<span style={{fontSize:9,padding:"2px 7px",borderRadius:8,background:"#f59e0b22",color:"#f59e0b",fontWeight:800,border:"1px solid #f59e0b44",marginRight:6}}>⚠️ সন্দেহজনক/ভাঙা এন্ট্রি</span>}
-              {qtext}{qtext.length>=80?"…":""}
+              <RichText text={qtext}/>{qtext.length>=80?"…":""}
             </div>
             <div className="qcard-meta">
               <span className="qtag qtag-sub">📚 {sub}</span>
@@ -858,7 +859,7 @@ function BrowseTab({push,tick}){
             </button>
             {isOpen&&(
               <div style={{marginTop:8,padding:"10px 11px",background:"#0a1628",border:`1px solid ${C.border}`,borderRadius:10,fontSize:12,lineHeight:1.6}}>
-                <div style={{color:C.text,fontWeight:700,marginBottom:8,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{fullQ}</div>
+                <div style={{color:C.text,fontWeight:700,marginBottom:8,whiteSpace:"pre-wrap",wordBreak:"break-word"}}><RichText text={fullQ}/></div>
                 {qt!=="written"&&(opt1||opt2||opt3||opt4)&&(
                   <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:8}}>
                     {[["A",opt1],["B",opt2],["C",opt3],["D",opt4]].filter(([,v])=>v).map(([lbl,v])=>{
@@ -867,7 +868,7 @@ function BrowseTab({push,tick}){
                         <div key={lbl} style={{display:"flex",gap:6,alignItems:"flex-start",
                           color:isCorrect?C.green:C.muted,fontWeight:isCorrect?800:500}}>
                           <span>{isCorrect?"✅":`${lbl})`}</span>
-                          <span style={{wordBreak:"break-word"}}>{v}</span>
+                          <span style={{wordBreak:"break-word"}}><RichText text={v}/></span>
                         </div>
                       );
                     })}
@@ -876,19 +877,19 @@ function BrowseTab({push,tick}){
                 {qt==="written"&&correctAns&&(
                   <div style={{marginBottom:8}}>
                     <div style={{fontSize:10,fontWeight:800,color:C.green,marginBottom:2}}>✅ উত্তর</div>
-                    <div style={{color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{correctAns}</div>
+                    <div style={{color:C.text,whiteSpace:"pre-wrap",wordBreak:"break-word"}}><RichText text={correctAns}/></div>
                   </div>
                 )}
                 {explanation&&(
                   <div style={{marginBottom:technique?8:0}}>
                     <div style={{fontSize:10,fontWeight:800,color:"#f59e0b",marginBottom:2}}>📖 ব্যাখ্যা</div>
-                    <div style={{color:C.muted,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{explanation}</div>
+                    <div style={{color:C.muted,whiteSpace:"pre-wrap",wordBreak:"break-word"}}><RichText text={explanation}/></div>
                   </div>
                 )}
                 {technique&&(
                   <div>
                     <div style={{fontSize:10,fontWeight:800,color:"#818cf8",marginBottom:2}}>💡 কৌশল</div>
-                    <div style={{color:C.muted,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>{technique}</div>
+                    <div style={{color:C.muted,whiteSpace:"pre-wrap",wordBreak:"break-word"}}><RichText text={technique}/></div>
                   </div>
                 )}
                 {!correctAns&&!explanation&&!technique&&!opt1&&(
