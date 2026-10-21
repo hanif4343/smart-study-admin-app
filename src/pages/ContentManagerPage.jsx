@@ -14,7 +14,7 @@ import { RenameTab } from "./content/RenameTab.jsx";
 import { AudienceTagRenameTab } from "./content/AudienceTagRenameTab.jsx";
 import { ReferenceManagerTab } from "./content/ReferenceManagerTab.jsx";
 import { ExamAppearancesTab } from "./content/ExamAppearancesTab.jsx";
-import { TopicTagsTab } from "./content/TopicTagsTab.jsx";
+import { TopicManagerTab } from "./content/TopicManagerTab.jsx";
 import { BulkQTypeTab } from "./BulkQTypeTab.jsx";
 import { DeleteTab } from "./content/DeleteTab.jsx";
 import { PublishTab } from "./content/PublishTab.jsx";
@@ -31,7 +31,7 @@ const CONTENT_TOOL_SECTIONS=[
     {page:"appearances", icon:"🎓",label:"Appearances",  desc:"পদ+প্রতিষ্ঠান+সাল অনুযায়ী প্রশ্নের appearance"},
     {page:"audience",    icon:"🎯",label:"Audience",     desc:"Audience ট্যাগ রিনেম"},
     {page:"qtype",       icon:"🏷️",label:"QType",       desc:"বাল্ক প্রশ্নের ধরন বদলান"},
-    {page:"topictags",   icon:"🤖",label:"Topic Tags",   desc:"ট্যাগ-রুল দিয়ে QBank MCQ অটো Subject/Topic-এ বসান"},
+    {page:"topictags",   icon:"🗂️",label:"Topic Manager",desc:"টপিকের প্রশ্নসংখ্যা দেখা, কাছাকাছি টপিক মার্জ, ফাঁকা টপিক মোছা, রুল ও অটো-ক্লাসিফাই"},
     {page:"orphan",      icon:"🧟",label:"Orphan ঠিক করো", desc:"Topic হারানো প্রশ্নে সঠিক Subject/Topic বসান — মুছতে হবে না"},
   ]},
   {key:"archive",title:"🗄️ আর্কাইভ",color:"#a78bfa",items:[
@@ -47,7 +47,7 @@ const TOOL_LABELS={
   appearances:{icon:"🎓",label:"Appearances"},
   audience:{icon:"🎯",label:"Audience"},
   qtype:{icon:"🏷️",label:"QType"},
-  topictags:{icon:"🤖",label:"Topic Tags"},
+  topictags:{icon:"🗂️",label:"Topic Manager"},
   orphan:{icon:"🧟",label:"Orphan ঠিক করো"},
   archive:{icon:"🗄️",label:"Archive"},
   delete:{icon:"🗑️",label:"Delete"},
@@ -121,7 +121,7 @@ function ContentManagerPage({push,tick,pushLayer,onSendToBulk}){
           {tab==="appearances" && <ExamAppearancesTab push={push}/>}
           {tab==="audience"    && <AudienceTagRenameTab push={push} tick={tick}/>}
           {tab==="qtype"       && <BulkQTypeTab push={push} tick={tick}/>}
-          {tab==="topictags"   && <TopicTagsTab push={push}/>}
+          {tab==="topictags"   && <TopicManagerTab push={push}/>}
           {tab==="orphan"      && <OrphanFixTab push={push} tick={tick}/>}
           {tab==="archive"     && <ArchivePage push={push} onSendToBulk={onSendToBulk}/>}
           {tab==="delete"      && <DeleteTab push={push} tick={tick}/>}
