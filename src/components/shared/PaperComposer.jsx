@@ -15,6 +15,7 @@ import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../../core/referenceHelpers.js";
 import { subjectsForTags, topicsOfSubject } from "../../core/refFilter.js";
 import { TypeaheadCombo } from "./TypeaheadCombo.jsx";
+import { RichText } from "./RichText.jsx";
 
 /* ── AI দিয়ে MCQ-এর ৩টা ভুল অপশন + ব্যাখ্যা বানানোর প্রম্পট (SingleQuestionEntryPage-এর
    নিজস্ব single-form-ও এটাই ব্যবহার করে, import করে — দুই জায়গায় আলাদা prompt না) ── */
@@ -579,6 +580,20 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
     return()=>document.removeEventListener("selectionchange",sync);
   },[focused]);
 
+  // 🆕 G বাটন — সিলেক্ট করা লেখা সরাসরি Google সার্চে খোলে (অ্যাপের বাইরে ব্রাউজারে); ব্যাক করলে অ্যাপে ফেরা যায়।
+  // Capacitor Browser প্লাগিন থাকলে সেটা, নইলে অ্যান্ড্রয়েড অ্যাপে লিংক বাইরের ব্রাউজারে যায়, আর সাধারণ ব্রাউজারে নতুন ট্যাবে খোলে।
+  const googleSelected=()=>{
+    const sel=window.getSelection();
+    const q=String(sel?sel.toString():"").replace(/\s+/g," ").trim().slice(0,300);
+    if(!q)return;
+    const url="https://www.google.com/search?q="+encodeURIComponent(q);
+    try{
+      const cap=window.Capacitor;
+      if(cap&&cap.Plugins&&cap.Plugins.Browser&&cap.Plugins.Browser.open){ cap.Plugins.Browser.open({url}); return; }
+      if(cap&&cap.isNativePlatform&&cap.isNativePlatform()){ window.location.href=url; return; }
+    }catch{}
+    window.open(url,"_blank","noopener,noreferrer");
+  };
   const handleInput=()=>{
     const h=hostRef.current; if(!h)return;
     if(skipN.current>0) skipN.current--; else lastAuto.current=null;
@@ -613,6 +628,7 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
             <button type="button" title="নিচের ছোট অক্ষর (x₂)" onClick={()=>exec("subscript")}>x₂</button>
             <button type="button" title="বর্গমূল (√)" onClick={wrapSqrt}>√</button>
           </>}
+          <button type="button" title="সিলেক্ট করা লেখা Google-এ সার্চ করো" onClick={googleSelected}><span style={{fontWeight:800,color:"#4285F4"}}>G</span></button>
           <button type="button" title="ফরম্যাট মুছো" onClick={()=>exec("removeFormat")}>✖</button>
         </div>
       )}
@@ -766,6 +782,12 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   };
   const saveNamedDraft=()=>{
     if(!paperHasContent(paper)){ push("warn","এখনো কিছু টাইপ করা হয়নি","আগে কিছু প্রশ্ন টাইপ করো, তারপর খসড়া সেভ করো"); return; }
+    // 🆕 খসড়া সেভ করতে পদ (Post) আর প্রতিষ্ঠান (Institution) দুটোই লাগবে — নইলে তালিকায় চেনা যায় না
+    if(!postSel.name.trim()||!instSel.name.trim()){
+      push("warn","পদ আর প্রতিষ্ঠান দুটোই দিতে হবে",`${!postSel.name.trim()?"পদ (Post) ":""}${!instSel.name.trim()?"প্রতিষ্ঠান (Institution) ":""}খালি — উপরে দিয়ে তারপর খসড়া সেভ করো`);
+      try{ window.scrollTo({top:0,behavior:"smooth"}); }catch{}
+      return;
+    }
     const entry={id:newPaperId(),savedAt:Date.now(),paper,activeTab,postSel,instSel,examYear};
     persistDraftList([entry,...draftList].slice(0,15)); // ১৫টার বেশি জমতে দেওয়া হয় না
     push("success","💾 নতুন খসড়া হিসেবে সেভ হলো",draftHeadline(entry));
@@ -780,6 +802,27 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     push("success","♻️ খসড়া লোড হলো",draftHeadline(entry));
   };
   const deleteNamedDraft=(id)=>{ persistDraftList(draftList.filter(d=>d.id!==id)); };
+  // 🆕 প্রিভিউ পপ-আপ (লোড না করেই খসড়ার ভেতরটা দেখা) ও 🆕 New Paper (সব ফাঁকা নতুন পেজ)
+  const[previewDraft,setPreviewDraft]=useState(null);
+  const[confirmNew,setConfirmNew]=useState(false);
+  const resetToNewPaper=()=>{
+    setPaper(makeInitialPaper());
+    setActiveTab("bangla");
+    setPostSel({id:"",name:""});
+    setInstSel({id:"",name:""});
+    setExamYear("");
+    setExpandedItems(new Set());
+    const job=tagOptions.find(tg=>norm(tg.name)==="job");
+    setSelectedTagIds(job?[job.id]:[]);
+    clearDraft(LS_DRAFT_PAPER);
+    setDraftBanner(null);
+    setShowDraftList(false);
+    setPreviewDraft(null);
+    setConfirmNew(false);
+    try{ window.scrollTo({top:0,behavior:"smooth"}); }catch{}
+    push("success","🆕 নতুন ফাঁকা প্রশ্নপত্র","সব ফাঁকা — নতুন করে শুরু করো");
+  };
+  const askNewPaper=()=>{ if(paperHasContent(paper)||postSel.name.trim()||instSel.name.trim()||examYear.trim()) setConfirmNew(true); else resetToNewPaper(); };
   // 🆕 সফল সাবমিটের পর নামসহ খসড়াগুলো থেকে "ডাটাবেজে চলে যাওয়া" কার্ড নিজে মুছে ফেলা।
   //   মিল = একই ট্যাব + একই হেডিং (বাংলা/ইংরেজি) বা একই প্রশ্ন (গণিত/GK), আর খসড়াটা একই পদ+প্রতিষ্ঠান+সালের —
   //   অন্য পরীক্ষার খসড়ায় একই হেডিং থাকলে সেটা ছোঁয়া হয় না। কার্ড মুছে খসড়া ফাঁকা হয়ে গেলে খসড়াটাই বাদ।
@@ -1759,6 +1802,71 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
 
   return(
     <div style={{background:PC.bg,margin:"0 -16px",padding:"14px 14px 4px",borderRadius:0}}>
+      {confirmNew&&(
+        <div style={{position:"fixed",inset:0,background:"#000a",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={()=>setConfirmNew(false)}>
+          <div style={{background:PC.card,borderRadius:14,padding:16,maxWidth:340,width:"100%"}} onClick={e=>e.stopPropagation()}>
+            <div style={{fontSize:14,fontWeight:800,color:PC.ink,marginBottom:6}}>🆕 নতুন ফাঁকা প্রশ্নপত্র?</div>
+            <div style={{fontSize:11.5,color:PC.muted,lineHeight:1.6,marginBottom:12}}>এখনকার সব লেখা, পদ, প্রতিষ্ঠান ও সাল মুছে যাবে। খসড়া হিসেবে সেভ না করা থাকলে আর ফেরত পাবে না। সেভ করা খসড়াগুলো থাকবে।</div>
+            <div style={{display:"flex",gap:8}}>
+              <button type="button" onClick={()=>setConfirmNew(false)} style={{flex:1,padding:"10px 0",borderRadius:9,border:`1px solid ${PC.border}`,background:"transparent",color:PC.ink,fontWeight:700,fontSize:12,cursor:"pointer"}}>বাতিল</button>
+              <button type="button" onClick={resetToNewPaper} style={{flex:1,padding:"10px 0",borderRadius:9,border:"none",background:PC.danger,color:"#fff",fontWeight:800,fontSize:12,cursor:"pointer"}}>হ্যাঁ, নতুন করো</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {previewDraft&&(()=>{
+        const d=previewDraft;
+        return(
+        <div style={{position:"fixed",inset:0,background:"#000a",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:14}} onClick={()=>setPreviewDraft(null)}>
+          <div style={{background:PC.card,borderRadius:14,maxWidth:520,width:"100%",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
+            <div style={{padding:"12px 14px",borderBottom:`1px solid ${PC.border}`}}>
+              <div style={{fontSize:10,fontWeight:700,color:PC.muted}}>👁 খসড়া প্রিভিউ · {fmtDraftTime(d.savedAt)} · {draftQCount(d)}টা প্রশ্ন</div>
+              <div style={{fontSize:14,fontWeight:800,color:PC.ink,marginTop:3}}>🏛 {(d.instSel&&d.instSel.name||"").trim()||"—"}</div>
+              <div style={{fontSize:12.5,fontWeight:700,color:PC.ink}}>🧑‍💼 {(d.postSel&&d.postSel.name||"").trim()||"—"}{(d.examYear||"").toString().trim()?` · ${d.examYear}`:""}</div>
+            </div>
+            <div style={{flex:1,overflowY:"auto",padding:"10px 14px"}}>
+              {PAPER_TABS.map(t=>{
+                const cards=(d.paper&&d.paper[t.key])||[];
+                const shown=cards.filter(c=>t.grouped?(c.items||[]).some(it=>(it.question||"").trim()||(it.answer||"").trim()):((c.question||"").trim()||(c.answer||"").trim()));
+                if(!shown.length) return null;
+                return(
+                  <div key={t.key} style={{marginBottom:14}}>
+                    <div style={{fontSize:11.5,fontWeight:800,color:PC.gold,marginBottom:6}}>{t.label||t.key}</div>
+                    {shown.map((c,ci)=>(
+                      <div key={c.id||ci} style={{background:"#fff",border:`1px solid ${PC.border}`,borderRadius:9,padding:"8px 10px",marginBottom:6}}>
+                        {t.grouped?(
+                          <>
+                            {(c.heading||"").trim()&&<div style={{fontSize:11.5,fontWeight:800,color:PC.ink,marginBottom:4}}><RichText text={c.heading}/></div>}
+                            {(c.passage||"").trim()&&<div style={{fontSize:11,color:PC.muted,marginBottom:4,whiteSpace:"pre-wrap"}}><RichText text={c.passage}/></div>}
+                            {(c.items||[]).filter(it=>(it.question||"").trim()||(it.answer||"").trim()).map((it,ii)=>(
+                              <div key={it.id||ii} style={{fontSize:12,color:PC.ink,marginTop:3,whiteSpace:"pre-wrap"}}>
+                                <b>{SUBLABELS[(c.items||[]).indexOf(it)]||ii+1})</b> <RichText text={it.question}/>
+                                {(it.answer||"").trim()&&<div style={{color:PC.answerText,fontWeight:700,marginLeft:14}}>✅ <RichText text={it.answer}/></div>}
+                              </div>
+                            ))}
+                          </>
+                        ):(
+                          <>
+                            {(c.subjectSel&&c.subjectSel.name)&&<div style={{fontSize:10,fontWeight:700,color:PC.muted,marginBottom:2}}>{c.subjectSel.name}{c.topicSel&&c.topicSel.name?` — ${c.topicSel.name}`:""}</div>}
+                            <div style={{fontSize:12,color:PC.ink,whiteSpace:"pre-wrap"}}><b>{ci+1}.</b> <RichText text={c.question}/></div>
+                            {(c.answer||"").trim()&&<div style={{fontSize:12,color:PC.answerText,fontWeight:700,marginTop:2}}>✅ <RichText text={c.answer}/></div>}
+                          </>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
+              {d.paper&&draftQCount(d)===0&&<div style={{fontSize:11,color:PC.muted,textAlign:"center",padding:16}}>প্রশ্ন নেই</div>}
+            </div>
+            <div style={{display:"flex",gap:8,padding:"10px 14px",borderTop:`1px solid ${PC.border}`}}>
+              <button type="button" onClick={()=>setPreviewDraft(null)} style={{flex:1,padding:"10px 0",borderRadius:9,border:`1px solid ${PC.border}`,background:"transparent",color:PC.ink,fontWeight:700,fontSize:12,cursor:"pointer"}}>✕ বন্ধ</button>
+              <button type="button" onClick={()=>{loadNamedDraft(d);setPreviewDraft(null);}} style={{flex:2,padding:"10px 0",borderRadius:9,border:"none",background:PC.ink,color:"#fff",fontWeight:800,fontSize:12,cursor:"pointer"}}>▶️ এই খসড়া লোড করো</button>
+            </div>
+          </div>
+        </div>
+        );
+      })()}
       {draftBanner&&(
         <div style={{background:"#EAF1E4",border:"1px solid #2C472855",borderRadius:12,padding:"12px 14px",marginBottom:14}}>
           <div style={{fontSize:12,fontWeight:800,color:"#2C4728",marginBottom:4}}>♻️ আগের অসম্পূর্ণ প্রশ্নপত্র পাওয়া গেছে</div>
@@ -1875,6 +1983,11 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               background:"transparent",border:`1px solid ${PC.border}`,color:PC.ink,cursor:"pointer"}}>
             📂 সেভ করা খসড়া ({draftList.length}) {showDraftList?"▲":"▼"}
           </button>
+          <button type="button" onClick={askNewPaper}
+            style={{flex:1,justifyContent:"center",padding:"9px 0",borderRadius:9,fontSize:11.5,fontWeight:700,
+              background:"transparent",border:`1px solid ${PC.border}`,color:PC.danger,cursor:"pointer"}}>
+            🆕 New Paper
+          </button>
         </div>
         {showDraftList&&(
           <div style={{maxHeight:280,overflowY:"auto",border:`1px solid ${PC.border}`,borderRadius:10,marginBottom:8,background:"#fff"}}>
@@ -1884,9 +1997,13 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               [...draftList].sort((a,b)=>b.savedAt-a.savedAt).map(d=>(
                 <div key={d.id} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderBottom:`1px dashed ${PC.border}`}}>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:11.5,fontWeight:800,color:PC.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{draftHeadline(d)}</div>
+                    <div style={{fontSize:11.5,fontWeight:800,color:PC.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🧑‍💼 {(d.postSel&&d.postSel.name||"").trim()||<span style={{color:PC.danger}}>পদ নেই</span>}</div>
+                    <div style={{fontSize:11,fontWeight:700,color:PC.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1}}>🏛 {(d.instSel&&d.instSel.name||"").trim()||<span style={{color:PC.danger}}>প্রতিষ্ঠান নেই</span>}{(d.examYear||"").toString().trim()?` · ${d.examYear}`:""}</div>
                     <div style={{fontSize:9.5,color:PC.muted,marginTop:2}}>{fmtDraftTime(d.savedAt)} · {draftQCount(d)}টা প্রশ্ন</div>
                   </div>
+                  <button type="button" onClick={()=>setPreviewDraft(d)}
+                    style={{flexShrink:0,padding:"6px 8px",borderRadius:7,fontSize:10.5,fontWeight:700,
+                      background:"transparent",color:PC.ink,border:`1px solid ${PC.border}`,cursor:"pointer"}}>👁 প্রিভিউ</button>
                   <button type="button" onClick={()=>loadNamedDraft(d)}
                     style={{flexShrink:0,padding:"6px 10px",borderRadius:7,fontSize:10.5,fontWeight:700,
                       background:PC.ink,color:"#fff",border:"none",cursor:"pointer"}}>লোড করো</button>
