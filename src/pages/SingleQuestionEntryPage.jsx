@@ -15,6 +15,7 @@
 import { getCachedReferenceData } from "../core/refCache.js";
 import { useRefCacheSync } from "../hooks/useRefCacheSync.js";
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import { useTypingCover, CoverOverlay, CoverToggle } from "../components/shared/TypingCover.jsx";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
 import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, LS_DRAFT_SINGLE_LIST, loadDraft, saveDraft, clearDraft, applyRichTextShortcut } from "../core/uploaderUtils.js";
@@ -86,6 +87,8 @@ function SingleQuestionEntryPage({push}){
   // ── এই ফিল্ডগুলো প্রতি sub-part যোগ/সাবমিটের পর খালি হয়ে যায় ──
   const[question,setQuestion]=useState("");
   const[correct,setCorrect]=useState("");
+  // 🆕 প্রশ্ন/উত্তর ঘরে টাইপ শুরু হলে কালো আবরণ, শেষ টাইপের ৩ সেকেন্ড পর সরে যায় (সংশোধনে ফেরে না) — TypingCover.jsx
+  const qCover=useTypingCover(question), aCover=useTypingCover(correct);
   const[opt1,setOpt1]=useState(""); const[opt2,setOpt2]=useState("");
   const[opt3,setOpt3]=useState(""); const[opt4,setOpt4]=useState("");
   const[explanation,setExplanation]=useState("");
@@ -750,6 +753,7 @@ function SingleQuestionEntryPage({push}){
       )}
 
       {/* ── প্রশ্ন বক্স ── */}
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}><CoverToggle color={C.muted}/></div>
       <div className="fld">
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <label style={{margin:0}}>❓ প্রশ্ন</label>
@@ -765,11 +769,14 @@ function SingleQuestionEntryPage({push}){
           </button>
           <input ref={imgInputRef} type="file" accept="image/*" multiple onChange={onImageSelected} style={{display:"none"}}/>
         </div>
+        <div style={{position:"relative"}}>
         <textarea ref={qRef} className="ta" value={question} 
           onFocus={()=>activeInputRef.current="q"}
-          onChange={e=>setQuestion(e.target.value)}
+          onChange={e=>{ setQuestion(e.target.value); qCover.onTyped(e.target.value); }}
           onKeyDown={onQuestionKeyDown}
           placeholder="বই দেখে প্রশ্ন টাইপ করো, তারপর Enter..." style={{minHeight:80}} tabIndex={1}/>
+        <CoverOverlay covered={qCover.covered}/>
+        </div>
       </div>
 
       {/* ── 🆕 MCQ অপশন হাইড/শো টগল — "প্রশ্নের পরে" বাটন, ডিফল্ট লুকানো, অবস্থা মনে থাকে ── */}
@@ -786,11 +793,14 @@ function SingleQuestionEntryPage({push}){
       {/* ── উত্তর বক্স ── */}
       <div className="fld">
         <label>{isMCQ?"✅ সঠিক উত্তর":"✅ উত্তর"}</label>
+        <div style={{position:"relative"}}>
         <textarea ref={correctRef} className="ta" value={correct} 
           onFocus={()=>activeInputRef.current="correct"}
-          onChange={e=>setCorrect(e.target.value)}
+          onChange={e=>{ setCorrect(e.target.value); aCover.onTyped(e.target.value); }}
           onKeyDown={onAnswerKeyDown}
           placeholder={isMCQ?"সঠিক উত্তরের টেক্সট, তারপর Enter...":"উত্তর লিখো, তারপর Enter..."} style={{minHeight:60}} tabIndex={2}/>
+        <CoverOverlay covered={aCover.covered}/>
+        </div>
         {isMCQ&&optionsHidden&&(
           <div style={{fontSize:9.5,color:C.muted,marginTop:4}}>অপশন বক্স হাইড করা আছে (ঐচ্ছিক) — শুধু প্রশ্ন+উত্তর লিখে Enter দিলেই সারিতে জমা হবে।</div>
         )}
