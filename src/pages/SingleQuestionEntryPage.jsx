@@ -16,6 +16,7 @@ import { getCachedReferenceData } from "../core/refCache.js";
 import { useRefCacheSync } from "../hooks/useRefCacheSync.js";
 import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useTypingCover, CoverOverlay, CoverToggle } from "../components/shared/TypingCover.jsx";
+import { useTypingTrack } from "../hooks/useTypingTrack.js";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
 import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, LS_DRAFT_SINGLE_LIST, loadDraft, saveDraft, clearDraft, applyRichTextShortcut } from "../core/uploaderUtils.js";
@@ -89,6 +90,7 @@ function SingleQuestionEntryPage({push}){
   const[correct,setCorrect]=useState("");
   // 🆕 প্রশ্ন/উত্তর ঘরে টাইপ শুরু হলে কালো আবরণ, শেষ টাইপের ৩ সেকেন্ড পর সরে যায় (সংশোধনে ফেরে না) — TypingCover.jsx
   const qCover=useTypingCover(question), aCover=useTypingCover(correct);
+  const qTrack=useTypingTrack(question), aTrack=useTypingTrack(correct);   // টাইপিং ট্র্যাকার (WPM/ভুল) — TypingStatsBubble
   const[opt1,setOpt1]=useState(""); const[opt2,setOpt2]=useState("");
   const[opt3,setOpt3]=useState(""); const[opt4,setOpt4]=useState("");
   const[explanation,setExplanation]=useState("");
@@ -649,6 +651,7 @@ function SingleQuestionEntryPage({push}){
         <PaperComposer gasSecret={gasSecret} refData={refData} setRefData={setRefData} refDataError={refDataError} refDataLoading={refDataLoading} onRetryRefData={loadRefData} push={push} sessionCount={sessionCount} setSessionCount={setSessionCount}/>
       ) : (
       <>
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:6}}><CoverToggle color={C.muted}/></div>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
         <div className="fld" style={{marginBottom:0}}>
           <label>📚 Subject</label>
@@ -753,7 +756,6 @@ function SingleQuestionEntryPage({push}){
       )}
 
       {/* ── প্রশ্ন বক্স ── */}
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:4}}><CoverToggle color={C.muted}/></div>
       <div className="fld">
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <label style={{margin:0}}>❓ প্রশ্ন</label>
@@ -772,7 +774,8 @@ function SingleQuestionEntryPage({push}){
         <div style={{position:"relative"}}>
         <textarea ref={qRef} className="ta" value={question} 
           onFocus={()=>activeInputRef.current="q"}
-          onChange={e=>{ setQuestion(e.target.value); qCover.onTyped(e.target.value); }}
+          onChange={e=>{ setQuestion(e.target.value); qCover.onTyped(e.target.value); qTrack.input(e.target.value); }}
+          onBlur={()=>qTrack.blur()}
           onKeyDown={onQuestionKeyDown}
           placeholder="বই দেখে প্রশ্ন টাইপ করো, তারপর Enter..." style={{minHeight:80}} tabIndex={1}/>
         <CoverOverlay covered={qCover.covered}/>
@@ -796,7 +799,8 @@ function SingleQuestionEntryPage({push}){
         <div style={{position:"relative"}}>
         <textarea ref={correctRef} className="ta" value={correct} 
           onFocus={()=>activeInputRef.current="correct"}
-          onChange={e=>{ setCorrect(e.target.value); aCover.onTyped(e.target.value); }}
+          onChange={e=>{ setCorrect(e.target.value); aCover.onTyped(e.target.value); aTrack.input(e.target.value); }}
+          onBlur={()=>aTrack.blur()}
           onKeyDown={onAnswerKeyDown}
           placeholder={isMCQ?"সঠিক উত্তরের টেক্সট, তারপর Enter...":"উত্তর লিখো, তারপর Enter..."} style={{minHeight:60}} tabIndex={2}/>
         <CoverOverlay covered={aCover.covered}/>
