@@ -17,6 +17,7 @@ import { subjectsForTags, topicsOfSubject } from "../../core/refFilter.js";
 import { TypeaheadCombo } from "./TypeaheadCombo.jsx";
 import { RichText } from "./RichText.jsx";
 import { useTypingCover, CoverOverlay, CoverToggle } from "./TypingCover.jsx";
+import { useTypingTrack } from "../../hooks/useTypingTrack.js";
 
 /* ── AI দিয়ে MCQ-এর ৩টা ভুল অপশন + ব্যাখ্যা বানানোর প্রম্পট (SingleQuestionEntryPage-এর
    নিজস্ব single-form-ও এটাই ব্যবহার করে, import করে — দুই জায়গায় আলাদা prompt না) ── */
@@ -458,10 +459,57 @@ function psMathConvert(run){
 const PS_MATH_TRIGGER=/[÷^_]|root/;
 const psMathConvertText=text=>String(text||"").replace(/\S+/g,tok=>PS_MATH_TRIGGER.test(tok)?psMathConvert(tok):tok);
 
+/* ── 🆕 টাইপ করার সাথে সাথেই রূপান্তর (স্পেসের অপেক্ষা নয়) ──
+   run = শেষ স্পেস/নতুন-লাইনের পর থেকে কার্সর পর্যন্ত কাঁচা লেখা, টাইপ-করা অক্ষরসহ। শুধু সেই প্যাটার্নই ধরা হয় যেটা এই অক্ষরেই সম্পূর্ণ হলো।
+   open=true → সংখ্যা দিয়ে শেষ (root7, x^2, x_1): পরের সংখ্যা ভেতরেই বাড়ে (root72 → √72); অন্য অক্ষর টাইপ করলে বাইরে বেরিয়ে যায়।
+   open=false → বন্ধনী/অক্ষর দিয়ে শেষ (root(a+b), x^(n+1), x^n): পরের অক্ষর সরাসরি বাইরে। Backspace দিলে কাঁচা লেখা ফিরে আসে। */
+const PS_BASE="[A-Za-z০-৯0-9\\u0980-\\u09FF)\\]>]";
+function psInstantTail(run){
+  let m;
+  m=/(^|[^A-Za-z])(root\(([^()]*)\))$/.exec(run);
+  if(m) return {start:m.index+m[1].length,raw:m[2],conv:"<sqrt>"+m[3]+"</sqrt>",open:false};
+  m=/(^|[^A-Za-z])(root([০-৯0-9]))$/.exec(run);
+  if(m) return {start:m.index+m[1].length,raw:m[2],conv:"<sqrt>"+m[3]+"</sqrt>",open:true};
+  m=new RegExp("("+PS_BASE+")\\^(?:\\(([^()]*)\\)|\\{([^{}]*)\\})$").exec(run);
+  if(m) return {start:m.index,raw:m[0],conv:m[1]+"<sup>"+(m[2]!==undefined?m[2]:m[3])+"</sup>",open:false};
+  m=new RegExp("("+PS_BASE+")\\^([-+]?[০-৯0-9])$").exec(run);
+  if(m) return {start:m.index,raw:m[0],conv:m[1]+"<sup>"+m[2]+"</sup>",open:true};
+  m=new RegExp("("+PS_BASE+")\\^([A-Za-z])$").exec(run);
+  if(m) return {start:m.index,raw:m[0],conv:m[1]+"<sup>"+m[2]+"</sup>",open:false};
+  m=/(^|[^A-Za-z])([A-Za-z])_([০-৯0-9])$/.exec(run);
+  if(m) return {start:m.index+m[1].length,raw:m[0].slice(m[1].length),conv:m[2]+"<sub>"+m[3]+"</sub>",open:true};
+  m=/(^|[^A-Za-z])([A-Za-z])_([a-z])$/.exec(run);
+  if(m) return {start:m.index+m[1].length,raw:m[0].slice(m[1].length),conv:m[2]+"<sub>"+m[3]+"</sub>",open:false};
+  return null;
+}
+const psCloseTagLen=conv=>{ const m=/<\/(sup|sub|sqrt)>$/.exec(conv); return m?m[0].length:0; };
+// কার্সর কি এমন একটা স্বয়ংক্রিয়-এলিমেন্টের শেষে, যেটা এইমাত্র রূপান্তরে তৈরি (data-auto)?
+function psAutoOpen(h){
+  const sel=window.getSelection(); if(!sel||!sel.rangeCount||!sel.isCollapsed) return null;
+  let n=sel.anchorNode; n=n&&(n.nodeType===1?n:n.parentNode);
+  const el=n&&n.closest?n.closest("[data-auto]"):null;
+  if(!el||!h.contains(el)) return null;
+  const r=sel.getRangeAt(0), tail=document.createRange();
+  try{ tail.setStart(r.endContainer,r.endOffset); tail.setEnd(el,el.childNodes.length); }catch(_){ return null; }
+  if(tail.toString()!=="") return null;
+  return {el,mode:el.getAttribute("data-auto")};
+}
+const psClearAuto=h=>{ if(h) h.querySelectorAll("[data-auto]").forEach(e=>e.removeAttribute("data-auto")); };
+// অক্ষর/স্পেস/নতুন-লাইন এলিমেন্টের বাইরে বসানো (ch==="" হলে শুধু কার্সর বাইরে নেওয়া)
+function psExitAuto(h,el,ch){
+  el.removeAttribute("data-auto");
+  const tn=document.createTextNode(ch===" "?"\u00a0":ch);
+  el.parentNode.insertBefore(tn,el.nextSibling);
+  const r=document.createRange(); r.setStart(tn,tn.nodeValue.length); r.collapse(true);
+  const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  if(ch!=="") h.dispatchEvent(new Event("input",{bubbles:true}));
+}
+
 // ── রিচ-টেক্সট ঘর ──
 function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
   // 🆕 cover=true (শুধু প্রশ্ন ও উত্তর ঘর): টাইপ শুরুতে কালো আবরণ, ৩ সেকেন্ড থামলে সরে, সংশোধনে ফেরে না
   const tc=useTypingCover(value);
+  const tk=useTypingTrack(value);   // 🆕 টাইপিং ট্র্যাকার — শুধু cover=true (প্রশ্ন/উত্তর) ঘরে সক্রিয়
   const hostRef=useRef(null), lastAuto=useRef(null), skipN=useRef(0), onChangeRef=useRef(onChange), mathRef=useRef(!!math);
   onChangeRef.current=onChange; mathRef.current=!!math;
   const[hasSel,setHasSel]=useState(false);
@@ -513,6 +561,46 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
       const isNL=(it==="insertParagraph"||it==="insertLineBreak");
       if(mathRef.current&&!comp){
         const c=psCaret(h);
+        // 🆕 (ক) কার্সর এইমাত্র-তৈরি √ / ঘাত / নিচের-অক্ষর এলিমেন্টের শেষে: সংখ্যা হলে ভেতরেই বাড়বে, নইলে বাইরে বেরিয়ে অক্ষর বসবে
+        if((it==="insertText"&&ev.data)||isNL){
+          const ao=psAutoOpen(h);
+          if(ao){
+            if(it==="insertText"&&ao.mode==="num"&&/^[০-৯0-9]$/.test(ev.data)){
+              const la=lastAuto.current;
+              if(la&&la.instant){ la.original+=ev.data; la.repl=la.repl.replace(/(<\/(?:sup|sub|sqrt)>)$/,ev.data+"$1"); la.caret+=1; }
+              skipN.current=1; return;                       // ব্রাউজারের স্বাভাবিক বসানো — ভেতরেই
+            }
+            ev.preventDefault();
+            if(isNL){ psExitAuto(h,ao.el,""); document.execCommand("insertLineBreak"); }
+            else psExitAuto(h,ao.el,ev.data);
+            return;
+          }
+        }
+        // 🆕 (খ) টাইপ করা অক্ষরেই প্যাটার্ন সম্পূর্ণ হলে সাথে সাথে রূপান্তর (root7, root(a+b), x^2, x^(n+1), x^n, x_1, x_n, অতএব)
+        if(it==="insertText"&&ev.data&&ev.data!==" "&&ev.data!=="*"&&ev.data!=="/"&&c&&c.s===c.e){
+          const ch=ev.data, v0=psSerialize(h), before=v0.slice(0,c.s)+ch;
+          const rs=Math.max(before.lastIndexOf(" "),before.lastIndexOf("\n"))+1, run=before.slice(rs);
+          if(ch==="ব"&&/(^|[\s(,;:।])অতএব$/.test(before)){
+            ev.preventDefault();
+            const start=before.length-"অতএব".length;
+            psSetCaret(h,start,c.s);
+            lastAuto.current={start,repl:"∴",original:"অতএব",tail:"",caret:start+1}; skipN.current=1;
+            document.execCommand("insertText",false,"∴"); return;
+          }
+          const t=psInstantTail(run);
+          if(t){
+            ev.preventDefault();
+            const start=rs+t.start;
+            psSetCaret(h,start,c.s);
+            lastAuto.current={start,repl:t.conv,original:t.raw,tail:"",caret:start+t.conv.length-psCloseTagLen(t.conv),instant:true}; skipN.current=1;
+            document.execCommand("insertHTML",false,psToHTML(t.conv));
+            psSetCaret(h,start+t.conv.length-psCloseTagLen(t.conv));          // কার্সর এলিমেন্টের ভেতরে শেষে
+            const sel=window.getSelection(); let n=sel.anchorNode; n=n&&(n.nodeType===1?n:n.parentNode);
+            const el=n&&n.closest?n.closest("sup,sub,.ps-sqrt"):null;
+            if(el&&h.contains(el)) el.setAttribute("data-auto",t.open?"num":"closed");
+            return;
+          }
+        }
         if(it==="insertText"&&(ev.data==="*"||ev.data==="/")&&c&&c.s===c.e){
           ev.preventDefault();
           const repl=ev.data==="*"?"×":"÷";
@@ -599,14 +687,16 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
   };
   const handleInput=()=>{
     const h=hostRef.current; if(!h)return;
+    const wasAuto=skipN.current>0;                    // এই input অটো-রূপান্তরের ফল কিনা (ট্র্যাকারে টাইপ ধরা হয় না)
     if(skipN.current>0) skipN.current--; else lastAuto.current=null;
     const nv=psSerialize(h);
-    if(cover) tc.onTyped(nv);
+    if(cover){ tc.onTyped(nv); tk.input(nv,{auto:wasAuto}); }
     if(nv!==String(value||"")) emit(nv);
   };
   const handleBlur=()=>{
     setFocused(false); setHasSel(false);
-    const h=hostRef.current; if(!h||!mathRef.current)return;
+    if(cover) tk.blur();
+    const h=hostRef.current; psClearAuto(h); if(!h||!mathRef.current)return;
     const cur=psSerialize(h), nv=psMathConvertText(cur);
     if(nv!==cur){ h.innerHTML=psToHTML(nv); emit(nv); }
   };
@@ -616,7 +706,7 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
     text.split("\n").forEach((line,i)=>{ if(i>0)document.execCommand("insertLineBreak"); if(line)document.execCommand("insertText",false,line); });
   };
   const keyDown=e=>{
-    if(["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","Tab"].includes(e.key))lastAuto.current=null;
+    if(["ArrowLeft","ArrowRight","ArrowUp","ArrowDown","Home","End","Tab"].includes(e.key)){ lastAuto.current=null; psClearAuto(hostRef.current); }
     if(onKeyDown)onKeyDown(e);
   };
   return (
@@ -638,7 +728,7 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
       )}
       <div ref={setRef} className={"ps-in ps-rt"+(className?" "+className:"")} contentEditable suppressContentEditableWarning spellCheck={false}
         onInput={handleInput} onKeyDown={keyDown} onPaste={handlePaste}
-        onFocus={()=>setFocused(true)} onBlur={handleBlur} onMouseDown={()=>{lastAuto.current=null;}}/>
+        onFocus={()=>setFocused(true)} onBlur={handleBlur} onMouseDown={()=>{lastAuto.current=null; psClearAuto(hostRef.current);}}/>
       {cover&&<CoverOverlay covered={tc.covered}/>}
     </div>
   );
@@ -1884,6 +1974,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
           </div>
         </div>
       )}
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:6}}><CoverToggle color={PC.muted}/></div>
       {/* ── পদ/প্রতিষ্ঠান/সাল — একদম শুরুতে, ৪টা ট্যাবের সবার উপরে (session-wide,
           একবার দিলে বাংলা/English/Math/GK — এই সেশনের সব প্রশ্নেই একই Exam Appearance
           যাবে, কারণ QBank মানেই বিগত পরীক্ষা, এই ৩টা ছাড়া entry অসম্পূর্ণ) ── */}
@@ -1977,7 +2068,6 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         {/* 🆕 Save as Draft — একাধিক নামসহ খসড়া, Post+Institution+সাল দিয়ে
             হেডলাইন করা, সবচেয়ে নতুনটা সবার উপরে। উপরের অটো-ড্রাফট থেকে এটা আলাদা:
             এটা ম্যানুয়াল, একাধিক এন্ট্রি জমা রাখে, ইচ্ছামতো পরে ফিরে লোড করা যায়। ── */}
-        <div style={{display:"flex",justifyContent:"flex-end",marginBottom:6}}><CoverToggle color={PC.muted}/></div>
         <div style={{display:"flex",gap:8,marginBottom:8}}>
           <button type="button" onClick={saveNamedDraft}
             style={{flex:1,justifyContent:"center",padding:"9px 0",borderRadius:9,fontSize:11.5,fontWeight:700,
