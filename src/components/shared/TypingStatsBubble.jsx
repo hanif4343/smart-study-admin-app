@@ -1,9 +1,10 @@
 /* ══════════ ভাসমান টাইপিং ট্র্যাকার (সব পেজে) ══════════
    ছোট বাবল: আজকের WPM ও নির্ভুলতা। ট্যাপ করলে খোলে: বাংলা/ইংরেজি আলাদা — WPM, লক্ষ্য-বার, নির্ভুলতা, শব্দ, সংশোধিত অক্ষর, ৭ দিনের গ্রাফ, সাম্প্রতিক ভুল।
    বাবল টেনে সরানো যায় (জায়গা মনে থাকে)। */
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { C, tint } from "../../core/config.js";
 import { useTypingStats, todayRec, lastDays, wpmOf, accOf, resetToday } from "../../core/typingStats.js";
+import { isSpellEnabled, setSpellEnabled, subscribeSpell } from "../../core/spell/index.js";
 
 const GOAL = 28;
 const POS_KEY = "typing_bubble_pos_v1";
@@ -18,6 +19,7 @@ export function TypingStatsBubble() {
   const [confirmReset, setConfirmReset] = useState(false);
   const [pos, setPos] = useState(() => { try { const p = JSON.parse(localStorage.getItem(POS_KEY) || "null"); if (p) return p; } catch {} return { right: 12, bottom: 96 }; });
   const drag = useRef(null);
+  const spellOn = useSyncExternalStore(subscribeSpell, isSpellEnabled);
 
   const t = todayRec();
   const main = t.bn.chars > t.en.chars ? "bn" : "en";           // বাবলে যে ভাষায় বেশি টাইপ হয়েছে
@@ -99,6 +101,9 @@ export function TypingStatsBubble() {
               </div>)}
 
             <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.6, marginBottom: 8 }}>ভুল ধরা হয় এভাবে: টাইপ থামার ৩ সেকেন্ড পর আর ঘর ছাড়ার সময় লেখার "ছবি" তোলা হয়; পরের ছবিতে যে শব্দ বদলেছে বা মুছেছে সেটা ভুল। ৩ সেকেন্ডের মধ্যে সাথে সাথে শুধরানো ভুল "সংশোধিত অক্ষর"-এ গোনা হয়। ৫ অক্ষর = ১ শব্দ।</div>
+            <div onClick={() => setSpellEnabled(!spellOn)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 11px", marginBottom: 8, border: `1px solid ${spellOn ? C.success : C.border}`, borderRadius: 10, cursor: "pointer", fontSize: 12.5 }}>
+              <span>🔤 ইংরেজি বানান পরীক্ষা (লাল দাগ + সাজেশন)</span><b style={{ color: spellOn ? C.success : C.muted }}>{spellOn ? "চালু" : "বন্ধ"}</b>
+            </div>
             <button className="btn" style={{ width: "100%", justifyContent: "center" }} onClick={() => { if (confirmReset) { resetToday(); setConfirmReset(false); } else { setConfirmReset(true); setTimeout(() => setConfirmReset(false), 3000); } }}>{confirmReset ? "⚠️ আবার চাপলে আজকের হিসাব মুছবে" : "আজকের হিসাব রিসেট"}</button>
           </div>
         </div>
