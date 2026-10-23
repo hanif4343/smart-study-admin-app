@@ -23,6 +23,7 @@ import { useToasts } from "./hooks/useToasts.js";
 
 import { Toasts } from "./components/shared/Toasts.jsx";
 import { TypingStatsBubble } from "./components/shared/TypingStatsBubble.jsx";
+import { startSpellCheck } from "./core/spell/index.js";
 import { BgTaskIndicator } from "./components/shared/BgTaskIndicator.jsx";
 import { LauncherGrid } from "./components/shared/LauncherGrid.jsx";
 
@@ -136,6 +137,7 @@ export default function App(){
   },[]);
   const[page,setPage]=useState("dashboard");
   const[toasts,push]=useToasts();
+  useEffect(()=>{ startSpellCheck(); },[]);   // 🆕 ইংরেজি বানান-পরীক্ষা (লাল ঢেউ-দাগ + সাজেশন) — সব টেক্সট-ঘরে
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
   const[bulkPrefill,setBulkPrefill]=useState(null);
