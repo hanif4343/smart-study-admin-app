@@ -22,6 +22,7 @@ import { css } from "./styles/css.js";
 import { useToasts } from "./hooks/useToasts.js";
 
 import { Toasts } from "./components/shared/Toasts.jsx";
+import { TypingStatsBubble } from "./components/shared/TypingStatsBubble.jsx";
 import { BgTaskIndicator } from "./components/shared/BgTaskIndicator.jsx";
 import { LauncherGrid } from "./components/shared/LauncherGrid.jsx";
 
@@ -538,6 +539,7 @@ export default function App(){
         })}
       </nav>
       <Toasts t={toasts}/>
+      <TypingStatsBubble/>
       <BgTaskIndicator/>
       {exitConfirm&&(
         <div style={{
