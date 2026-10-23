@@ -16,6 +16,7 @@ import { resolveOrCreateReference, norm } from "../../core/referenceHelpers.js";
 import { subjectsForTags, topicsOfSubject } from "../../core/refFilter.js";
 import { TypeaheadCombo } from "./TypeaheadCombo.jsx";
 import { RichText } from "./RichText.jsx";
+import { useTypingCover, CoverOverlay, CoverToggle } from "./TypingCover.jsx";
 
 /* ── AI দিয়ে MCQ-এর ৩টা ভুল অপশন + ব্যাখ্যা বানানোর প্রম্পট (SingleQuestionEntryPage-এর
    নিজস্ব single-form-ও এটাই ব্যবহার করে, import করে — দুই জায়গায় আলাদা prompt না) ── */
@@ -458,7 +459,9 @@ const PS_MATH_TRIGGER=/[÷^_]|root/;
 const psMathConvertText=text=>String(text||"").replace(/\S+/g,tok=>PS_MATH_TRIGGER.test(tok)?psMathConvert(tok):tok);
 
 // ── রিচ-টেক্সট ঘর ──
-function PsTA({value,onChange,onKeyDown,taRef,className,math}){
+function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
+  // 🆕 cover=true (শুধু প্রশ্ন ও উত্তর ঘর): টাইপ শুরুতে কালো আবরণ, ৩ সেকেন্ড থামলে সরে, সংশোধনে ফেরে না
+  const tc=useTypingCover(value);
   const hostRef=useRef(null), lastAuto=useRef(null), skipN=useRef(0), onChangeRef=useRef(onChange), mathRef=useRef(!!math);
   onChangeRef.current=onChange; mathRef.current=!!math;
   const[hasSel,setHasSel]=useState(false);
@@ -598,6 +601,7 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
     const h=hostRef.current; if(!h)return;
     if(skipN.current>0) skipN.current--; else lastAuto.current=null;
     const nv=psSerialize(h);
+    if(cover) tc.onTyped(nv);
     if(nv!==String(value||"")) emit(nv);
   };
   const handleBlur=()=>{
@@ -616,7 +620,7 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
     if(onKeyDown)onKeyDown(e);
   };
   return (
-    <div className="ps-w">
+    <div className="ps-w" style={cover?{position:"relative"}:undefined}>
       {hasSel&&(
         <div className="ps-tb" onMouseDown={e=>e.preventDefault()}>
           <button type="button" title="বোল্ড (Ctrl+B)" onClick={()=>exec("bold")}><b>B</b></button>
@@ -635,6 +639,7 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math}){
       <div ref={setRef} className={"ps-in ps-rt"+(className?" "+className:"")} contentEditable suppressContentEditableWarning spellCheck={false}
         onInput={handleInput} onKeyDown={keyDown} onPaste={handlePaste}
         onFocus={()=>setFocused(true)} onBlur={handleBlur} onMouseDown={()=>{lastAuto.current=null;}}/>
+      {cover&&<CoverOverlay covered={tc.covered}/>}
     </div>
   );
 }
@@ -1490,11 +1495,11 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     const title=card.heading||tpl.heading||(isEnTab?"(heading)":"(হেডিং লিখো)");
 
     const mkQ=(it,idx,isFill,cls)=>(
-      <PsTA className={cls} taRef={el=>{textareaRefs.current[it.id]=el;}} value={it.question}
+      <PsTA cover className={cls} taRef={el=>{textareaRefs.current[it.id]=el;}} value={it.question}
         onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}/>
     );
     const mkA=(it,idx,cls)=>(
-      <PsTA className={cls} taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
+      <PsTA cover className={cls} taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
         onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}/>
     );
 
@@ -1518,7 +1523,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             {card.items.map((it,idx)=>(
               <div className="ps-ch" key={it.id}>
                 <b>({RO[idx]||idx+1})</b>
-                <PsTA taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
+                <PsTA cover taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
                   onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value,question:e.target.value.trim()?"("+(RO[idx]||idx+1)+")":""})}/>
                 {card.items.length>1&&<button type="button" tabIndex={-1} className="ps-x" onClick={()=>removeSubItem(activeTab,card.id,it.id)}>❌</button>}
               </div>
@@ -1700,7 +1705,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       <div key={card.id} className="ps-sheet">
         <div className="ps-row st" style={{marginLeft:0}}>
           <span className="ps-lab">{psLab(ci)}</span>
-          <PsTA math={isMath} className="q" taRef={el=>{flatQRefs.current[card.id]=el;}} value={card.question}
+          <PsTA cover math={isMath} className="q" taRef={el=>{flatQRefs.current[card.id]=el;}} value={card.question}
             onChange={e=>updateCard(activeTab,card.id,{question:e.target.value})}/>
           <span className="ps-ac">
             <button type="button" tabIndex={-1} className="ps-mini" title="Written ⇄ MCQ" onClick={()=>updateCard(activeTab,card.id,{qtype:mcq?"written":"mcq"})}>{mcq?"❓":"✍️"}</button>
@@ -1714,7 +1719,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             </div>
           )}
           <div className="ps-l2"><span>উত্তর<b style={{color:"#c0392b"}}>*</b>:</span>
-            <PsTA math={isMath} taRef={el=>{flatARefs.current[card.id]=el;}} value={card.answer}
+            <PsTA cover math={isMath} taRef={el=>{flatARefs.current[card.id]=el;}} value={card.answer}
               onChange={e=>updateCard(activeTab,card.id,{answer:e.target.value})}/>
             {mcq&&(
               <button type="button" tabIndex={-1} className="ps-mini" title="AI দিয়ে ৩টা ভুল অপশন বানাও" disabled={mcqGeneratingId===card.id}
@@ -1972,6 +1977,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         {/* 🆕 Save as Draft — একাধিক নামসহ খসড়া, Post+Institution+সাল দিয়ে
             হেডলাইন করা, সবচেয়ে নতুনটা সবার উপরে। উপরের অটো-ড্রাফট থেকে এটা আলাদা:
             এটা ম্যানুয়াল, একাধিক এন্ট্রি জমা রাখে, ইচ্ছামতো পরে ফিরে লোড করা যায়। ── */}
+        <div style={{display:"flex",justifyContent:"flex-end",marginBottom:6}}><CoverToggle color={PC.muted}/></div>
         <div style={{display:"flex",gap:8,marginBottom:8}}>
           <button type="button" onClick={saveNamedDraft}
             style={{flex:1,justifyContent:"center",padding:"9px 0",borderRadius:9,fontSize:11.5,fontWeight:700,
