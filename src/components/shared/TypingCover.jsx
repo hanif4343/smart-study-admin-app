@@ -58,7 +58,7 @@ export function useTypingCover(value, delay = COVER_DELAY_MS) {
 
 export function CoverOverlay({ covered, radius = 8 }) {
   return (
-    <div aria-hidden="true" style={{ position: "absolute", inset: 0, background: "#000", borderRadius: radius, pointerEvents: "none", zIndex: 5,
+    <div aria-hidden="true" data-typing-cover={covered ? "on" : "off"} style={{ position: "absolute", inset: 0, background: "#000", borderRadius: radius, pointerEvents: "none", zIndex: 5,
       opacity: covered ? 1 : 0, transition: "opacity .12s", visibility: covered ? "visible" : "hidden" }} />
   );
 }
