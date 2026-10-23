@@ -25,6 +25,8 @@ import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.j
 import { InlineEditModal } from "./InlineEditModal.jsx";
 import { ReformatReviewModal } from "./ReformatReviewModal.jsx";
 import { AppearanceQuickModal } from "./AppearanceQuickModal.jsx";
+import { WrittenPaperView } from "./WrittenPaperView.jsx";
+import { isWrittenQ } from "../../core/writtenPaper.js";
 import { useModalBack } from "../../hooks/useModalBack.js";
 import { RichText, clipRich } from "../../components/shared/RichText.jsx";
 
@@ -132,6 +134,7 @@ function BrowseTab({push,tick}){
   const[bulkDelKind,setBulkDelKind]=useState("duplicate"); // "duplicate" | "fuzzy" | "suspicious" | "group"
   const[bulkDelLoading,setBulkDelLoading]=useState(false);
   const[page,setPage]=useState(0);
+  const[paperView,setPaperView]=useState(false); // 📄 QBank Written-কে প্রশ্নপত্রের ছাঁচে দেখা
   const[expandedKeys,setExpandedKeys]=useState(()=>new Set()); // কোন কোন কার্ড "বিস্তারিত" খোলা আছে
   const[selectMode,setSelectMode]=useState(false); // রিফরম্যাট করার জন্য একাধিক এন্ট্রি বাছাই মোড
   const[selectedKeys,setSelectedKeys]=useState(()=>new Set());
@@ -544,7 +547,10 @@ function BrowseTab({push,tick}){
         </button>
         </>)}
         {sheet==="QBank" && (
-          <div style={{marginLeft:"auto",fontSize:10,color:C.muted,fontStyle:"italic"}}>ℹ️ QBank-এ duplicate চেক বন্ধ (একাধিক পরীক্ষায় একই প্রশ্ন স্বাভাবিক)</div>
+          <button onClick={()=>setPaperView(v=>!v)}
+            style={{marginLeft:"auto",fontSize:11,padding:"4px 11px",borderRadius:20,border:`1px solid ${paperView?C.accent:C.border}`,background:paperView?tint(C.accent,"22"):"transparent",color:paperView?C.accent:C.muted,fontWeight:700,cursor:"pointer"}}>
+            📄 পেপার ভিউ
+          </button>
         )}
         <button
           onClick={()=>setViewMode(v=>v==="suspicious"?"all":"suspicious")}
@@ -784,7 +790,10 @@ function BrowseTab({push,tick}){
         <span>{loading?"⏳":`${filtered.length} / ${allQ.length}টি`}</span>
         {totalPages>1&&<span style={{color:C.accent}}>{page+1}/{totalPages}</span>}
       </div>
-      {loading&&!raw?[...Array(4)].map((_,i)=><div key={i} className="sk"/>):
+      {sheet==="QBank"&&paperView&&!(loading&&!raw)?(
+        <WrittenPaperView totalCount={filtered.length} questions={filtered.filter(isWrittenQ)} appearances={allAppearances} postNameOf={postNameOf} instNameOf={instNameOf}/>
+      ):
+      loading&&!raw?[...Array(4)].map((_,i)=><div key={i} className="sk"/>):
        filtered.length===0?<div className="empty"><div className="ei">📋</div><p>{!gasSecret?"GAS Secret Key দাও":"কিছু নেই"}</p></div>:
        pageSlice.map((q,i)=>{
         const qid=(q.ID||q.id||"").toString();
@@ -901,7 +910,7 @@ function BrowseTab({push,tick}){
         );
        })
       }
-      {totalPages>1&&(
+      {!(sheet==="QBank"&&paperView)&&totalPages>1&&(
         <div style={{display:"flex",gap:6,justifyContent:"center",marginTop:8}}>
           <button className="btn bg" disabled={page===0} onClick={()=>setPage(p=>p-1)}>← আগে</button>
           <span style={{padding:"7px 12px",fontSize:11,color:C.muted}}>{page+1} / {totalPages}</span>
