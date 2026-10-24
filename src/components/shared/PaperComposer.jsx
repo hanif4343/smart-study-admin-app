@@ -18,6 +18,7 @@ import { TypeaheadCombo } from "./TypeaheadCombo.jsx";
 import { RichText } from "./RichText.jsx";
 import { useTypingCover, CoverOverlay, CoverToggle } from "./TypingCover.jsx";
 import { useTypingTrack } from "../../hooks/useTypingTrack.js";
+import { autoTopicFor, loadRules } from "../../core/autoTopic.js";
 
 /* ── AI দিয়ে MCQ-এর ৩টা ভুল অপশন + ব্যাখ্যা বানানোর প্রম্পট (SingleQuestionEntryPage-এর
    নিজস্ব single-form-ও এটাই ব্যবহার করে, import করে — দুই জায়গায় আলাদা prompt না) ── */
@@ -1524,6 +1525,39 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     });
   },[refData,paper]);
 
+  /* 🆕 Math / GK (Written) — Topic Tag-এর রুল দিয়ে প্রশ্ন+উত্তর দেখে Topic (আর Subject) নিজে বেছে নেয়। ভুল হলে হাতে বদলালে আর কখনো ওভাররাইট করে না।
+     রুল: tt_getRules (৫ মিনিট ক্যাশ), ইঞ্জিন: AutoClassify.gs-এর JS-পোর্ট (core/autoTopic.js)। মিল না থাকলে/দুই টপিক সমান-সমান হলে কিছু বসায় না। */
+  const[acRules,setAcRules]=useState([]);
+  useEffect(()=>{
+    if(!gasSecret||!(refData?.topics||[]).length)return;
+    let dead=false; loadRules(gasSecret,refData).then(r=>{ if(!dead)setAcRules(r); });
+    return ()=>{ dead=true; };
+  },[gasSecret,refData]);
+  useEffect(()=>{
+    if(!acRules.length||!(refData?.subjects||[]).length)return;
+    const tm=setTimeout(()=>{
+      const strip=t=>String(t||"").replace(/<br\s*\/?>/gi," ").replace(/<[^>]*>/g,"").replace(/&nbsp;/g," ");
+      const otherNames=new Set(PAPER_TABS.filter(t=>t.key!=="gk").flatMap(t=>(t.subjectChoices||[]).map(c=>nzTopic(c.name))));
+      const idsOf=names=>subjectOptions.filter(o=>names.some(n=>nzTopic(n)===nzTopic(o.name))).map(o=>o.id);
+      const mathIds=idsOf((PAPER_TABS.find(t=>t.key==="math")?.subjectChoices||[]).map(c=>c.name));
+      const gkIds=subjectOptions.filter(o=>!otherNames.has(nzTopic(o.name))).map(o=>o.id);
+      ["math","gk"].forEach(tab=>{
+        (paper[tab]||[]).forEach(card=>{
+          if(card.topicManual) return;
+          if(((card.topicSel&&card.topicSel.name)||"").trim()&&!card.topicAuto) return;       // হাতে/ড্রাফট/OCR থেকে আসা Topic — ছোঁয়া হয় না
+          const q=strip(card.question).trim(), a=strip(card.answer).trim(); if(!q) return;
+          const sig=q+"\u0001"+a; if(card.topicAutoSig===sig) return;                 // লেখা বদলায়নি → আবার চেষ্টা নয়
+          const pickedSubj=(!card.subjAuto&&card.subjectSel&&card.subjectSel.id)?[card.subjectSel.id]:null;   // ইউজার Subject বেছে থাকলে সেটার ভেতরেই
+          const hit=autoTopicFor(acRules,{question:q,answer:a},pickedSubj||(tab==="math"?mathIds:gkIds));
+          if(hit) updateCard(tab,card.id,{topicSel:{id:hit.topic_id,name:hit.topic_name},subjectSel:{id:hit.subject_id,name:hit.subject_name},topicAuto:true,subjAuto:!pickedSubj,topicAutoSig:sig});
+          else if(card.topicAuto) updateCard(tab,card.id,{topicSel:{id:"",name:""},...(card.subjAuto?{subjectSel:{id:"",name:""}}:{}),topicAuto:false,subjAuto:false,topicAutoSig:sig});   // লেখা বদলে রুল আর মেলে না → আগের অটো-বাছাই সরাও
+          else updateCard(tab,card.id,{topicAutoSig:sig});
+        });
+      });
+    },900);
+    return ()=>clearTimeout(tm);
+  },[paper,acRules,refData]);
+
   /* ── Tab / Shift+Tab নেভিগেশন (সব লেআউটে একই নিয়ম) ──
      যেকোনো লেখার ঘরে Tab চাপলে স্ক্রিনের ক্রমে পরের ঘরে যায়: প্রশ্ন → (বাক্য/অপশন) → উত্তর → পরের প্রশ্ন;
      টেবিলে বাঁ-ঘর → ডান-ঘর → পরের সারি; গণিতে প্রশ্ন → সমাধান → উত্তর → পরের প্রশ্ন। Shift+Tab উল্টো দিকে।
@@ -1852,7 +1886,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                     const on=nzTopic(curName)===nzTopic(rs.name);
                     return (
                       <button type="button" key={c.key}
-                        onClick={()=>{ if(on)return; updateCard(activeTab,card.id,{subjectSel:rs,topicSel:{id:"",name:""}}); }}
+                        onClick={()=>{ if(on)return; updateCard(activeTab,card.id,{subjectSel:rs,topicSel:{id:"",name:""},subjAuto:false,topicAuto:false,topicAutoSig:""}); }}
                         style={{flex:many?"1 1 calc(50% - 6px)":1,padding:"8px 4px",borderRadius:8,border:`1.5px solid ${on?PC.ink:PC.border}`,background:on?PC.ink:"#fff",color:on?"#fff":PC.ink,fontWeight:800,fontSize:13,cursor:"pointer"}}>{c.short}</button>
                     );
                   })}
@@ -1868,7 +1902,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                     <TypeaheadCombo
                       options={moreOptions}
                       value={custom?card.subjectSel:{id:"",name:""}}
-                      onChange={sel=>updateCard(activeTab,card.id,{subjectSel:sel,topicSel:{id:"",name:""}})}
+                      onChange={sel=>updateCard(activeTab,card.id,{subjectSel:sel,topicSel:{id:"",name:""},subjAuto:false,topicAuto:false,topicAutoSig:""})}
                       placeholder="অন্য Subject লিখো বা বেছে নাও..."
                       newLabel={`🆕 "${((custom?card.subjectSel.name:"")||"").trim()}" নতুন Subject হিসেবে যোগ হবে`}
                       inputStyle={pcField} lightTheme
@@ -1880,11 +1914,11 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
           })()}
           <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
                   ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
-                <label>📌 Topic</label>
+                <label>📌 Topic{card.topicAuto&&<span style={{marginLeft:8,fontSize:10.5,fontWeight:800,color:"#8A6D1D",background:"#FFF3C4",borderRadius:10,padding:"1px 8px"}}>🤖 অটো — ভুল হলে বদলাও</span>}</label>
                 <TypeaheadCombo
                   options={topicOptionsForShown((tabDef.gkStyle||tabDef.mathStyle)?(((card.subjectSel&&card.subjectSel.id)||subjectOptions.find(s=>s.name===(card.subjectSel&&card.subjectSel.name))?.id)):subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
                   value={card.topicSel}
-                  onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel})}
+                  onChange={sel=>updateCard(activeTab,card.id,{topicSel:sel,topicAuto:false,topicManual:true})}
                   placeholder={(tabDef.gkStyle||tabDef.mathStyle)&&!((card.subjectSel&&card.subjectSel.name)||"").trim()?"আগে Subject বেছে নাও":"Topic লিখো বা বেছে নাও..."}
                   newLabel={`🆕 "${card.topicSel.name.trim()}" নতুন Topic হিসেবে যোগ হবে`}
                   inputStyle={pcField} lightTheme
