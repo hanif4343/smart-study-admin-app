@@ -1,13 +1,16 @@
 /* ══════════ LOGIN SCREEN ══════════ */
 import React, { useState, useEffect } from "react";
 import { _LC } from "../core/logger.js";
-import { signInWithEmail } from "../core/auth.js";
+import { signInWithEmail, sendPasswordReset } from "../core/auth.js";
 
 function LoginScreen({onLogin}){
   const[email,setEmail]=useState(localStorage.getItem("fb_email")||"");
   const[pass,setPass]=useState("");
   const[loading,setLoading]=useState(false);
   const[err,setErr]=useState("");
+  const[msg,setMsg]=useState("");
+  const[info,setInfo]=useState("");
+  const[resetting,setResetting]=useState(false);
 
   // Auto-login if saved credentials exist
   useEffect(()=>{
@@ -37,6 +40,46 @@ function LoginScreen({onLogin}){
     }
   };
 
+  const resetErrMsg=(m)=>{
+    if(m==="EMAIL_NOT_FOUND")return "এই Email দিয়ে কোনো অ্যাকাউন্ট নেই";
+    if(m==="INVALID_EMAIL")return "Email সঠিক নয়";
+    if(m==="NETWORK_ERROR")return "ইন্টারনেট সংযোগ নেই, আবার চেষ্টা করুন";
+    if(String(m).startsWith("TOO_MANY_ATTEMPTS"))return "অনেকবার চেষ্টা হয়েছে, কিছুক্ষণ পরে আবার করুন";
+    return m||"Reset ব্যর্থ";
+  };
+
+  const doReset=async()=>{
+    const em=email.trim();
+    if(!em){setInfo("");setErr("উপরে আপনার Email লিখুন, তারপর 'পাসওয়ার্ড ভুলে গেছেন?' চাপুন");return;}
+    setResetting(true);setErr("");setInfo("");
+    try{
+      await sendPasswordReset(em);
+      setInfo(`✅ ${em} এ Password Reset লিংক পাঠানো হয়েছে। Inbox (ও Spam) চেক করে নতুন পাসওয়ার্ড দিন, তারপর লগইন করুন।`);
+    }catch(e){
+      setErr(resetErrMsg(e.message));
+    }
+    setResetting(false);
+  };
+
+  const doForgot=async()=>{
+    const em=email.trim();
+    setMsg("");
+    if(!em){setErr("আগে উপরে আপনার Email লিখুন, তারপর 'Password ভুলে গেছেন?' চাপুন");return;}
+    setLoading(true);setErr("");
+    try{
+      await sendPasswordReset(em);
+      setMsg(`✅ ${em}-এ Password reset লিংক পাঠানো হয়েছে। Inbox (আর Spam) চেক করে নতুন password সেট করুন, তারপর লগইন করুন।`);
+    }catch(e){
+      const m=e.message||"";
+      if(m.includes("EMAIL_NOT_FOUND"))setErr("এই Email-এ কোনো অ্যাকাউন্ট নেই");
+      else if(m.includes("INVALID_EMAIL"))setErr("Email ঠিক নেই, আবার দেখুন");
+      else if(m.includes("TOO_MANY_ATTEMPTS"))setErr("অনেকবার চেষ্টা হয়েছে, কিছুক্ষণ পর আবার করুন");
+      else if(m==="NETWORK_ERROR")setErr("ইন্টারনেট সংযোগ চেক করুন");
+      else setErr(m||"Reset ব্যর্থ");
+    }
+    setLoading(false);
+  };
+
   return(
     <div style={{minHeight:"100dvh",display:"flex",alignItems:"center",justifyContent:"center",background:"#06080f",padding:24}}>
       <div style={{width:"100%",maxWidth:360}}>
@@ -64,11 +107,24 @@ function LoginScreen({onLogin}){
               onKeyDown={e=>e.key==="Enter"&&doLogin()}
             />
           </div>
+          {info&&<div style={{background:"#22c55e18",border:"1px solid #22c55e30",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#22c55e",marginBottom:12,fontWeight:600,lineHeight:1.5}}>{info}</div>}
+          <div style={{textAlign:"right",marginTop:-8,marginBottom:14}}>
+            <button type="button" onClick={doForgot} disabled={loading}
+              style={{background:"none",border:"none",color:"#60a5fa",fontSize:12,fontWeight:600,cursor:"pointer",padding:0,fontFamily:"inherit"}}
+            >Password ভুলে গেছেন?</button>
+          </div>
+          {msg&&<div style={{background:"#22c55e18",border:"1px solid #22c55e30",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#22c55e",marginBottom:12,fontWeight:600,lineHeight:1.5}}>{msg}</div>}
           {err&&<div style={{background:"#ef444418",border:"1px solid #ef444430",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#ef4444",marginBottom:12,fontWeight:600}}>{err}</div>}
           <button
             onClick={doLogin} disabled={loading}
             style={{width:"100%",padding:"11px",background:"#3b82f6",color:"#fff",border:"none",borderRadius:9,fontSize:13,fontWeight:700,cursor:"pointer",opacity:loading?0.6:1}}
           >{loading?"⏳ লগইন হচ্ছে...":"🔐 লগইন করুন"}</button>
+          <div style={{textAlign:"center",marginTop:12}}>
+            <button
+              onClick={doReset} disabled={resetting||loading}
+              style={{background:"none",border:"none",color:"#60a5fa",fontSize:12,fontWeight:600,cursor:"pointer",textDecoration:"underline",opacity:resetting?0.6:1,fontFamily:"inherit"}}
+            >{resetting?"⏳ পাঠানো হচ্ছে...":"পাসওয়ার্ড ভুলে গেছেন?"}</button>
+          </div>
         </div>
       </div>
     </div>

@@ -35,6 +35,56 @@ async function signInWithEmail(email, password) {
   return d;
 }
 
+/* Password reset email পাঠায় (Firebase built-in) */
+async function sendPasswordReset(email) {
+  _LC.auth("passwordReset", `Reset email requested: ${email}`);
+  let r, d;
+  try {
+    r = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${FB_KEY}`,
+      {method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({requestType:"PASSWORD_RESET",email})}
+    );
+    d = await r.json();
+  } catch(netErr) {
+    _LC.error("passwordReset", `Network error: ${netErr.message}`, { email });
+    throw new Error("NETWORK_ERROR");
+  }
+  if(!r.ok) {
+    const errMsg = d?.error?.message || "Reset failed";
+    _LC.error("passwordReset", `Reset FAILED for ${email}: ${errMsg}`, { httpStatus: r.status });
+    throw new Error(errMsg);
+  }
+  _LC.auth("passwordReset", `Reset email sent: ${email}`);
+  return true;
+}
+
+// Password reset email পাঠায় (Firebase REST: accounts:sendOobCode)
+async function sendPasswordReset(email) {
+  _LC.auth("passwordReset", `Reset email requested: ${email}`);
+  let r, d;
+  try {
+    r = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key=${FB_KEY}`,
+      {method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({requestType:"PASSWORD_RESET",email})}
+    );
+    d = await r.json();
+  } catch(netErr) {
+    _LC.error("passwordReset", `Network error: ${netErr.message}`, { email });
+    throw new Error("NETWORK_ERROR");
+  }
+  if(!r.ok) {
+    const errMsg = d?.error?.message || "Reset failed";
+    _LC.error("passwordReset", `Reset FAILED for ${email}: ${errMsg}`, { httpStatus: r.status });
+    throw new Error(errMsg);
+  }
+  // পুরনো saved password আর কাজ করবে না — মুছে দেই
+  try{ localStorage.removeItem("fb_pass_enc"); }catch(_){}
+  _LC.auth("passwordReset", `Reset email SENT: ${email}`);
+  return true;
+}
+
 async function refreshTokenWithRefreshToken(refreshToken) {
   try {
     const r = await fetch(
@@ -93,4 +143,4 @@ function _authQ(token){ return token ? `?auth=${token}` : ""; }
 // তাই helper যোগ করা হলো:
 function clearIdToken(){ _idToken = null; try{ window.__adminIdToken = null; }catch(_){} }
 
-export { signInWithEmail, refreshTokenWithRefreshToken, refreshTokenIfNeeded, _authQ, clearIdToken };
+export { signInWithEmail, sendPasswordReset, sendPasswordReset, refreshTokenWithRefreshToken, refreshTokenIfNeeded, _authQ, clearIdToken };
