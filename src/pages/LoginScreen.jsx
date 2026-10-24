@@ -8,7 +8,6 @@ function LoginScreen({onLogin}){
   const[pass,setPass]=useState("");
   const[loading,setLoading]=useState(false);
   const[err,setErr]=useState("");
-  const[msg,setMsg]=useState("");
   const[info,setInfo]=useState("");
   const[resetting,setResetting]=useState(false);
 
@@ -61,25 +60,6 @@ function LoginScreen({onLogin}){
     setResetting(false);
   };
 
-  const doForgot=async()=>{
-    const em=email.trim();
-    setMsg("");
-    if(!em){setErr("আগে উপরে আপনার Email লিখুন, তারপর 'Password ভুলে গেছেন?' চাপুন");return;}
-    setLoading(true);setErr("");
-    try{
-      await sendPasswordReset(em);
-      setMsg(`✅ ${em}-এ Password reset লিংক পাঠানো হয়েছে। Inbox (আর Spam) চেক করে নতুন password সেট করুন, তারপর লগইন করুন।`);
-    }catch(e){
-      const m=e.message||"";
-      if(m.includes("EMAIL_NOT_FOUND"))setErr("এই Email-এ কোনো অ্যাকাউন্ট নেই");
-      else if(m.includes("INVALID_EMAIL"))setErr("Email ঠিক নেই, আবার দেখুন");
-      else if(m.includes("TOO_MANY_ATTEMPTS"))setErr("অনেকবার চেষ্টা হয়েছে, কিছুক্ষণ পর আবার করুন");
-      else if(m==="NETWORK_ERROR")setErr("ইন্টারনেট সংযোগ চেক করুন");
-      else setErr(m||"Reset ব্যর্থ");
-    }
-    setLoading(false);
-  };
-
   return(
     <div style={{minHeight:"100dvh",display:"flex",alignItems:"center",justifyContent:"center",background:"#06080f",padding:24}}>
       <div style={{width:"100%",maxWidth:360}}>
@@ -108,12 +88,6 @@ function LoginScreen({onLogin}){
             />
           </div>
           {info&&<div style={{background:"#22c55e18",border:"1px solid #22c55e30",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#22c55e",marginBottom:12,fontWeight:600,lineHeight:1.5}}>{info}</div>}
-          <div style={{textAlign:"right",marginTop:-8,marginBottom:14}}>
-            <button type="button" onClick={doForgot} disabled={loading}
-              style={{background:"none",border:"none",color:"#60a5fa",fontSize:12,fontWeight:600,cursor:"pointer",padding:0,fontFamily:"inherit"}}
-            >Password ভুলে গেছেন?</button>
-          </div>
-          {msg&&<div style={{background:"#22c55e18",border:"1px solid #22c55e30",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#22c55e",marginBottom:12,fontWeight:600,lineHeight:1.5}}>{msg}</div>}
           {err&&<div style={{background:"#ef444418",border:"1px solid #ef444430",borderRadius:8,padding:"8px 12px",fontSize:11,color:"#ef4444",marginBottom:12,fontWeight:600}}>{err}</div>}
           <button
             onClick={doLogin} disabled={loading}
