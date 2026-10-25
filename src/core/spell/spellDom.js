@@ -63,7 +63,7 @@ function makeMirror() {
 }
 function syncMirror(st) {
   const el = st.el, r = el.getBoundingClientRect(), vis = r.width > 4 && r.height > 4 && getComputedStyle(el).visibility !== "hidden";
-  if (!vis || coverOn(el) || !isSpellEnabled()) { st.box.style.display = "none"; return; }
+  if (!vis || r.bottom < -50 || r.top > innerHeight + 50 || coverOn(el) || !isSpellEnabled()) { st.box.style.display = "none"; return; }
   const cs = getComputedStyle(el), b = st.box.style, i = st.inner.style;
   b.display = "block"; b.left = r.left + el.clientLeft + "px"; b.top = r.top + el.clientTop + "px"; b.width = el.clientWidth + "px"; b.height = el.clientHeight + "px";
   COPY.forEach((k) => { if (i[k] !== cs[k]) i[k] = cs[k]; });
@@ -78,10 +78,17 @@ function syncMirror(st) {
   }
 }
 
-/* ── contenteditable: Highlight API ── */
-function ensureHlStyle() {
-  if (hlStyle) return; hlStyle = document.createElement("style");
-  hlStyle.textContent = `::highlight(sc-err){text-decoration:underline wavy ${RED};text-decoration-thickness:1.5px;text-underline-offset:2px}`; document.head.appendChild(hlStyle);
+/* ── contenteditable: ওভারলে-দাগ (MS Office-এর মতো লাল ঢেউ, লেখার ঠিক নিচে) ──
+   আগে CSS Highlight API ছিল — অনেক Android WebView-তে সেটা দাগ আঁকে না (শুধু ট্যাপে পপআপ আসত)।
+   এখন প্রতিটা ভুল শব্দের Range → getClientRects() দিয়ে আলাদা স্বচ্ছ স্তরে (pointer-events:none) ঢেউ আঁকা হয়:
+   লেখা/কার্সর/math/ফরম্যাটে হাত পড়ে না, ট্যাপ সরাসরি ঘরেই যায়। */
+let ceLayer = null;
+const WAVE_URL = `url("data:image/svg+xml,${encodeURIComponent(`<svg xmlns='http://www.w3.org/2000/svg' width='6' height='3'><path d='M0 2.4 L1.5 0.6 L3 2.4 L4.5 0.6 L6 2.4' fill='none' stroke='${RED}' stroke-width='1.15'/></svg>`)}")`;
+function ensureCeLayer() {
+  if (ceLayer && ceLayer.isConnected) return ceLayer;
+  ceLayer = document.createElement("div"); ceLayer.setAttribute("data-spell-layer", "");
+  Object.assign(ceLayer.style, { position: "fixed", left: "0", top: "0", width: "0", height: "0", pointerEvents: "none", zIndex: "2147482000" });
+  document.body.appendChild(ceLayer); return ceLayer;
 }
 function ceScan(st) {
   const el = st.el, out = [], w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
@@ -89,16 +96,41 @@ function ceScan(st) {
   st.ranges = out;
 }
 function applyHighlights() {
-  if (!("highlights" in CSS) || typeof Highlight === "undefined") return;
-  ensureHlStyle();
-  const rs = []; attached.forEach((s) => { if (s.kind === "ce" && s.ranges && s.el.isConnected && !coverOn(s.el) && isSpellEnabled()) s.ranges.forEach((x) => rs.push(x.range)); });
-  if (rs.length) CSS.highlights.set("sc-err", new Highlight(...rs)); else CSS.highlights.delete("sc-err");
+  try { if (typeof CSS !== "undefined" && CSS.highlights) CSS.highlights.delete("sc-err"); } catch {}   // পুরনো Highlight-দাগ থাকলে সরাও — নইলে দুবার দাগ পড়ত
+  let any = false; attached.forEach((s) => { if (s.kind === "ce") any = true; });
+  if (!any && !ceLayer) return;
+  const layer = ensureCeLayer(), frag = document.createDocumentFragment(), vh = innerHeight; let count = 0;
+  attached.forEach((s) => {
+    if (s.kind !== "ce" || !s.ranges || !s.el.isConnected || coverOn(s.el) || !isSpellEnabled()) return;
+    const hr = s.el.getBoundingClientRect(); if (hr.width < 4 || hr.height < 4 || hr.bottom < 0 || hr.top > vh) return;
+    for (const x of s.ranges) {
+      let rects; try { rects = x.range.getClientRects(); } catch { continue; }
+      for (const r of rects) {
+        if (r.width < 2 || r.bottom < hr.top || r.top > hr.bottom || r.bottom < 0 || r.top > vh || count > 700) continue;
+        const d = document.createElement("div");
+        d.style.cssText = `position:fixed;left:${r.left}px;top:${r.bottom - 3}px;width:${r.width}px;height:3px;background:${WAVE_URL} repeat-x left bottom;background-size:6px 3px`;
+        frag.appendChild(d); count++;
+      }
+    }
+  });
+  layer.textContent = ""; layer.appendChild(frag);
 }
 function hideAll(st) { if (st.kind === "ta") st.box.style.display = "none"; else { st.ranges = []; applyHighlights(); } }
 
 /* ── ঘর জোড়া/ছাড়া ── */
+function evictOne() {
+  const act = document.activeElement; let victim = null;
+  for (const [e] of attached) {
+    if (e === act || e.contains(act)) continue;
+    const r = e.getBoundingClientRect();
+    if (r.bottom < -200 || r.top > innerHeight + 200) { victim = e; break; }
+    if (!victim) victim = e;
+  }
+  if (victim) detach(victim);
+}
 function attach(el) {
-  if (attached.has(el) || attached.size >= 14) return; const kind = kindOf(el); if (!kind) return;
+  if (attached.has(el)) return; const kind = kindOf(el); if (!kind) return;
+  if (attached.size >= 40) evictOne();   // আগে ১৪টার পর নতুন ঘরে দাগই পড়ত না (২৩ প্রশ্নের পেপারে অনেক ঘর বাদ যেত)
   const st = { el, kind, errors: [], ranges: [], text: null, dirty: true, ceTimer: null };
   if (kind === "ta") { Object.assign(st, makeMirror()); el.setAttribute("spellcheck", "false"); }   // ব্রাউজারের নিজস্ব দাগ বন্ধ — নইলে দুবার দাগ পড়ত
   attached.set(el, st); refresh(st);
@@ -198,16 +230,20 @@ export function installSpellCheck({ loadDictionary }) {
   }, true);
   document.addEventListener("pointerup", onPointerUp, true);
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePopup(); }, true);
-  window.addEventListener("scroll", () => { attached.forEach((s) => s.kind === "ta" && syncMirror(s)); closePopup(); }, true);
-  window.addEventListener("resize", () => { attached.forEach((s) => s.kind === "ta" && syncMirror(s)); closePopup(); });
+  window.addEventListener("scroll", () => { attached.forEach((s) => s.kind === "ta" && syncMirror(s)); applyHighlights(); closePopup(); }, true);
+  window.addEventListener("resize", () => { attached.forEach((s) => s.kind === "ta" && syncMirror(s)); applyHighlights(); closePopup(); });
   document.addEventListener("pointerdown", (e) => { if (popup && popup.style.display !== "none" && !popup.contains(e.target)) closePopup(); }, true);
   // হালকা টিক: জায়গা-সিঙ্ক, মুছে যাওয়া ঘর সরানো, নতুন ঘর খুঁজে জোড়া (ফোকাস না করলেও আগে থেকে লেখা ড্রাফটে দাগ দেখাতে)
   let n = 0;
   setInterval(() => {
     if (!speller) { if (attached.size === 0 && document.querySelector("textarea,input,[contenteditable]")) ensureSpeller(); return; }
     n++;
-    attached.forEach((s, el) => { if (!el.isConnected) detach(el); else if (s.kind === "ta") syncMirror(s); else if (coverOn(el) !== s.cov) { s.cov = coverOn(el); applyHighlights(); } });
-    if (n % 4 === 0) document.querySelectorAll("textarea,input,[contenteditable]").forEach((el) => { if (!attached.has(el) && kindOf(el) && el.getBoundingClientRect().height > 4) attach(el); });
+    attached.forEach((s, el) => { if (!el.isConnected) detach(el); else if (s.kind === "ta") syncMirror(s); else { if (n % 4 === 0) ceScan(s); if (coverOn(el) !== s.cov) s.cov = coverOn(el); } });
+    applyHighlights();   // লেখা/স্ক্রল/লেআউট বদলালে ঢেউ-দাগের জায়গা ঠিক রাখে
+    if (n % 4 === 0) document.querySelectorAll("textarea,input,[contenteditable]").forEach((el) => {
+      if (attached.has(el) || !kindOf(el)) return; const r = el.getBoundingClientRect();
+      if (r.height > 4 && r.bottom > -100 && r.top < innerHeight + 100) attach(el);
+    });
   }, 350);
 }
 export const _test = { findErrors };
