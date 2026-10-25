@@ -12,9 +12,11 @@ import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, getExamAppearances, addExamAppearance } from "../../core/sheetSave.js";
 import { resolveOrCreateReference } from "../../core/referenceHelpers.js";
 import { TypeaheadCombo } from "../../components/shared/TypeaheadCombo.jsx";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 function ExamAppearancesTab({push}){
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[refData,setRefData]=useState(getCachedReferenceData);
   useRefCacheSync(setRefData);
@@ -71,7 +73,7 @@ function ExamAppearancesTab({push}){
         <label style={{display:"flex",justifyContent:"space-between"}}>
           <span>GAS Secret Key</span>
         </label>
-        <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}/>
+        <GasSecretStatus/>
       </div>
 
       <div style={{background:`${tint(C.accent,"12")}`,border:`1px solid ${tint(C.accent,"30")}`,borderRadius:10,padding:"9px 12px",marginBottom:12,fontSize:11,color:C.muted,lineHeight:1.6}}>

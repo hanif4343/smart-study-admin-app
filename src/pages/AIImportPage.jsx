@@ -21,6 +21,7 @@ import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 import { PaperComposer } from "../components/shared/PaperComposer.jsx";
 import { ocrGroupsToPaper } from "../core/ocrToPaperConverter.js";
 import { ApiSettingsPage } from "./ApiSettingsPage.jsx";
+import { useSharedGasSecret } from "../core/gasSecret.js";
 
 function AIImportPage({push,onSendToBulk}){
   const[images,setImages]=useState([]);   // [{uri,base64,status,ocrText}]
@@ -49,7 +50,7 @@ function AIImportPage({push,onSendToBulk}){
   const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1"];
   const[saveLoc,setSaveLoc]=useState(loadSaveLocPref); // "sheet" | "firebase"
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
   // 🆕 "🗂️ কার্ড আকারে দেখাও" — Single Entry-এর ঠিক একই কার্ড/সাব-পার্ট UI

@@ -13,6 +13,8 @@ import { fetchReferenceData, renameReferenceItem, addReferenceItem, deleteRefere
 import { topicCount, subjectCount } from "../../core/refFilter.js";
 import { RenameModal } from "./RenameModal.jsx";
 import { useModalBack } from "../../hooks/useModalBack.js";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 const REF_TYPES = [
   {key:"subjects", label:"📚 Subjects", needsSheet:true, needsParent:false},
@@ -51,7 +53,7 @@ function ReferenceManagerTab({push}){
   const[sheet,setSheet]=useState("Quiz"); // subjects-এর জন্য
   const[parentId,setParentId]=useState(""); // topics-এর জন্য (subjects প্যারেন্ট)
 
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
   const[refData,setRefData]=useState(getCachedReferenceData);
@@ -135,7 +137,7 @@ function ReferenceManagerTab({push}){
           <span>GAS Secret Key</span>
           <span onClick={refresh} style={{color:C.accent,cursor:"pointer",fontWeight:600}}>🔄 রিফ্রেশ</span>
         </label>
-        <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}/>
+        <GasSecretStatus/>
       </div>
 
       <div className="atabs" style={{marginBottom:10,flexWrap:"wrap"}}>

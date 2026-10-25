@@ -20,6 +20,8 @@ import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx"
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 import { shuffle4 } from "../components/shared/PaperComposer.jsx";
+import { useSharedGasSecret } from "../core/gasSecret.js";
+import { GasSecretStatus } from "../components/shared/GasSecretStatus.jsx";
 
 function BulkUploaderPage({push,prefillText,onClearPrefill}){
 
@@ -83,7 +85,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
   const draftCheckedRef=useRef(false);
   const[saveLoc,setSaveLoc]=useState(loadSaveLocPref); // "sheet" | "firebase"
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const archiveIdRef=useRef(null); // prefill যদি Archive থেকে এসে থাকে — সফল Submit হলে সেই এন্ট্রি Archive থেকে সরিয়ে দেওয়া হবে
 
@@ -639,7 +641,7 @@ function BulkUploaderPage({push,prefillText,onClearPrefill}){
       {/* GAS Secret Key (Reference dropdown-এর জন্য দরকার) */}
       <div className="fld" style={{marginBottom:12}}>
         <label>GAS Secret Key</label>
-        <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}/>
+        <GasSecretStatus/>
       </div>
 
       {/* Audience Tags — এখন Tags reference-টেবিল থেকে বাছাই (ফ্রি-টেক্সট না) */}

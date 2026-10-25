@@ -23,6 +23,8 @@ import { resolveOrCreateReference } from "../../core/referenceHelpers.js";
 import { TypeaheadCombo } from "../../components/shared/TypeaheadCombo.jsx";
 import { AppearanceQuickModal } from "./AppearanceQuickModal.jsx";
 import { useModalBack } from "../../hooks/useModalBack.js";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 const PAGE=20;
 
@@ -80,7 +82,7 @@ function PaperPreviewModal({urls,initialIndex,onClose}){
 function ReviewTab({push,tick}){
   // ── GAS Secret Key — অন্য সব Phase 5 ট্যাবের মতোই শেয়ার্ড localStorage থেকে,
   // একবার যেকোনো ট্যাবে দিলে এখানেও অটো বসে যায় ──
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[localTick,setLocalTick]=useState(0);
   const refresh=()=>setLocalTick(t=>t+1);
@@ -254,7 +256,7 @@ function ReviewTab({push,tick}){
       {!gasSecret&&(
         <div className="fld" style={{marginBottom:10}}>
           <label>GAS Secret Key</label>
-          <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)} onBlur={refresh}/>
+          <GasSecretStatus/>
         </div>
       )}
 

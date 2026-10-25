@@ -14,6 +14,8 @@ import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, renameReferenceItem } from "../../core/sheetSave.js";
 import { RenameModal } from "./RenameModal.jsx";
 import { topicCount, subjectCount } from "../../core/refFilter.js";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 // Sheet নাম → subject_id প্রিফিক্স (migration script যেভাবে বানিয়েছিল সেটার সাথে মিলিয়ে)
 // (পুরনো SHEET_PREFIX আর লাগে না — subject/topic এখন Unified: S01 / S01_T01)
@@ -21,7 +23,7 @@ import { topicCount, subjectCount } from "../../core/refFilter.js";
 function RenameTab({push}){
   const[sheet,setSheet]=useState("Quiz");
   const[type,setType]=useState("subject"); // subject | topic
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
   const[refData,setRefData]=useState(getCachedReferenceData); // {subjects,topics,tags,posts,institutions}
@@ -91,7 +93,7 @@ function RenameTab({push}){
           <span>GAS Secret Key</span>
           <span onClick={refresh} style={{color:C.accent,cursor:"pointer",fontWeight:600}}>🔄 রিফ্রেশ</span>
         </label>
-        <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}/>
+        <GasSecretStatus/>
         <div style={{fontSize:10.5,color:C.muted,marginTop:5,lineHeight:1.5}}>
           এখানে rename করলে শুধু Subjects/Topics রেফারেন্স-টেবিলের ১টা রো বদলাবে — Quiz/QBank/Study-এর প্রশ্নের রো কখনো টাচ হবে না।
         </div>

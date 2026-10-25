@@ -29,6 +29,8 @@ import { WrittenPaperView } from "./WrittenPaperView.jsx";
 import { isWrittenQ } from "../../core/writtenPaper.js";
 import { useModalBack } from "../../hooks/useModalBack.js";
 import { RichText, clipRich } from "../../components/shared/RichText.jsx";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 /* ── প্রশ্নের group_id/sub_index — sheet header যেই casing-এই থাকুক (snake_case
    canonical, কিন্তু defensively কয়েকটা variant চেক করা হলো, বাকি ফিল্ডগুলোর
@@ -103,7 +105,7 @@ function BrowseTab({push,tick}){
 
   // ── GAS Secret Key — এখন Sheet-সোর্স থেকে পড়ে বলে অন্য Phase 5 ট্যাবগুলোর
   // (ReferenceManagerTab/DeleteTab ইত্যাদি) মতোই এটা লাগবে ──
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const[localTick,setLocalTick]=useState(0);
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const refreshSheet=()=>setLocalTick(t=>t+1);
@@ -524,7 +526,7 @@ function BrowseTab({push,tick}){
         <label style={{display:"flex",justifyContent:"space-between"}}>
           <span>GAS Secret Key</span>
         </label>
-        <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>{setGasSecretP(e.target.value);}} onBlur={refreshSheet}/>
+        <GasSecretStatus/>
         {!gasSecret && <div style={{fontSize:10,color:"#f59e0b",marginTop:4}}>⚠️ Secret Key ছাড়া Sheet থেকে প্রশ্ন লোড হবে না</div>}
       </div>
       {/* Sheet tabs + Audience selector row */}

@@ -14,6 +14,8 @@ import { useFB, invalidate } from "../../core/dataCache.js";
 import { toArr, loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, renameReferenceItem, syncFieldsToSheet } from "../../core/sheetSave.js";
 import { AudienceRenameModal } from "./AudienceRenameModal.jsx";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 function AudienceTagRenameTab({push,tick}){
   const SHEETS=["Quiz","QBank","Study"];
@@ -110,7 +112,7 @@ function AudienceTagRenameTab({push,tick}){
   };
 
   // Collect all Tags from the reference table (Phase 5 — না আর Firebase স্ক্যান করে না)
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[refData,setRefData]=useState(getCachedReferenceData);
   useRefCacheSync(setRefData);
@@ -266,7 +268,7 @@ function AudienceTagRenameTab({push,tick}){
           <span>GAS Secret Key</span>
           <span onClick={refreshTags} style={{color:C.accent,cursor:"pointer",fontWeight:600}}>🔄 রিফ্রেশ</span>
         </label>
-        <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}/>
+        <GasSecretStatus/>
       </div>
 
       <div style={{fontSize:11,color:C.muted,marginBottom:10}}>

@@ -11,6 +11,8 @@ import { groupSimilarTopics, SENSITIVITY } from "../../core/topicSimilarity.js";
 import { renameReferenceItem, warmReferenceCache } from "../../core/sheetSave.js";
 import { clearReferenceCache } from "../../core/refCache.js";
 import { TopicTagsTab } from "./TopicTagsTab.jsx";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 const bn = (n) => String(n == null ? 0 : n).replace(/\d/g, (d) => "০১২৩৪৫৬৭৮৯"[d]);
 const TABS = [["list", "📊 তালিকা"], ["merge", "🔀 মার্জ"], ["empty", "🗑 অপ্রয়োজনীয়"], ["health", "🩺 হেলথ/Undo"], ["rules", "🏷 রুল"]];
@@ -115,7 +117,7 @@ function MergeDialog({ gasSecret, topics, initialTargetId, subjectName, onClose,
 
 /* ───────────── মূল ───────────── */
 function TopicManagerTab({ push }) {
-  const [gasSecret, setGasSecret] = useState(loadSharedGasSecret);
+  const [gasSecret, setGasSecret] = useSharedGasSecret();
   const setSecret = (v) => { setGasSecret(v); saveSharedGasSecret(v); };
   const [tab, setTab] = useState("list");
   const [data, setData] = useState(null);
@@ -203,7 +205,7 @@ function TopicManagerTab({ push }) {
   };
 
   if (!gasSecret) return (
-    <div className="card"><label style={lbl}>GAS Secret Key</label><input className="inp" type="password" value={gasSecret} onChange={(e) => setSecret(e.target.value)} placeholder="Secret Key বসাও" /></div>
+    <div className="card"><label style={lbl}>GAS Secret Key</label><GasSecretStatus/></div>
   );
 
   const subjectSelect = (

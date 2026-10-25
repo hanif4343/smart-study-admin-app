@@ -47,6 +47,9 @@ import { MultiSubjectImportPage } from "./pages/MultiSubjectImportPage.jsx";
    (Archive সরে গেছে "তৈরি করুন" থেকে "ম্যানেজ করুন"-এ, IA পুনর্গঠন) */
 import { TypingUploaderPage } from "./pages/TypingUploaderPage.jsx";
 import { SingleQuestionEntryPage } from "./pages/SingleQuestionEntryPage.jsx";
+import { GasSecretModal } from "./components/shared/GasSecretModal.jsx";
+import { EVT_OPEN } from "./core/gasSecret.js";
+import { loadSharedGasSecret } from "./core/utils.js";
 
 /* Uploader hub-এর সেকশন/টুল গঠন — module-level রাখা হলো যাতে রেন্ডারে প্রতিবার নতুন array
    তৈরি না হয়। প্রতিটা সেকশনের রঙ Phase ১-এর সিমান্টিক টোকেন থেকে (C.info=টেক্সট, C.ai=AI
@@ -140,6 +143,21 @@ export default function App(){
   useEffect(()=>{ startSpellCheck(); },[]);   // 🆕 ইংরেজি বানান-পরীক্ষা (লাল ঢেউ-দাগ + সাজেশন) — সব টেক্সট-ঘরে
   const[tick,setTick]=useState(0);
   const[spin,setSpin]=useState(false);
+  // 🔑 GAS Secret — একটাই কেন্দ্রীয় জায়গা (হেডারের 🔑 বা যেকোনো পেজের "সেট নেই" বক্স থেকে খোলে)
+  const[showGasKey,setShowGasKey]=useState(false);
+  useEffect(()=>{
+    const open=()=>setShowGasKey(true);
+    window.addEventListener(EVT_OPEN,open);
+    return()=>window.removeEventListener(EVT_OPEN,open);
+  },[]);
+  // Secret বদলালে reference cache নতুন করে গরম করি
+  useEffect(()=>{
+    const h=()=>{ try{ warmReferenceCache({force:true}); }catch(_){} };
+    window.addEventListener("ss-gas-secret-changed",h);
+    return()=>window.removeEventListener("ss-gas-secret-changed",h);
+  },[]);
+  // লগইনের পর Secret না থাকলে নিজে থেকেই বক্স খুলে দেয়
+  useEffect(()=>{ if(loggedIn && !loadSharedGasSecret()) setShowGasKey(true); },[loggedIn]);
   const[bulkPrefill,setBulkPrefill]=useState(null);
   const[searchDetail,setSearchDetail]=useState(null);
   const backStack=useRef(["dashboard"]);
@@ -441,6 +459,7 @@ export default function App(){
     <ErrorBoundary>
       <>
       <style>{css}</style>
+      {showGasKey&&<GasSecretModal onClose={()=>setShowGasKey(false)} push={push}/>}
       <div className="topbar">
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           {inUploaderLeaf&&(
@@ -452,6 +471,7 @@ export default function App(){
           </div>
         </div>
         <div style={{display:"flex",gap:6}}>
+          <button className="icon-btn" title="GAS Secret Key" onClick={()=>setShowGasKey(true)}>🔑</button>
           <button className="icon-btn" title={theme==="dark"?"Light mode-এ যান":"Dark mode-এ যান"} onClick={handleToggleTheme}>{theme==="dark"?"☀️":"🌙"}</button>
           <button className={`icon-btn${spin?" spin":""}`} onClick={refresh}>🔄</button>
           <button className="icon-btn" title="Logout" onClick={()=>{ _LC.auth("logout","Admin logged out manually"); localStorage.removeItem("fb_email");localStorage.removeItem("fb_pass_enc");localStorage.removeItem("fb_refresh_token");window.__adminIdToken=null;clearIdToken();setLoggedIn(false); }}><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>

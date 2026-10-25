@@ -12,6 +12,8 @@ import React, { useState, useEffect, useCallback } from "react";
 import { C, tint } from "../../core/config.js";
 import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest, forceReindexNow } from "../../core/sheetSave.js";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 /* ── Publish-চলছে লক: Publish Now একবার চাপলে বাকি সব Topic শেষ না হওয়া পর্যন্ত নিজে থেকে একের পর এক চলে
    (GAS প্রতি রানে সর্বোচ্চ ৪০০ Topic করে), প্রোগ্রেস বার দেখায়, আর শেষ না হওয়া পর্যন্ত সব বাটন বন্ধ থাকে।
@@ -40,7 +42,7 @@ const CHECKLIST_ITEMS = [
 ];
 
 function PublishTab({push,onFixOrphans}){
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
 
   const[dirtyCount,setDirtyCount]=useState(null); // null = লোড হচ্ছে/অজানা
@@ -250,11 +252,7 @@ function PublishTab({push,onFixOrphans}){
       {!gasSecret && (
         <div className="card" style={{marginBottom:12}}>
           <div style={{fontSize:12,fontWeight:700,marginBottom:8}}>🔑 GAS Secret Key দাও</div>
-          <input
-            type="password" placeholder="GAS Secret Key"
-            value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}
-            style={{width:"100%",padding:"8px 10px",borderRadius:8,border:`1px solid ${C.border}`,background:C.panel,color:C.text,fontSize:12}}
-          />
+          <GasSecretStatus/>
         </div>
       )}
 

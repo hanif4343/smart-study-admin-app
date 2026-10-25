@@ -5,6 +5,7 @@ import { useFB, loadPath } from "../core/dataCache.js";
 import { fmt, toArr, buildSubjectMap, pct, loadSharedGasSecret } from "../core/utils.js";
 import { fetchDirtyTopicsCount, fetchOrphanStats } from "../core/sheetSave.js";
 import { Bar, Tree } from "../components/shared/MiniComponents.jsx";
+import { useSharedGasSecret } from "../core/gasSecret.js";
 
 /* ── কনটেন্ট-লাইব্রেরি কার্ডের একটা সারি (Quiz/QBank/Study) — আগে এগুলো ৪টা আলাদা
    stat-card ছিল, এখন একটাই কার্ডে ব্রেকডাউন হিসেবে দেখানো হচ্ছে ── */
@@ -62,7 +63,7 @@ function DashboardPage({push,tick}){
   // চেক করতে)। gasSecret এখানে prop হিসেবে আসে না, তাই shared localStorage
   // থেকেই পড়া হচ্ছে (বাকি সব টুল যেভাবে করে) — না থাকলে widget-টা চুপচাপ
   // "সেট করা নেই" দেখাবে, এরর দেখাবে না। ──
-  const[gasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret]=useSharedGasSecret();
   const[dirtyCount,setDirtyCount]=useState(null);
   const[orphanTotal,setOrphanTotal]=useState(null);
   useEffect(()=>{

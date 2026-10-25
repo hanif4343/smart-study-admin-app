@@ -30,6 +30,7 @@ import { archiveAdd, archiveDeleteMany } from "../core/archiveStore.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 import { ApiSettingsPage } from "./ApiSettingsPage.jsx";
+import { useSharedGasSecret } from "../core/gasSecret.js";
 
 const SRC_NAME="Multi-Subject Bulk Import";
 const CACHE_QTYPE="MultiSubjectWritten"; // AIImportPage-এর ক্যাশ থেকে আলাদা রাখতে নিজস্ব qtype key
@@ -296,7 +297,7 @@ function MultiSubjectImportPage({push}){
   const[qType,setQType]=useState(null); // null | "Written" | "MCQ"
   const[saveLoc,setSaveLoc]=useState(loadSaveLocPref);
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[draftGroups,setDraftGroups]=useState([]); // [{id,subject,subtopic,rows:[{q,correct}],pages:[n],included}]
   const[result,setResult]=useState(null); // {added,skipped,failed,groupCount}

@@ -21,6 +21,8 @@ import { resolveOrCreateReference } from "../../core/referenceHelpers.js";
 import { getCachedReferenceData } from "../../core/refCache.js";
 import { useRefCacheSync } from "../../hooks/useRefCacheSync.js";
 import { TypeaheadCombo } from "../../components/shared/TypeaheadCombo.jsx";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 const SHEETS=["QBank","Quiz","Study"];
 const GROUPS_PER_PAGE=25;
@@ -293,7 +295,7 @@ function OrphanSheetPanel({sheet,refData,setRefData,gasSecret,push,tick}){
 }
 
 function OrphanFixTab({push,tick}){
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[refData,setRefData]=useState(getCachedReferenceData);
   useRefCacheSync(setRefData);
@@ -314,7 +316,7 @@ function OrphanFixTab({push,tick}){
       {!gasSecret&&(
         <div className="fld" style={{marginBottom:10}}>
           <label>GAS Secret Key</label>
-          <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}/>
+          <GasSecretStatus/>
         </div>
       )}
       <div style={{display:"flex",gap:6,marginBottom:12}}>

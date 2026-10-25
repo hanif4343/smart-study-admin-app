@@ -21,6 +21,7 @@ import { archiveList, archiveUpdate, archiveDelete } from "../core/archiveStore.
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { FailedQueuePanel } from "../components/shared/FailedQueuePanel.jsx";
 import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
+import { useSharedGasSecret } from "../core/gasSecret.js";
 
 const SRC_NAME="Archive";
 
@@ -34,7 +35,7 @@ function ArchivePage({push,onSendToBulk}){
   const[targetMode,setTargetMode]=useState("Quiz");
   const[saveLoc,setSaveLoc]=useState(loadSaveLocPref);
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[submittingId,setSubmittingId]=useState(null);
 

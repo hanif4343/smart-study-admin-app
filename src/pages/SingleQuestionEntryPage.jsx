@@ -28,6 +28,7 @@ import { TypeaheadCombo } from "../components/shared/TypeaheadCombo.jsx";
 import { PaperComposer, buildMcqGenPrompt, buildExplGenPrompt, parseGenResponse, shuffle4 } from "../components/shared/PaperComposer.jsx";
 import { uploadImg, getLastUploadError } from "../core/utils.js";
 import { queueAutoGen } from "../core/autoGenTrigger.js";
+import { useSharedGasSecret } from "../core/gasSecret.js";
 
 /* ── MCQ অপশন বক্স ডিফল্ট-হাইড প্রেফারেন্স — লোকালস্টোরেজে মনে রাখা হয় ── */
 const LS_OPTIONS_HIDDEN = "ss_single_options_hidden_v1";
@@ -35,7 +36,7 @@ const LS_OPTIONS_HIDDEN = "ss_single_options_hidden_v1";
 function SingleQuestionEntryPage({push}){
   const[targetMode,setTargetMode]=useState("Quiz"); // Quiz | QBank | Study
   const[qtype,setQtype]=useState("MCQ"); // MCQ | Written — Study হলে অপ্রাসঙ্গিক
-  const[gasSecret,setGasSecretState]=useState(loadSharedGasSecret());
+  const[gasSecret,setGasSecretState]=useSharedGasSecret();
   const setGasSecret=v=>{setGasSecretState(v);saveSharedGasSecret(v);};
 
   // ── এই ফিল্ডগুলো একবার সেট হলে সেশনজুড়ে থাকে ──

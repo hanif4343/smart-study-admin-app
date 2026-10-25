@@ -14,12 +14,14 @@ import { loadSharedGasSecret, saveSharedGasSecret } from "../../core/utils.js";
 import { fetchReferenceData, deleteByReferenceId } from "../../core/sheetSave.js";
 import { topicCount, subjectCount } from "../../core/refFilter.js";
 import { DeleteWarningModal } from "../../components/shared/DeleteWarningModal.jsx";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 function DeleteTab({push}){
   const[sheet,setSheet]=useState("Quiz");
   const[type,setType]=useState("subject"); // subject | topic (subtopic bulk delete সাপোর্ট নেই, একক প্রশ্ন Browse ট্যাব থেকে ডিলিট করো)
 
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[refData,setRefData]=useState(getCachedReferenceData);
   useRefCacheSync(setRefData);
@@ -71,7 +73,7 @@ function DeleteTab({push}){
           <span>GAS Secret Key</span>
           <span onClick={refresh} style={{color:C.accent,cursor:"pointer",fontWeight:600}}>🔄 রিফ্রেশ</span>
         </label>
-        <input className="inp" type="password" placeholder="Script Properties-এর SECRET_KEY" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)}/>
+        <GasSecretStatus/>
       </div>
       <div style={{display:"flex",gap:6,marginBottom:8}}>
         {["Quiz","QBank","Study"].map(s=>(

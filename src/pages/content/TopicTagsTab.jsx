@@ -9,6 +9,8 @@ import { getCachedReferenceData } from "../../core/refCache.js";
 import { useRefCacheSync } from "../../hooks/useRefCacheSync.js";
 import { fetchReferenceData } from "../../core/sheetSave.js";
 import { ttGetSettings, ttSetUploadAuto, ttSetup, ttGetRules, ttSaveRule, ttDeleteRule, ttTest, ttPreview, ttApply, ttUndoLast, ttUndoAll, ttReview, ttUndoOne, ttConfirmOne, ttSuggest } from "../../core/topicTags.js";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
+import { GasSecretStatus } from "../../components/shared/GasSecretStatus.jsx";
 
 const MATCH_LABEL={question:"শুধু প্রশ্ন",answer:"শুধু উত্তর",both:"প্রশ্ন + উত্তর"};
 const EMPTY_RULE={row:0,rule_id:"",topic_id:"",keywords:"",match_in:"question",exclude_keywords:"",min_matches:1,priority:0,require_blank:"N",answer_whole:"N",answer_max_words:"",active:"Y",note:""};
@@ -19,7 +21,7 @@ const row={display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"};
 const chip=(on)=>({padding:"7px 12px",borderRadius:16,fontSize:12,fontWeight:700,cursor:"pointer",border:`1px solid ${on?C.info:C.border}`,background:on?tint(C.info,"22"):"transparent",color:on?C.info:C.muted});
 
 function TopicTagsTab({push}){
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const setGasSecretP=v=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[refData,setRefData]=useState(getCachedReferenceData);
   useRefCacheSync(setRefData);
@@ -216,7 +218,7 @@ function TopicTagsTab({push}){
   if(!gasSecret) return(
     <div className="card">
       <label style={lbl}>GAS Secret Key</label>
-      <input className="inp" type="password" value={gasSecret} onChange={e=>setGasSecretP(e.target.value)} placeholder="Secret Key বসাও"/>
+      <GasSecretStatus/>
     </div>
   );
 

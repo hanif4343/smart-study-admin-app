@@ -19,6 +19,7 @@ import { JobCheckList } from "../../components/shared/JobCheckList.jsx";
 import { SaveLocationPicker } from "../../components/shared/SaveLocationPicker.jsx";
 import { JumpButton } from "../../components/shared/JumpButton.jsx";
 import { FailedQueuePanel } from "../../components/shared/FailedQueuePanel.jsx";
+import { useSharedGasSecret } from "../../core/gasSecret.js";
 
 function QBankConverterTab({push,tick}){
   // ── Phase 5: এই কনভার্টার AI দিয়ে QBank প্রশ্নকে Quiz ফরম্যাটে বদলায়, subject/sub_topic
@@ -26,7 +27,7 @@ function QBankConverterTab({push,tick}){
   // subject_id/topic_id দিয়ে reference করে — তাই AI-এর দেওয়া নাম Subjects/Topics
   // reference-টেবিলের সাথে মিলিয়ে id বসানো হচ্ছে (নিচে saveApproved-এর resolveSubjectTopicForEntries দেখো),
   // নাহলে এই পাথ দিয়ে যোগ হওয়া প্রশ্ন নতুন lazy-load সিস্টেমে "অদৃশ্য" থেকে যেত। ──
-  const[gasSecret,setGasSecret]=useState(loadSharedGasSecret);
+  const[gasSecret,setGasSecret]=useSharedGasSecret();
   const saveGasSecret0=(v)=>{ setGasSecret(v); saveSharedGasSecret(v); };
   const[refData,setRefData]=useState(null);
   const loadRefData=useCallback(()=>{
