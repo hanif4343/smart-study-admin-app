@@ -19,7 +19,7 @@ import { useTypingCover, CoverOverlay, CoverToggle } from "../components/shared/
 import { useTypingTrack } from "../hooks/useTypingTrack.js";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
-import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, LS_DRAFT_SINGLE_LIST, loadDraft, saveDraft, clearDraft, applyRichTextShortcut } from "../core/uploaderUtils.js";
+import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, LS_DRAFT_SINGLE_LIST, loadDraft, saveDraft, clearDraft, applyRichTextShortcut, upsertFailedDraft, removeDraftById } from "../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData, fetchReferenceDataVerbose } from "../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
@@ -204,6 +204,7 @@ function SingleQuestionEntryPage({push}){
     try{ const raw=localStorage.getItem(LS_DRAFT_SINGLE_LIST); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; }catch{ return []; }
   });
   const[showDraftList,setShowDraftList]=useState(false);
+  const failedDraftCount=draftList.filter(d=>d&&d.failed).length;   // 🔴 ডাটাবেজে না-যাওয়া খসড়ার সংখ্যা
   // 🆕 ড্রাফট প্রিভিউ পপআপ — লোড করার আগে পুরো বিষয়বস্তু (subject/topic/প্রশ্ন/
   // অপশন/উত্তর/ব্যাখ্যা) দেখে নেওয়ার জন্য
   const[previewDraft,setPreviewDraft]=useState(null);
@@ -247,8 +248,10 @@ function SingleQuestionEntryPage({push}){
     const hasContent=question.trim()||pendingParts.length>0||subjectSel.name.trim();
     if(!hasContent){ push("warn","এখনো কিছু টাইপ করা হয়নি","আগে কিছু লিখো, তারপর খসড়া সেভ করো"); return; }
     const id=activeDraftId||newDraftId();
-    const entry={id,savedAt:Date.now(),targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,audienceTags,groupHeadingText,pendingParts,question,correct,opt1,opt2,opt3,opt4,explanation};
-    const exists=draftList.some(d=>d.id===id);
+    let entry={id,savedAt:Date.now(),targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,audienceTags,groupHeadingText,pendingParts,question,correct,opt1,opt2,opt3,opt4,explanation};
+    const oldEntry=draftList.find(d=>d.id===id);
+    if(oldEntry&&oldEntry.failed) entry={...entry,failed:true,failReason:oldEntry.failReason,failedAt:oldEntry.failedAt};   // 🔴 এখনো ডাটাবেজে যায়নি — লাল চিহ্ন থাকে
+    const exists=!!oldEntry;
     const nextList=exists?draftList.map(d=>d.id===id?entry:d):[entry,...draftList].slice(0,30);
     persistDraftList(nextList);
     setActiveDraftId(id);
@@ -472,24 +475,34 @@ function SingleQuestionEntryPage({push}){
 
     setSaving(true);
 
+    // 🔴 ব্যর্থ হলে প্রশ্নপত্র লাল চিহ্ন (failed:true) দিয়ে ড্রাফট-তালিকায় রাখা হয় — ডাটাবেজে না গেলে বা
+    // Exam Appearance যোগ না হলে যাতে কিছু হারায় না, আর চোখে পড়ে। সফল হলে এটা নিজে মুছে যায়।
+    const recordFail=(reason)=>{
+      try{
+        const id=activeDraftId||newDraftId();
+        const list=upsertFailedDraft(LS_DRAFT_SINGLE_LIST,{id,targetMode,qtype,subjectSel,topicSel,postSel,instSel,examYear,audienceTags,groupHeadingText,pendingParts,question,correct,opt1,opt2,opt3,opt4,explanation,failReason:reason},30);
+        setDraftList(list); setActiveDraftId(id);
+      }catch{}
+    };
+
     // ── Subject/Topic টেক্সট থেকে subject_id/topic_id resolve-or-create (একবারই —
     // সারির সবগুলো প্রশ্ন একই subject/topic শেয়ার করে) ──
     // QBank + Subject ফাঁকা: Subject/Topic তৈরি/খোঁজা বাদ — Topic Tags রুল GAS-এ নিজে বসাবে (না মিললে Subject ছাড়াই সেভ)
     const blankSubj=targetMode==="QBank"&&!subjectSel.name.trim();
     const subjRes=blankSubj?{ok:true,id:"",created:false}:await resolveOrCreateReference({sel:subjectSel,refType:"subjects",options:subjectOptions,gasSecret,sheet:targetMode,push});
-    if(!subjRes.ok){ setSaving(false); push("error","❌ Subject যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+    if(!subjRes.ok){ setSaving(false); push("error","❌ Subject যোগ/খুঁজে পাওয়া যায়নি","লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে"); recordFail("Subject যোগ/খুঁজে পাওয়া যায়নি"); return; }
     const topicName=topicSel.name.trim()||subjectSel.name.trim();
     const topicRes=blankSubj?{ok:true,id:"",created:false}:await resolveOrCreateReference({sel:topicSel.name.trim()?topicSel:{id:"",name:topicName},refType:"topics",options:topicOptions,gasSecret,parentId:subjRes.id,push});
-    if(!topicRes.ok){ setSaving(false); push("error","❌ Topic যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+    if(!topicRes.ok){ setSaving(false); push("error","❌ Topic যোগ/খুঁজে পাওয়া যায়নি","লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে"); recordFail("Topic যোগ/খুঁজে পাওয়া যায়নি"); return; }
     if(subjRes.created||topicRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
 
     // ── QBank-এ পদ/প্রতিষ্ঠান/সাল — এখন সবসময় বাধ্যতামূলক (উপরে চেক হয়ে গেছে) → resolve/create করে examAppearance ──
     let examAppearance=null;
     if(targetMode==="QBank"){
       const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
-      if(!postRes.ok){ setSaving(false); push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      if(!postRes.ok){ setSaving(false); push("error","❌ পদ যোগ/খুঁজে পাওয়া যায়নি","লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে"); recordFail("পদ যোগ/খুঁজে পাওয়া যায়নি"); return; }
       const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
-      if(!instRes.ok){ setSaving(false); push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); return; }
+      if(!instRes.ok){ setSaving(false); push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি","লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে"); recordFail("প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি"); return; }
       examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
       if(postRes.created||instRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
     }
@@ -515,15 +528,34 @@ function SingleQuestionEntryPage({push}){
         if(res.autoClassified>0) push("success",`🤖 ${res.autoClassified}টি প্রশ্ন Topic Tags মিলিয়ে নিজে Subject/Topic পেয়েছে`,"Publish Now দিলে অ্যাপে আসবে");
         if(res.unclassified>0) push("warn",`⚠ ${res.unclassified}টি প্রশ্নে কোনো ট্যাগ মেলেনি — Subject/Topic ছাড়া সেভ হয়েছে`,"Topic Tags → রান থেকে আবার চালাও, বা হাতে টপিক বসাও");
       }
-      if(res.added>0){
+      // 🔴 সাবমিট ফলাফল যাচাই — কিছু চাংক না গেলে, বা Exam Appearance যোগ না হলে ফর্ম খালি হবে না, লাল ড্রাফটে থাকবে
+      const failedCount=(res.failedRows||[]).length;
+      const processedQ=(res.added||0)+(res.skipped||0);
+      const accountedEA=(res.examAppearancesAdded||0)+(res.examAppearancesAlreadyExisted||0);
+      const appearanceMissing=!!examAppearance&&failedCount===0&&processedQ>0&&
+        (res.appearanceReported?accountedEA<processedQ:(!res.examAppearancesAdded&&!res.examAppearancesLinkedToExisting));
+      // সব প্রশ্ন আগে থেকেই ছিল (সাল আলাদা বলে) — শুধু নতুন Appearance যোগ হয়েছে: এটা ডুপ্লিকেট-ব্যর্থতা নয়, সফল
+      const appearanceOnlyOk=!!examAppearance&&res.added===0&&res.skipped>0&&failedCount===0&&!appearanceMissing&&(res.examAppearancesAdded||0)>0;
+      if(failedCount>0){
+        setLastSubmitFailed(true);
+        push("error",`⚠️ ${failedCount}টা প্রশ্ন সেভ হয়নি`,"ফর্ম খালি করা হয়নি, লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে — আবার Submit দিলে আগেরগুলো ডুপ্লিকেট হবে না");
+        recordFail(`${failedCount}টা প্রশ্ন সার্ভারে যায়নি`);
+      }
+      else if(appearanceMissing){
         setLastSubmitFailed(false);
-        push("success",`✅ ${rows.length>1?rows.length+"টা প্রশ্ন একসাথে":""} যোগ হয়েছে!`,`এই সেশনে মোট ${sessionCount+rows.length}টি`);
+        push("error","🔴 প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে — আবার Submit দিলে শুধু Appearance জুড়বে, প্রশ্ন ডুপ্লিকেট হবে না");
+        recordFail("প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি");
+      }
+      else if(res.added>0||appearanceOnlyOk){
+        setLastSubmitFailed(false);
+        if(res.added>0) push("success",`✅ ${rows.length>1?rows.length+"টা প্রশ্ন একসাথে":""} যোগ হয়েছে!`,`এই সেশনে মোট ${sessionCount+rows.length}টি`);
+        else push("success","🔗 প্রশ্নগুলো আগে থেকেই QBank-এ ছিল","শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance যোগ হয়েছে");
         if(res.examAppearancesLinkedToExisting>0) push("success","🔗 কিছু প্রশ্ন আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
         // 🆕 MCQ + উত্তর ভরা + অপশন ফাঁকা হলে option-generator, আর ব্যাখ্যা ফাঁকা হলে
         // explanation-generator — দুটোই স্বয়ংক্রিয়ভাবে (ডিবাউন্সড, একসাথে ব্যাচ
         // হয়ে) ট্রিগার হয়। GitHub টোকেন সেট না থাকলে চুপচাপ স্কিপ হয় (এরর দেখায় না,
         // কারণ এটা ঐচ্ছিক বোনাস ফিচার — মূল সাবমিট এর উপর নির্ভর করে না)।
-        allParts.forEach((part,idx)=>{
+        if(res.added>0) allParts.forEach((part,idx)=>{
           const id=res.ids?.[idx];
           if(!id) return;
           const optsFilled=[part.opt1,part.opt2,part.opt3,part.opt4].some(o=>(o||"").trim());
@@ -536,7 +568,7 @@ function SingleQuestionEntryPage({push}){
         resetForNext();
         // ── সাবমিট সফল → চলতি খসড়া (যদি একটা লোড করে এডিট করছিল) এখন কাজ শেষ, তাই তালিকা থেকে সরিয়ে দাও ──
         if(activeDraftId){
-          persistDraftList(draftList.filter(d=>d.id!==activeDraftId));
+          setDraftList(removeDraftById(LS_DRAFT_SINGLE_LIST,activeDraftId));
           setActiveDraftId(null);
         }
       }
@@ -548,11 +580,12 @@ function SingleQuestionEntryPage({push}){
         // auto-retry effect নেট ফিরলে (বা প্রতি ৪৫ সেকেন্ডে) নিজে থেকেই আবার
         // submit() ট্রাই করে — ম্যানুয়ালি মনে রেখে আবার চাপতে হবে না।
         setLastSubmitFailed(true);
-        push("error","📵 নেট সমস্যায় সেভ হয়নি","প্রশ্নগুলো অপেক্ষায় আছে (হারায়নি) — নেট ফিরলেই অটোমেটিক আবার সাবমিট হবে, চাইলে ম্যানুয়ালি আবার Submit-ও চাপতে পারো");
+        push("error","📵 নেট সমস্যায় সেভ হয়নি","প্রশ্নগুলো অপেক্ষায় আছে (হারায়নি), লাল চিহ্নসহ ড্রাফটেও রাখা হয়েছে — নেট ফিরলেই অটোমেটিক আবার সাবমিট হবে, চাইলে ম্যানুয়ালি আবার Submit-ও চাপতে পারো");
+        recordFail("সার্ভারে সেভ হয়নি (নেটওয়ার্ক/সার্ভার সমস্যা)");
       }
-    }catch(e){ setLastSubmitFailed(true); push("error","📵 নেট সমস্যায় সেভ হয়নি",e.message+" — নেট ফিরলেই অটোমেটিক আবার সাবমিট হবে"); }
+    }catch(e){ setLastSubmitFailed(true); push("error","📵 নেট সমস্যায় সেভ হয়নি",e.message+" — লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে, নেট ফিরলেই অটোমেটিক আবার সাবমিট হবে"); recordFail("সাবমিট ব্যর্থ: "+(e.message||"")); }
     setSaving(false);
-  },[saving,generating,question,correct,subjectSel,topicSel,subjectOptions,topicOptions,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,refData,postSel,instSel,examYear,postOptions,instOptions,groupHeadingText,pendingParts,sessionCount,push,activeDraftId,draftList,loadRefData]);
+  },[saving,generating,question,correct,subjectSel,topicSel,subjectOptions,topicOptions,isMCQ,opt1,opt2,opt3,opt4,explanation,audienceTags,isStudy,targetMode,gasSecret,refData,postSel,instSel,examYear,postOptions,instOptions,groupHeadingText,pendingParts,sessionCount,push,activeDraftId,draftList,loadRefData,qtype]);
 
   // 🆕 অফলাইন/নেট-সমস্যা অটো-রিট্রাই — সম্পূর্ণ ব্যর্থ সাবমিটের পর pendingParts
   // হারায় না, তাই নেট ফিরলেই (browser online ইভেন্ট) বা প্রতি ৪৫ সেকেন্ডে
@@ -866,8 +899,8 @@ function SingleQuestionEntryPage({push}){
           💾 {activeDraftId?"খসড়া আপডেট করো":"খসড়া হিসেবে সেভ করো"}
         </button>
         <button className="btn" onClick={()=>setShowDraftList(v=>!v)} tabIndex={-1}
-          style={{flex:1,justifyContent:"center",padding:"9px 0",fontSize:12,background:C.panel,color:C.text,border:`1px solid ${C.border}`}}>
-          📂 ড্রাফট লিস্ট ({draftList.length}) {showDraftList?"▲":"▼"}
+          style={{flex:1,justifyContent:"center",padding:"9px 0",fontSize:12,background:failedDraftCount>0?"#ef444418":C.panel,color:failedDraftCount>0?"#ef4444":C.text,border:failedDraftCount>0?"1.5px solid #ef4444":`1px solid ${C.border}`}}>
+          📂 ড্রাফট লিস্ট ({draftList.length}) {showDraftList?"▲":"▼"}{failedDraftCount>0&&<span style={{display:"block",fontSize:10,fontWeight:800}}>🔴 {failedDraftCount}টা ব্যর্থ</span>}
         </button>
       </div>
       {showDraftList&&(
@@ -875,18 +908,19 @@ function SingleQuestionEntryPage({push}){
           {draftList.length===0?(
             <div style={{padding:14,fontSize:11,color:C.muted,textAlign:"center"}}>এখনো কোনো খসড়া সেভ করা হয়নি</div>
           ):(
-            [...draftList].sort((a,b)=>b.savedAt-a.savedAt).map(d=>(
+            [...draftList].sort((a,b)=>(b.failed?1:0)-(a.failed?1:0)||b.savedAt-a.savedAt).map(d=>(
               <div key={d.id} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderBottom:`1px dashed ${C.border}`,
-                background:d.id===activeDraftId?"#22c55e15":"transparent"}}>
+                background:d.failed?"#ef444418":(d.id===activeDraftId?"#22c55e15":"transparent"),borderLeft:d.failed?"4px solid #ef4444":"none"}}>
                 <div style={{flex:1,minWidth:0,cursor:"pointer"}} onClick={()=>setPreviewDraft(d)} title="প্রিভিউ দেখতে ট্যাপ করো">
+                  {d.failed&&<div style={{fontSize:10,fontWeight:800,color:"#ef4444",marginBottom:2,lineHeight:1.4}}>🔴 ডাটাবেজে যায়নি — {d.failReason||"সাবমিট ব্যর্থ"}</div>}
                   <div style={{fontSize:11.5,fontWeight:800,color:C.text,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>👁️ {draftHeadline(d)}</div>
-                  <div style={{fontSize:9.5,color:C.muted,marginTop:2}}>{fmtDraftTime(d.savedAt)}{d.id===activeDraftId?" · এখন এডিট হচ্ছে":""}</div>
+                  <div style={{fontSize:9.5,color:d.failed?"#ef4444":C.muted,marginTop:2}}>{d.failed?"ব্যর্থ হয়েছে: ":""}{fmtDraftTime(d.failed?(d.failedAt||d.savedAt):d.savedAt)}{d.id===activeDraftId?" · এখন এডিট হচ্ছে":""}</div>
                 </div>
                 {/* 🐛 ফিক্স: আগে background:C.text (থিম-টেক্সট-কালার) ব্যবহার হতো, যেটা
                     লাইট থিমে গাঢ়/কালো হওয়ায় color:"#111"-এর সাথে মিশে টেক্সট পড়াই
                     যেত না (কালো বাক্সের মতো দেখাতো)। এখন C.accent + সাদা টেক্সট। */}
                 <button type="button" tabIndex={-1} onClick={()=>loadNamedDraft(d)}
-                  style={{flexShrink:0,padding:"6px 10px",borderRadius:7,fontSize:10.5,fontWeight:700,background:C.accent,color:"#fff",border:"none",cursor:"pointer"}}>লোড করো</button>
+                  style={{flexShrink:0,padding:"6px 10px",borderRadius:7,fontSize:10.5,fontWeight:700,background:d.failed?"#ef4444":C.accent,color:"#fff",border:"none",cursor:"pointer"}}>{d.failed?"লোড করে আবার পাঠাও":"লোড করো"}</button>
                 <button type="button" tabIndex={-1} onClick={()=>deleteNamedDraft(d.id)}
                   style={{flexShrink:0,background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>🗑</button>
               </div>

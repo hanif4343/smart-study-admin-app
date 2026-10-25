@@ -59,7 +59,8 @@ function ExamAppearancesTab({push}){
     if(!instRes.ok){ push("error","❌ প্রতিষ্ঠান যোগ/খুঁজে পাওয়া যায়নি",""); setAdding(false); return; }
     const res=await addExamAppearance({questionId:questionId.trim(),postId:postRes.id,institutionId:instRes.id,year:year.trim(),gasSecret,push});
     if(res.ok){
-      push("success","✅ Appearance যোগ হয়েছে!","প্রশ্নের মূল রো টাচ হয়নি");
+      if(res.alreadyExists) push("info","এই Appearance আগে থেকেই আছে","একই পদ + প্রতিষ্ঠান + সাল — তাই আবার যোগ হয়নি");
+      else push("success","✅ Appearance যোগ হয়েছে!","প্রশ্নের মূল রো টাচ হয়নি");
       setPostSel({id:"",name:""});setInstSel({id:"",name:""});setYear("");
       if(postRes.created||instRes.created) loadRefData(); // নতুন পদ/প্রতিষ্ঠান তৈরি হলে তালিকা রিফ্রেশ
       load();

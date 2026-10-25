@@ -10,7 +10,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText, parseFillMarks, nzTopic, topicCandidatesFromHeading, topicRuleFromHeading, pickTopicOption } from "../../core/paperTemplates.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../../core/ocrProviders.js";
-import { buildSheetRow, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft } from "../../core/uploaderUtils.js";
+import { buildSheetRow, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft, upsertFailedDraft, removeDraftById } from "../../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../../core/referenceHelpers.js";
 import { subjectsForTags, topicsOfSubject } from "../../core/refFilter.js";
@@ -872,6 +872,9 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     try{ const raw=localStorage.getItem(LS_DRAFT_PAPER_LIST); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; }catch{ return []; }
   });
   const[showDraftList,setShowDraftList]=useState(false);
+  // 🔴 ব্যর্থ সাবমিটের খসড়ার id — একই প্রশ্নপত্র আবার ব্যর্থ হলে নতুন কপি না বানিয়ে এটাই আপডেট হয়, সফল হলে এটা মুছে যায়
+  const failedDraftIdRef=useRef(null);
+  const failedDraftCount=draftList.filter(d=>d&&d.failed).length;
   const persistDraftList=(list)=>{
     setDraftList(list);
     try{ localStorage.setItem(LS_DRAFT_PAPER_LIST,JSON.stringify(list)); }catch{}
@@ -884,11 +887,22 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       try{ window.scrollTo({top:0,behavior:"smooth"}); }catch{}
       return;
     }
+    // 🔴 ব্যর্থ খসড়া লোড করে এডিট করে "সেভ করো" চাপলে নতুন কপি না বানিয়ে সেটাই আপডেট হবে (লাল চিহ্নও থাকবে — ডাটাবেজে এখনো যায়নি)
+    const fid=failedDraftIdRef.current;
+    if(fid&&draftList.some(d=>d.id===fid)){
+      persistDraftList(draftList.map(d=>d.id===fid?{...d,savedAt:Date.now(),paper,activeTab,postSel,instSel,examYear}:d));
+      push("success","💾 ব্যর্থ খসড়া আপডেট হলো (এখনো ডাটাবেজে যায়নি)",draftHeadline({postSel,instSel,examYear}));
+      return;
+    }
     const entry={id:newPaperId(),savedAt:Date.now(),paper,activeTab,postSel,instSel,examYear};
-    persistDraftList([entry,...draftList].slice(0,15)); // ১৫টার বেশি জমতে দেওয়া হয় না
+    // ১৫টার বেশি জমতে দেওয়া হয় না — তবে ব্যর্থ (লাল) খসড়া কখনো বাদ যায় না
+    const nl=[entry,...draftList];
+    while(nl.length>15){ let ix=-1; for(let k=nl.length-1;k>=0;k--){ if(!nl[k].failed){ ix=k; break; } } if(ix<0)break; nl.splice(ix,1); }
+    persistDraftList(nl);
     push("success","💾 নতুন খসড়া হিসেবে সেভ হলো",draftHeadline(entry));
   };
   const loadNamedDraft=(entry)=>{
+    failedDraftIdRef.current=entry.failed?entry.id:null;   // 🔴 ব্যর্থ খসড়া লোড করলে পরের সফল সাবমিটে এটা নিজে মুছে যাবে
     setPaper(entry.paper);
     if(entry.activeTab)setActiveTab(entry.activeTab);
     if(entry.postSel)setPostSel(entry.postSel);
@@ -897,7 +911,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     setShowDraftList(false);
     push("success","♻️ খসড়া লোড হলো",draftHeadline(entry));
   };
-  const deleteNamedDraft=(id)=>{ persistDraftList(draftList.filter(d=>d.id!==id)); };
+  const deleteNamedDraft=(id)=>{ if(failedDraftIdRef.current===id) failedDraftIdRef.current=null; persistDraftList(draftList.filter(d=>d.id!==id)); };
   // 🆕 প্রিভিউ পপ-আপ (লোড না করেই খসড়ার ভেতরটা দেখা) ও 🆕 New Paper (সব ফাঁকা নতুন পেজ)
   const[previewDraft,setPreviewDraft]=useState(null);
   const[confirmNew,setConfirmNew]=useState(false);
@@ -911,6 +925,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     const job=tagOptions.find(tg=>norm(tg.name)==="job");
     setSelectedTagIds(job?[job.id]:[]);
     clearDraft(LS_DRAFT_PAPER);
+    failedDraftIdRef.current=null;   // নতুন প্রশ্নপত্র — আগের ব্যর্থ খসড়ার সাথে আর যুক্ত না (খসড়া তালিকায় থেকে যাবে)
     setDraftBanner(null);
     setShowDraftList(false);
     setPreviewDraft(null);
@@ -1153,6 +1168,16 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         return;
       }
     }
+    // 🔴 ব্যর্থ হলে পুরো প্রশ্নপত্র নামসহ খসড়া-তালিকায় লাল চিহ্ন (failed:true) দিয়ে রাখা হয় —
+    // ডাটাবেজে না গেলে বা Exam Appearance যোগ না হলে যাতে কিছুই হারায় না, আর চোখে পড়ে।
+    const recordFail=(reason)=>{
+      try{
+        if(!failedDraftIdRef.current) failedDraftIdRef.current=newPaperId();
+        const list=upsertFailedDraft(LS_DRAFT_PAPER_LIST,{id:failedDraftIdRef.current,paper,activeTab,postSel,instSel,examYear,failReason:reason});
+        setDraftList(list);
+        setShowDraftList(true);
+      }catch{}
+    };
     setSaving(true);
     setSaveProgress(null);
     // 🐛 ফিক্স: সাবমিট শুরুর সাথে সাথেই ড্রাফট (debounce ছাড়া, তৎক্ষণাৎ) সেভ করে রাখা
@@ -1382,18 +1407,30 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
       }
       if(res.examAppearancesLinkedToExisting>0) push("success","🔗 কিছু প্রশ্ন আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
-      if(examAppearance && !res.examAppearancesAdded && !res.examAppearancesLinkedToExisting) push("warn","⚠️ প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","🗂️ Exam Appearances ট্যাব থেকে question_id দিয়ে ম্যানুয়ালি যোগ করো");
+      // 🔴 Exam Appearance যাচাই: প্রতিটা প্রক্রিয়া-হওয়া প্রশ্নের (নতুন + আগে-থেকে-থাকা) জন্য একটা করে Appearance যোগ হয়েছে
+      // বা (একই পদ+প্রতিষ্ঠান+সাল) আগে থেকেই ছিল — এই হিসাব না মিললে প্রশ্নপত্র সফল ধরা হয় না, লাল ড্রাফটে থাকে।
+      const processedQ=(res.added||0)+(res.skipped||0);
+      const accountedEA=(res.examAppearancesAdded||0)+(res.examAppearancesAlreadyExisted||0);
+      const appearanceMissing=!!examAppearance && failedCount===0 && processedQ>0 &&
+        (res.appearanceReported ? accountedEA<processedQ : (!res.examAppearancesAdded && !res.examAppearancesLinkedToExisting));
+      if(appearanceMissing) push("error","🔴 প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","প্রশ্নপত্র লাল চিহ্নসহ খসড়ায় রাখা হলো — আবার 🚀 সাবমিট দিলে শুধু Appearance জুড়বে, প্রশ্ন ডুপ্লিকেট হবে না");
       if(res.added===0 && res.skipped>0 && failedCount===0){
-        push("warn","⚠️ সবগুলোই ইতিমধ্যে Sheet-এ আছে (duplicate)","");
+        if(examAppearance && !appearanceMissing && (res.examAppearancesAdded||0)>0) push("success","🔗 সব প্রশ্ন আগে থেকেই QBank-এ ছিল","শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance যোগ হয়েছে");
+        else if(!appearanceMissing) push("warn","⚠️ সবগুলোই ইতিমধ্যে Sheet-এ আছে (duplicate)","");
       } else if(res.added===0 && res.skipped===0 && failedCount===0){
-        push("error","সেভ ব্যর্থ","নেটওয়ার্ক সমস্যা হতে পারে, একটু পর আবার চেষ্টা করো");
+        push("error","সেভ ব্যর্থ","নেটওয়ার্ক সমস্যা হতে পারে, একটু পর আবার চেষ্টা করো — প্রশ্নপত্র লাল চিহ্নসহ খসড়ায় রাখা হয়েছে");
+        recordFail("সার্ভারে সেভ হয়নি (নেটওয়ার্ক/সার্ভার সমস্যা)");
       }
       // 🐛 ফিক্স (নেটওয়ার্ক-ব্যর্থতায় নীরবে প্রশ্ন হারিয়ে যাওয়া): আগে failedRows চেক-ই
       // হতো না — কোনো চাংক ব্যর্থ হলেও পুরো paper রিসেট (makeInitialPaper) হয়ে যেত, ফলে
       // ব্যর্থ হওয়া প্রশ্নগুলো চিরতরে হারিয়ে যেত। এখন কিছু চাংক ব্যর্থ হলে paper রিসেট হয়
       // না (ড্রাফটও থেকে যায়) — শুধু সফলভাবে সেভ হলেই (কোনো ব্যর্থ চাংক ছাড়া) খাতা খালি হয়। ──
       if(failedCount>0){
-        push("error",`⚠️ ${failedCount}টা প্রশ্ন সেভ হয়নি (নেটওয়ার্ক সমস্যা)`,"খাতা খালি করা হয়নি — আবার 🚀 সাবমিট চাপলে শুধু বাকিগুলোই যাবে (আগেরগুলো ডুপ্লিকেট হবে না)");
+        push("error",`⚠️ ${failedCount}টা প্রশ্ন সেভ হয়নি (নেটওয়ার্ক সমস্যা)`,"খাতা খালি করা হয়নি, লাল চিহ্নসহ খসড়াতেও রাখা হয়েছে — আবার 🚀 সাবমিট চাপলে শুধু বাকিগুলোই যাবে (আগেরগুলো ডুপ্লিকেট হবে না)");
+        recordFail(`${failedCount}টা প্রশ্ন সার্ভারে যায়নি`);
+      } else if(appearanceMissing){
+        // প্রশ্ন গেছে, কিন্তু Exam Appearance যোগ হয়নি → খাতা খালি করা হবে না, লাল খসড়ায় থাকবে
+        recordFail("প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি");
       } else if(res.added>0 || res.skipped>0){
         // 🆕 নামসহ খসড়ায় একই হেডিং/প্রশ্ন (একই পদ+প্রতিষ্ঠান+সাল) থাকলে সেগুলো এখন ডাটাবেজে চলে গেছে — খসড়া থেকে নিজে সরাও
         const pr=pruneNamedDrafts(paper,{postSel,instSel,examYear});
@@ -1401,9 +1438,12 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         setPaper(makeInitialPaper());
         setActiveTab("bangla");
         clearDraft(LS_DRAFT_PAPER);
+        // ✅ সফল → এই প্রশ্নপত্রের লাল (ব্যর্থ) খসড়া থাকলে সেটাও এখন মুছে যায়
+        if(failedDraftIdRef.current){ setDraftList(removeDraftById(LS_DRAFT_PAPER_LIST,failedDraftIdRef.current)); failedDraftIdRef.current=null; }
       }
     }catch(e){
-      push("error","সাবমিট ব্যর্থ",e.message+" — খাতা খালি হয়নি, ড্রাফট থেকে গেছে");
+      push("error","সাবমিট ব্যর্থ",e.message+" — খাতা খালি হয়নি, লাল চিহ্নসহ খসড়ায় রাখা হয়েছে");
+      recordFail("সাবমিট ব্যর্থ: "+(e.message||""));
       if(e.tabKey&&e.cardId) flyToCard(e.tabKey,e.cardId,e.field);
     }
     setSaving(false);
@@ -1949,6 +1989,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         <div style={{position:"fixed",inset:0,background:"#000a",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:14}} onClick={()=>setPreviewDraft(null)}>
           <div style={{background:PC.card,borderRadius:14,maxWidth:520,width:"100%",maxHeight:"88vh",display:"flex",flexDirection:"column",overflow:"hidden"}} onClick={e=>e.stopPropagation()}>
             <div style={{padding:"12px 14px",borderBottom:`1px solid ${PC.border}`}}>
+              {d.failed&&<div style={{background:"#fef2f2",border:"1px solid #ef4444",color:"#b91c1c",borderRadius:7,padding:"5px 8px",fontSize:11,fontWeight:800,marginBottom:6}}>🔴 ডাটাবেজে যায়নি — {d.failReason||"সাবমিট ব্যর্থ"}</div>}
               <div style={{fontSize:10,fontWeight:700,color:PC.muted}}>👁 খসড়া প্রিভিউ · {fmtDraftTime(d.savedAt)} · {draftQCount(d)}টা প্রশ্ন</div>
               <div style={{fontSize:14,fontWeight:800,color:PC.ink,marginTop:3}}>🏛 {(d.instSel&&d.instSel.name||"").trim()||"—"}</div>
               <div style={{fontSize:12.5,fontWeight:700,color:PC.ink}}>🧑‍💼 {(d.postSel&&d.postSel.name||"").trim()||"—"}{(d.examYear||"").toString().trim()?` · ${d.examYear}`:""}</div>
@@ -2110,8 +2151,9 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
           </button>
           <button type="button" onClick={()=>setShowDraftList(s=>!s)}
             style={{flex:1,justifyContent:"center",padding:"9px 0",borderRadius:9,fontSize:11.5,fontWeight:700,
-              background:"transparent",border:`1px solid ${PC.border}`,color:PC.ink,cursor:"pointer"}}>
+              background:failedDraftCount>0?"#fef2f2":"transparent",border:failedDraftCount>0?"1.5px solid #ef4444":`1px solid ${PC.border}`,color:failedDraftCount>0?"#b91c1c":PC.ink,cursor:"pointer"}}>
             📂 সেভ করা খসড়া ({draftList.length}) {showDraftList?"▲":"▼"}
+            {failedDraftCount>0&&<span style={{display:"block",fontSize:10,color:"#dc2626",fontWeight:800}}>🔴 {toBn(failedDraftCount)}টা ব্যর্থ</span>}
           </button>
           <button type="button" onClick={askNewPaper}
             style={{flex:1,justifyContent:"center",padding:"9px 0",borderRadius:9,fontSize:11.5,fontWeight:700,
@@ -2124,19 +2166,21 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             {draftList.length===0?(
               <div style={{padding:14,fontSize:11,color:PC.muted,textAlign:"center"}}>এখনো কোনো খসড়া সেভ করা হয়নি</div>
             ):(
-              [...draftList].sort((a,b)=>b.savedAt-a.savedAt).map(d=>(
-                <div key={d.id} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderBottom:`1px dashed ${PC.border}`}}>
+              [...draftList].sort((a,b)=>(b.failed?1:0)-(a.failed?1:0)||b.savedAt-a.savedAt).map(d=>(
+                <div key={d.id} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderBottom:`1px dashed ${PC.border}`,
+                  ...(d.failed?{background:"#fef2f2",borderLeft:"4px solid #ef4444"}:{})}}>
                   <div style={{flex:1,minWidth:0}}>
+                    {d.failed&&<div style={{fontSize:10,fontWeight:800,color:"#dc2626",marginBottom:2,lineHeight:1.4}}>🔴 ডাটাবেজে যায়নি — {d.failReason||"সাবমিট ব্যর্থ"}</div>}
                     <div style={{fontSize:11.5,fontWeight:800,color:PC.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🧑‍💼 {(d.postSel&&d.postSel.name||"").trim()||<span style={{color:PC.danger}}>পদ নেই</span>}</div>
                     <div style={{fontSize:11,fontWeight:700,color:PC.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1}}>🏛 {(d.instSel&&d.instSel.name||"").trim()||<span style={{color:PC.danger}}>প্রতিষ্ঠান নেই</span>}{(d.examYear||"").toString().trim()?` · ${d.examYear}`:""}</div>
-                    <div style={{fontSize:9.5,color:PC.muted,marginTop:2}}>{fmtDraftTime(d.savedAt)} · {draftQCount(d)}টা প্রশ্ন</div>
+                    <div style={{fontSize:9.5,color:d.failed?"#dc2626":PC.muted,marginTop:2}}>{d.failed?"ব্যর্থ হয়েছে: ":""}{fmtDraftTime(d.failed?(d.failedAt||d.savedAt):d.savedAt)} · {draftQCount(d)}টা প্রশ্ন</div>
                   </div>
                   <button type="button" onClick={()=>setPreviewDraft(d)}
                     style={{flexShrink:0,padding:"6px 8px",borderRadius:7,fontSize:10.5,fontWeight:700,
                       background:"transparent",color:PC.ink,border:`1px solid ${PC.border}`,cursor:"pointer"}}>👁 প্রিভিউ</button>
                   <button type="button" onClick={()=>loadNamedDraft(d)}
                     style={{flexShrink:0,padding:"6px 10px",borderRadius:7,fontSize:10.5,fontWeight:700,
-                      background:PC.ink,color:"#fff",border:"none",cursor:"pointer"}}>লোড করো</button>
+                      background:d.failed?"#dc2626":PC.ink,color:"#fff",border:"none",cursor:"pointer"}}>{d.failed?"লোড করে আবার পাঠাও":"লোড করো"}</button>
                   <button type="button" onClick={()=>deleteNamedDraft(d.id)}
                     style={{flexShrink:0,background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>🗑</button>
                 </div>

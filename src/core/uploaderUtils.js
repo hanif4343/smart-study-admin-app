@@ -342,6 +342,26 @@ function loadDraft(key){ try{ const raw=localStorage.getItem(key); return raw?JS
 function saveDraft(key,data){ try{ localStorage.setItem(key,JSON.stringify({...data,_savedAt:Date.now()})); }catch{} }
 function clearDraft(key){ try{ localStorage.removeItem(key); }catch{} }
 
+/* ── 🔴 ব্যর্থ-সাবমিট খসড়া ──
+   প্রশ্নপত্র ডাটাবেজে না গেলে (বা Exam Appearance যোগ না হলে) সেটা নামসহ খসড়া-তালিকায় failed:true
+   চিহ্নসহ রাখা হয় (লাল দেখায়)। একই id-তে আবার ব্যর্থ হলে নতুন এন্ট্রি না বানিয়ে আপডেট হয়।
+   তালিকা ভরে গেলে সবসময় আগে সাধারণ খসড়া বাদ যায় — ব্যর্থ খসড়া হারায় না। */
+function _readDraftList(listKey){ try{ const raw=localStorage.getItem(listKey); const a=raw?JSON.parse(raw):[]; return Array.isArray(a)?a:[]; }catch{ return []; } }
+function upsertFailedDraft(listKey,entry,max=15){
+  const list=_readDraftList(listKey);
+  const e={...entry,failed:true,failedAt:Date.now(),savedAt:Date.now()};
+  const i=list.findIndex(d=>d&&d.id===e.id);
+  if(i>=0) list[i]={...list[i],...e}; else list.unshift(e);
+  while(list.length>max){ let idx=-1; for(let k=list.length-1;k>=0;k--){ if(!list[k]||!list[k].failed){ idx=k; break; } } if(idx<0)break; list.splice(idx,1); }
+  try{ localStorage.setItem(listKey,JSON.stringify(list)); }catch{}
+  return list;
+}
+function removeDraftById(listKey,id){
+  const list=_readDraftList(listKey).filter(d=>d&&d.id!==id);
+  try{ localStorage.setItem(listKey,JSON.stringify(list)); }catch{}
+  return list;
+}
+
 /* ══════════════════════════════════════════════════════════════════
    RICH-TEXT KEYBOARD SHORTCUTS (Bold/Underline/Big/Small) — admin app-এর
    যেকোনো <textarea>/<input> এ ব্যবহার করা যায়, একটা onKeyDown লাইন বসিয়ে।
@@ -400,4 +420,4 @@ function applyRichTextShortcut(e, setValue){
   return true;
 }
 
-export { getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow, LS_SAVE_LOCATION, LS_FAILED_QUEUE, LS_OCR_CACHE, OCR_CACHE_MAX, loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, loadFailedQueue, saveFailedQueueList, pushFailedItems, removeFailedItems, LS_DRAFT_BULK, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, LS_DRAFT_SINGLE_LIST, loadDraft, saveDraft, clearDraft, applyRichTextShortcut };
+export { getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow, LS_SAVE_LOCATION, LS_FAILED_QUEUE, LS_OCR_CACHE, OCR_CACHE_MAX, loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, loadFailedQueue, saveFailedQueueList, pushFailedItems, removeFailedItems, LS_DRAFT_BULK, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, LS_DRAFT_SINGLE_LIST, loadDraft, upsertFailedDraft, removeDraftById, saveDraft, clearDraft, applyRichTextShortcut };
