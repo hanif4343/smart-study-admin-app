@@ -1,0 +1,24 @@
+name: Fix Admin Email (একবারের কাজ)
+
+on:
+  workflow_dispatch:
+    inputs:
+      old_email:
+        description: "পুরনো fake admin email"
+        required: true
+      new_email:
+        description: "নতুন আসল email"
+        required: true
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm i --no-save firebase-admin
+      - run: node scripts/fix-admin-account.mjs "${{ inputs.old_email }}" "${{ inputs.new_email }}"
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
