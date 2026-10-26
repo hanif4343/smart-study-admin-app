@@ -1410,9 +1410,9 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       // 🔴 Exam Appearance যাচাই: প্রতিটা প্রক্রিয়া-হওয়া প্রশ্নের (নতুন + আগে-থেকে-থাকা) জন্য একটা করে Appearance যোগ হয়েছে
       // বা (একই পদ+প্রতিষ্ঠান+সাল) আগে থেকেই ছিল — এই হিসাব না মিললে প্রশ্নপত্র সফল ধরা হয় না, লাল ড্রাফটে থাকে।
       const processedQ=(res.added||0)+(res.skipped||0);
-      const accountedEA=(res.examAppearancesAdded||0)+(res.examAppearancesAlreadyExisted||0);
-      const appearanceMissing=!!examAppearance && failedCount===0 && processedQ>0 &&
-        (res.appearanceReported ? accountedEA<processedQ : (!res.examAppearancesAdded && !res.examAppearancesLinkedToExisting));
+      // GAS নিজেই গোনে কয়টা সারির Appearance না যোগ হয়েছে, না আগে থেকে (একই পদ+প্রতিষ্ঠান+সাল) ছিল — সেটাই আসল ব্যর্থতা
+      const missingEA=res.appearanceReported?(res.examAppearancesMissing||0):0;
+      const appearanceMissing=!!examAppearance && failedCount===0 && processedQ>0 && missingEA>0;
       if(appearanceMissing) push("error","🔴 প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","প্রশ্নপত্র লাল চিহ্নসহ খসড়ায় রাখা হলো — আবার 🚀 সাবমিট দিলে শুধু Appearance জুড়বে, প্রশ্ন ডুপ্লিকেট হবে না");
       if(res.added===0 && res.skipped>0 && failedCount===0){
         if(examAppearance && !appearanceMissing && (res.examAppearancesAdded||0)>0) push("success","🔗 সব প্রশ্ন আগে থেকেই QBank-এ ছিল","শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance যোগ হয়েছে");
@@ -1430,7 +1430,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         recordFail(`${failedCount}টা প্রশ্ন সার্ভারে যায়নি`);
       } else if(appearanceMissing){
         // প্রশ্ন গেছে, কিন্তু Exam Appearance যোগ হয়নি → খাতা খালি করা হবে না, লাল খসড়ায় থাকবে
-        recordFail("প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি");
+        recordFail(`প্রশ্ন সেভ হয়েছে কিন্তু ${missingEA}টার Exam Appearance যোগ হয়নি`);
       } else if(res.added>0 || res.skipped>0){
         // 🆕 নামসহ খসড়ায় একই হেডিং/প্রশ্ন (একই পদ+প্রতিষ্ঠান+সাল) থাকলে সেগুলো এখন ডাটাবেজে চলে গেছে — খসড়া থেকে নিজে সরাও
         const pr=pruneNamedDrafts(paper,{postSel,instSel,examYear});

@@ -24,7 +24,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও"); return{added:0,skipped:0,failedRows:rows}; }
   const CHUNK=Math.max(1,chunkSize||100); // চাইলে ছোট চাংক (৫-১০, এমনকি ১) দিয়ে বেশি live প্রোগ্রেস আপডেট পাওয়া যায় — trade-off: ছোট চাংক = বেশি রিকোয়েস্ট = মোট সময় একটু বেশি
   const totalChunks=Math.ceil(rows.length/CHUNK);
-  let added=0,skipped=0,firebaseSyncFailed=false,examAppearancesAdded=0,examAppearancesLinkedToExisting=0,examAppearancesAlreadyExisted=0,autoClassified=0,unclassified=0,appearanceReported=false; const failedRows=[];
+  let added=0,skipped=0,firebaseSyncFailed=false,examAppearancesAdded=0,examAppearancesLinkedToExisting=0,examAppearancesAlreadyExisted=0,examAppearancesMissing=0,autoClassified=0,unclassified=0,appearanceReported=false; const failedRows=[];
   // 🆕 প্রতিটা ইনপুট row-এর ফলাফল id (নতুন তৈরি বা duplicate-matched বিদ্যমান) —
   // chunk-অনুযায়ী GAS-এর bResultIds concat হয়ে rows.length-এর সমান লম্বা থাকে।
   // SingleQuestionEntryPage-এ MCQ সাবমিটের পর option/explanation-generator
@@ -55,7 +55,8 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
         const data=await resp.json().catch(()=>({}));
         if(data.result==="error"){ failedRows.push(...chunk); resultIds.push(...chunk.map(()=>"")); ok=true; break; } // সার্ভার-সাইড error — রিট্রাই করে লাভ নেই
         added+=(data.added||0); skipped+=(data.skipped||0);
-        if(typeof data.examAppearancesAdded==="number") appearanceReported=true;   // GAS এই ফিল্ড পাঠালে তবেই Appearance গোনা যাচাই করা যায়
+        if(typeof data.examAppearancesMissing==="number") appearanceReported=true;   // GAS এই ফিল্ড পাঠালে তবেই "Appearance যোগ হয়নি" যাচাই করা হয় (নইলে ভুল সতর্কতা দেওয়া হয় না)
+        examAppearancesMissing+=(data.examAppearancesMissing||0);
         examAppearancesAdded+=(data.examAppearancesAdded||0);
         examAppearancesLinkedToExisting+=(data.examAppearancesLinkedToExisting||0);
         examAppearancesAlreadyExisted+=(data.examAppearancesAlreadyExisted||0);
@@ -74,7 +75,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
   if(firebaseSyncFailed) push?.("error","⚠️ Sheet-এ সেভ হয়েছে কিন্তু Firebase sync ব্যর্থ","'Quiz-এ আছে' কাউন্ট পুরনো থাকতে পারে — একটু পরে আবার চেষ্টা করো, বা GAS Executions log চেক করো");
   // একই প্রশ্ন + পদ + প্রতিষ্ঠান + সাল আগে থেকেই ছিল → আবার যোগ হয়নি (সাল আলাদা হলে এটা হতো না, যোগ হতো)
   if(examAppearancesAlreadyExisted>0) push?.("info",`${examAppearancesAlreadyExisted}টা Appearance আগে থেকেই ছিল`,"একই প্রশ্ন + একই পদ + একই প্রতিষ্ঠান + একই সাল, তাই আবার যোগ হয়নি। (সাল আলাদা হলে নতুন Appearance হিসেবে যোগ হয়)");
-  return{added,skipped,failedRows,examAppearancesAdded,examAppearancesLinkedToExisting,examAppearancesAlreadyExisted,appearanceReported,autoClassified,unclassified,ids:resultIds};
+  return{added,skipped,failedRows,examAppearancesAdded,examAppearancesLinkedToExisting,examAppearancesAlreadyExisted,examAppearancesMissing,appearanceReported,autoClassified,unclassified,ids:resultIds};
 }
 
 /* ── Firebase-এ bulk rows সেভ — প্রতিটা row আলাদা push, ব্যর্থগুলো ফেরত দেয় (retry-এর জন্য) ──

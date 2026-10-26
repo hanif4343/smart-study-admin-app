@@ -531,9 +531,8 @@ function SingleQuestionEntryPage({push}){
       // 🔴 সাবমিট ফলাফল যাচাই — কিছু চাংক না গেলে, বা Exam Appearance যোগ না হলে ফর্ম খালি হবে না, লাল ড্রাফটে থাকবে
       const failedCount=(res.failedRows||[]).length;
       const processedQ=(res.added||0)+(res.skipped||0);
-      const accountedEA=(res.examAppearancesAdded||0)+(res.examAppearancesAlreadyExisted||0);
-      const appearanceMissing=!!examAppearance&&failedCount===0&&processedQ>0&&
-        (res.appearanceReported?accountedEA<processedQ:(!res.examAppearancesAdded&&!res.examAppearancesLinkedToExisting));
+      const missingEA=res.appearanceReported?(res.examAppearancesMissing||0):0;   // GAS-এর নিজের গোনা: Appearance না যোগ হয়েছে, না আগে ছিল
+      const appearanceMissing=!!examAppearance&&failedCount===0&&processedQ>0&&missingEA>0;
       // সব প্রশ্ন আগে থেকেই ছিল (সাল আলাদা বলে) — শুধু নতুন Appearance যোগ হয়েছে: এটা ডুপ্লিকেট-ব্যর্থতা নয়, সফল
       const appearanceOnlyOk=!!examAppearance&&res.added===0&&res.skipped>0&&failedCount===0&&!appearanceMissing&&(res.examAppearancesAdded||0)>0;
       if(failedCount>0){
@@ -544,7 +543,7 @@ function SingleQuestionEntryPage({push}){
       else if(appearanceMissing){
         setLastSubmitFailed(false);
         push("error","🔴 প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে — আবার Submit দিলে শুধু Appearance জুড়বে, প্রশ্ন ডুপ্লিকেট হবে না");
-        recordFail("প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি");
+        recordFail(`প্রশ্ন সেভ হয়েছে কিন্তু ${missingEA}টার Exam Appearance যোগ হয়নি`);
       }
       else if(res.added>0||appearanceOnlyOk){
         setLastSubmitFailed(false);
