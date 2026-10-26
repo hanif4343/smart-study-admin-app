@@ -2159,7 +2159,7 @@ function qBulkSave_(params, ss) {
     }
 
     // একই (প্রশ্ন+পদ+প্রতিষ্ঠান+সাল) আগে থাকলে আবার appearance যোগ হয় না; সাল আলাদা হলে যোগ হয়
-    var eaSeen = {}, eaAlready = 0, eaMissing = 0;   // eaMissing = যে সারির Appearance না যোগ হয়েছে, না আগে থেকে ছিল (সত্যিকারের ব্যর্থতা)
+    var eaSeen = {}, eaAlready = 0;
     if (params.examAppearance && tab === "QBank" && eaSh) eaSeen = qEaLoadKeys_(eaSh);
     var addEa = function (qid) {
       var ea = params.examAppearance, k = qEaKey_(qid, ea.postId, ea.institutionId, ea.year);
@@ -2198,10 +2198,9 @@ function qBulkSave_(params, ss) {
             if (tab === "Quiz" && !qY_(exRow[ix["inquiz"]]) && !exWritten) { toggles.push([ex.row, ix["inquiz"]]); exRow[ix["inquiz"]] = "Y"; linked++; if (ix["topicid"] !== undefined) dirty[String(exRow[ix["topicid"]] || "").trim()] = 1; }
             if (tab === "QBank" && !qY_(exRow[ix["inqbank"]])) { toggles.push([ex.row, ix["inqbank"]]); exRow[ix["inqbank"]] = "Y"; linked++; if (ix["topicid"] !== undefined) dirty[String(exRow[ix["topicid"]] || "").trim()] = 1; }
           }
-          if (params.examAppearance && tab === "QBank") {
-            if (!eaSh) eaMissing++;                                              // Exam_Appearances শিটই নেই
-            else if (eaSet[ex.id] && eaSet[ex.id][paperKey]) eaAlready++;        // এই পেপারে (পদ+প্রতিষ্ঠান+সাল) আগে থেকেই আছে — ব্যর্থতা নয়
-            else { (eaSet[ex.id] = eaSet[ex.id] || {})[paperKey] = 1; if (addEa(ex.id)) eaLinked++; }
+          if (params.examAppearance && tab === "QBank" && eaSh && !(eaSet[ex.id] && eaSet[ex.id][paperKey])) {
+            (eaSet[ex.id] = eaSet[ex.id] || {})[paperKey] = 1;
+            if (addEa(ex.id)) eaLinked++;
           }
           continue;
         }
@@ -2254,8 +2253,10 @@ function qBulkSave_(params, ss) {
         if (norm(row.question)) { var qkN = norm(row.question) + "|" + tk; (existingByQ[qkN] = existingByQ[qkN] || []).push({ id: bId, row: -1 }); }
         if (paperKey) (eaSet[bId] = eaSet[bId] || {})[paperKey] = 1;
         added++;
-        if (params.examAppearance && tab === "QBank") { if (eaSh) addEa(bId); else eaMissing++; }
-      } catch (rowErr) { skipped++; if (params.examAppearance && tab === "QBank") eaMissing++; }
+        if (params.examAppearance && tab === "QBank" && eaSh) {
+          addEa(bId);
+        }
+      } catch (rowErr) { skipped++; }
     }
 
     if (newRows.length) {
@@ -2269,7 +2270,7 @@ function qBulkSave_(params, ss) {
     }
     if (newRows.length || toggles.length) { markTopicsDirty(dirty); qRefreshTopicCounts_(ss); }
     return { result: "success", added: added, skipped: skipped, linkedToExisting: linked, firebaseSynced: true,
-             examAppearancesAdded: eaRows.length, examAppearancesLinkedToExisting: eaLinked, examAppearancesAlreadyExisted: eaAlready, examAppearancesMissing: eaMissing, ids: resultIds, autoClassified: autoClassified, unclassified: unclassified };
+             examAppearancesAdded: eaRows.length, examAppearancesLinkedToExisting: eaLinked, examAppearancesAlreadyExisted: eaAlready, ids: resultIds, autoClassified: autoClassified, unclassified: unclassified };
   } finally { lock.releaseLock(); }
 }
 
