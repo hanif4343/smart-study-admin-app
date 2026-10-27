@@ -19,7 +19,6 @@ import { RichText } from "./RichText.jsx";
 import { useTypingCover, CoverOverlay, CoverToggle } from "./TypingCover.jsx";
 import { useTypingTrack } from "../../hooks/useTypingTrack.js";
 import { autoTopicFor, loadRules } from "../../core/autoTopic.js";
-import { smartFixPaper, collectPaperProblems, indexProblems } from "../../core/paperProblems.js";
 
 /* ── AI দিয়ে MCQ-এর ৩টা ভুল অপশন + ব্যাখ্যা বানানোর প্রম্পট (SingleQuestionEntryPage-এর
    নিজস্ব single-form-ও এটাই ব্যবহার করে, import করে — দুই জায়গায় আলাদা prompt না) ── */
@@ -54,6 +53,26 @@ function locatedError(message,tabKey,cardId,field,itemId){
   err.tabKey=tabKey; err.cardId=cardId; err.field=field||"topic"; err.itemId=itemId||null;
   return err;
 }
+/* 🪄 Fill-blank-এ 🖍 মার্ক না থাকলে অটো-ঠিক (সাবমিট ব্যর্থ না করে):
+   ১) "উত্তর" ঘরে লেখা শব্দটা বাক্যে হুবহু থাকলে (বড়/ছোট হাত না দেখে) সেটাই blank;
+   ২) বাক্যে ফাঁকা-দাগ (____ / ... / …) থাকলে সেখানে উত্তরটা বসে blank হয়।
+   wrap(শব্দ) → মার্ক করা রূপ (BU ট্যাগ বা _শব্দ_)। HTML ট্যাগের ভেতরে মিল ধরা হয় না। না পারলে null। */
+function autoMarkBlank(question,answer,wrap){
+  const q=String(question||""), a=String(answer||"").replace(/<[^>]*>/g,"").trim();
+  if(!a) return null;
+  const esc=a.replace(/[.*+?^${}()|[\]\\]/g,"\\$&");
+  try{
+    const m=new RegExp("(^|[^\\p{L}\\p{M}\\p{N}_])("+esc+")(?=$|[^\\p{L}\\p{M}\\p{N}_])(?![^<]*>)","iu").exec(q);
+    if(m){ const at=m.index+m[1].length; return q.slice(0,at)+wrap(m[2])+q.slice(at+m[2].length); }
+  }catch{}
+  const b=/_{2,}|\.{3,}|…+|-{3,}|—{2,}/.exec(q);
+  if(b&&!/<[^>]*$/.test(q.slice(0,b.index))) return q.slice(0,b.index)+wrap(a)+q.slice(b.index+b[0].length);
+  return null;
+}
+const blankMissMsg=(label,question,idx)=>{
+  const pv=String(question||"").replace(/<[^>]*>/g,"").replace(/\s+/g," ").trim().slice(0,45);
+  return `"${label}" ট্যাবে ${idx+1} নং বাক্যে blank মার্ক নেই: "${pv}${pv.length>=45?"…":""}" — blank হবে এমন শব্দ সিলেক্ট করে 🖍 চাপো, অথবা "উত্তর" ঘরে ওই শব্দটা লিখে দাও (অ্যাপ নিজেই মার্ক করে নেবে)`;
+};
 function shuffle4(arr){
   const a=[...arr];
   for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; }
@@ -257,15 +276,6 @@ const PS_CSS=`
 .ps-wc{border-right:1px solid #000;border-bottom:1px solid #000;width:33.333%;display:flex;align-items:center;padding:0 2px}
 .ps-wc .ps-in{text-align:center;border:0}
 .ps-box{border:1px dotted #999!important;padding:5px!important;min-height:70px;margin:4px 0}
-/* 🔴 সমস্যা-হাইলাইট: যেই ঘরে সমস্যা সেটা লাল + ঝলমল করে, ঠিক করলেই নিজে মিলিয়ে যায় (লাইভ ভ্যালিডেশন) */
-.ps-in.ps-bad{background:#fef2f2!important;border-bottom:2px solid #ef4444!important;border-radius:4px;box-shadow:0 0 0 2px #ef444455;animation:psbad 1.1s ease-in-out 4}
-.ps-box.ps-bad{border:1.5px solid #ef4444!important}
-@keyframes psbad{50%{box-shadow:0 0 0 6px #ef444499}}
-.ps-prob{margin:4px 0 6px 6px;border:1.5px solid #ef4444;background:#fef2f2;border-radius:8px;padding:5px 8px;font-size:11.5px;line-height:1.45;color:#991b1b}
-.ps-prob-r{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin:2px 0}
-.ps-prob-r>span{flex:1 1 180px;min-width:0}
-.ps-prob-r button{flex:none;border:1px solid #dc2626;background:#fff;color:#b91c1c;font:inherit;font-size:10.5px;font-weight:800;border-radius:6px;padding:2px 8px;cursor:pointer}
-.ps-prob-r button.fx{background:#16a34a;border-color:#16a34a;color:#fff}
 .ps-h2{font-weight:800;margin:4px 0 2px 6px}
 .ps-an{display:flex;flex-wrap:wrap;gap:0 10px;margin-left:6px}
 .ps-ch{display:flex;align-items:baseline;gap:3px;width:calc(50% - 5px)}
@@ -913,19 +923,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   };
   const loadNamedDraft=(entry)=>{
     failedDraftIdRef.current=entry.failed?entry.id:null;   // 🔴 ব্যর্থ খসড়া লোড করলে পরের সফল সাবমিটে এটা নিজে মুছে যাবে
-    // 🪄 ব্যর্থ খসড়া লোড করার সাথে সাথেই অটো-ফিক্স চালানো + সমস্যা থাকলে সরাসরি সেখানে নিয়ে যাওয়া
-    let loadedPaper=entry.paper, loadProblems=[];
-    if(entry.failed&&entry.paper){
-      const lf=smartFixPaper(entry.paper);
-      loadedPaper=lf.paper;
-      loadProblems=collectPaperProblems(loadedPaper);
-      if(lf.fixed>0) push("info",`🪄 অটো-ঠিক: ${toBn(lf.fixed)}টা Fill-blank প্রশ্নে blank নিজে বসানো হয়েছে`,"প্রশ্নে _শব্দ_ ঠিক আছে কিনা দেখে নিও");
-    }
-    setPaper(loadedPaper);
-    if(loadProblems.length){
-      setShowProblems(true); setProbIdx(0);
-      setTimeout(()=>flyToCard(loadProblems[0].tabKey,loadProblems[0].cardId,loadProblems[0].field,loadProblems[0].itemId),350);
-    } else setShowProblems(false);
+    setPaper(entry.paper);
     if(entry.activeTab)setActiveTab(entry.activeTab);
     if(entry.postSel)setPostSel(entry.postSel);
     if(entry.instSel)setInstSel(entry.instSel);
@@ -1054,22 +1052,6 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const subjectFieldRefs=useRef({}); // cardId -> DOM element (GK Subject ফিল্ড wrapper)
   const[highlightCardId,setHighlightCardId]=useState(null);
   const[highlightField,setHighlightField]=useState("topic");
-  /* 🆕 স্মার্ট সমস্যা-ট্র্যাকার: একবার সাবমিট ব্যর্থ হলে (বা ব্যর্থ খসড়া লোড করলে) showProblems=true হয় —
-     তখন প্রতিটা রেন্ডারে পুরো paper লাইভ যাচাই হয়, তাই সমস্যাযুক্ত প্রতিটা ঘর লাল থাকে আর ঠিক করার
-     সাথে সাথে নিজে নিজে লাল-চিহ্ন সরে যায়। সব সমস্যা একসাথে (শুধু প্রথমটা না) তালিকায় দেখায়। */
-  // 🔴 এখন সমস্যা সবসময় লাইভ ধরা হয় (সাবমিটের অপেক্ষা না করে) — ঠিক না করা পর্যন্ত লাল থাকে।
-  // ✕ শুধু ওপরের সারাংশ-বার লুকায় (লাল হাইলাইট ও লাল সাবমিট বাটন থেকেই যায়); সমস্যার সংখ্যা বদলালে বার আবার আসে।
-  const[barHiddenFor,setBarHiddenFor]=useState(null);
-  const setShowProblems=v=>{ if(v) setBarHiddenFor(null); };
-  const probCursor=useRef(0);
-  const[probIdx,setProbIdx]=useState(0);
-  // smartFixPaper আগে চালিয়ে নিই — যেগুলো সাবমিটে অটো-ঠিক হয়ে যাবে (blank বসানো) সেগুলো মিছেমিছি লাল দেখায় না
-  const problems=collectPaperProblems(smartFixPaper(paper).paper);
-  const pIdx=indexProblems(problems);
-  const probOutline=(cardId,field)=>(
-    (highlightCardId===cardId&&highlightField===field)||(pIdx.byCard[cardId]||[]).some(q=>q.field===field&&!q.itemId)
-  )?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{};
-  const isBad=(itemId,field)=>(pIdx.byItem[itemId]||[]).some(q=>q.field===field);
   const flyToCard=(tabKey,cardId,field,itemId)=>{
     setActiveTab(tabKey);
     setHighlightCardId(cardId);
@@ -1077,52 +1059,16 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     // ট্যাব বদলের পর নতুন ট্যাবের DOM রেন্ডার হতে এক টিক সময় দেওয়া হচ্ছে
     requestAnimationFrame(()=>{
       setTimeout(()=>{
-        // 🆕 ঠিক যেই প্রশ্ন-সারি/ঘরে সমস্যা সেখানেই স্ক্রল + ফোকাস
-        let el=null;
-        if(itemId) el=(field==="answer"?answerRefs.current[itemId]:textareaRefs.current[itemId])||textareaRefs.current[itemId]||answerRefs.current[itemId];
-        else if(field==="answer"||field==="options") el=flatARefs.current[cardId];
-        else if(field==="question") el=flatQRefs.current[cardId];
-        if(el){ el.scrollIntoView({behavior:"smooth",block:"center"}); try{ el.focus({preventScroll:true}); }catch{ try{ el.focus(); }catch{} } return; }
+        if(field==="item"&&itemId){   // 🎯 নির্দিষ্ট বাক্যের ঘরে নিয়ে যায়, ফোকাস করে, কিছুক্ষণ লাল বর্ডার দেয়
+          const el=textareaRefs.current[itemId];
+          if(el){ el.scrollIntoView({behavior:"smooth",block:"center"}); try{ el.focus(); }catch{} const old=el.style.outline; el.style.outline="3px solid #ef4444"; setTimeout(()=>{ el.style.outline=old; },3200); return; }
+        }
+        if(field==="answer"){ const el=flatARefs.current[cardId]; if(el){ el.scrollIntoView({behavior:"smooth",block:"center"}); el.focus(); return; } }
         const refMap=field==="subject"?subjectFieldRefs:topicRefs;
         refMap.current[cardId]?.scrollIntoView({behavior:"smooth",block:"center"});
-      },80);
+      },60);
     });
     setTimeout(()=>setHighlightCardId(h=>h===cardId?null:h),2600);
-  };
-  const goProblem=(i)=>{
-    if(!problems.length) return;
-    const k=((i%problems.length)+problems.length)%problems.length;
-    setProbIdx(k);
-    const q=problems[k];
-    flyToCard(q.tabKey,q.cardId,q.field,q.itemId);
-  };
-  // এক-ট্যাপ ফিক্স (যেমন ভুল করে Fill-blank ফরম্যাট বেছে ফেললে → Plain করে দাও)
-  const applyProblemFix=(q)=>{
-    if(!q||!q.fix) return;
-    if(q.fix.kind==="card-format"){
-      const cd=(paper[q.tabKey]||[]).find(c=>c.id===q.cardId);
-      // ✍️ Custom কার্ডে ধরন (cType) থাকলে সেটাও সাধারণ প্রশ্ন-উত্তরে ফেরাতে হবে, নইলে ফরম্যাট আবার Fill-blank-এ ফিরে যায়
-      updateCard(q.tabKey,q.cardId,{formatStyle:q.fix.value,...(cd&&cd.cType?{cType:"qa"}:{})});
-    }
-    push("success","✅ ঠিক করা হলো",q.where);
-  };
-  const renderCardProblems=(card)=>{
-    const ps=pIdx.byCard[card.id];
-    if(!ps||!ps.length) return null;
-    return (
-      <div className="ps-prob">
-        {ps.map(q=>{
-          const lab=q.itemId?q.where.split(" › ").pop():"";
-          return (
-            <div className="ps-prob-r" key={q.key}>
-              <span>🔴 {lab&&<b>{lab} </b>}{q.message}</span>
-              <button type="button" onClick={()=>flyToCard(q.tabKey,q.cardId,q.field,q.itemId)}>📍 যাও</button>
-              {q.fix&&<button type="button" className="fx" onClick={()=>applyProblemFix(q)}>{q.fix.label}</button>}
-            </div>
-          );
-        })}
-      </div>
-    );
   };
   const generateMcqOptions=async(tab,cardId,itemId,question,answer,isFlat)=>{
     if(!question.trim()||!answer.trim()){ push("warn","আগে প্রশ্ন ও সঠিক উত্তর লিখো",""); return; }
@@ -1246,32 +1192,12 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         return;
       }
     }
-    // 🪄 স্মার্ট সলভ ১: নিরাপদে যা নিজে ঠিক করা যায় (Fill-blank-এ _শব্দ_ বসানো) সেটা আগে নিজেই করে ফেলা
-    const sf=smartFixPaper(paper);
-    const workPaper=sf.paper;
-    if(sf.fixed>0){
-      setPaper(workPaper);
-      push("info",`🪄 অটো-ঠিক: ${toBn(sf.fixed)}টা Fill-blank প্রশ্নে blank নিজে বসানো হয়েছে`,"প্রশ্নে _শব্দ_ ঠিক আছে কিনা দেখে নিও");
-    }
-    // 🔎 স্মার্ট সলভ ২ (প্রি-ফ্লাইট): নেটওয়ার্কে যাওয়ার আগেই পুরো প্রশ্নপত্র যাচাই — সব সমস্যা একসাথে বের করে
-    // ঠিক ওই কার্ড/প্রশ্নে উড়ে গিয়ে লাল হাইলাইট করে (আগে শুধু একটা টোস্ট আসতো, খুঁজে বের করতে হতো)।
-    // কিছুই হারায় না — paper স্ক্রিনেই থাকে (আর অটো-ড্রাফটও আছে), তাই লাল খসড়াও বানানো হয় না।
-    const pre=collectPaperProblems(workPaper);
-    if(pre.length){
-      setShowProblems(true);
-      // প্রতিবার সাবমিট/বাটন চাপলে পরের সমস্যায় উড়ে যায় (১ → ২ → ৩ → আবার ১)
-      const ci=probCursor.current%pre.length; probCursor.current=ci+1; setProbIdx(ci);
-      const q0=pre[ci];
-      push("error",`🔴 ${toBn(pre.length)}টা সমস্যা বাকি — সাবমিট হয়নি (${toBn(ci+1)}/${toBn(pre.length)})`,`${q0.where} — ${q0.message}`);
-      flyToCard(q0.tabKey,q0.cardId,q0.field,q0.itemId);
-      return;
-    }
     // 🔴 ব্যর্থ হলে পুরো প্রশ্নপত্র নামসহ খসড়া-তালিকায় লাল চিহ্ন (failed:true) দিয়ে রাখা হয় —
     // ডাটাবেজে না গেলে বা Exam Appearance যোগ না হলে যাতে কিছুই হারায় না, আর চোখে পড়ে।
     const recordFail=(reason)=>{
       try{
         if(!failedDraftIdRef.current) failedDraftIdRef.current=newPaperId();
-        const list=upsertFailedDraft(LS_DRAFT_PAPER_LIST,{id:failedDraftIdRef.current,paper:workPaper,activeTab,postSel,instSel,examYear,failReason:reason});
+        const list=upsertFailedDraft(LS_DRAFT_PAPER_LIST,{id:failedDraftIdRef.current,paper,activeTab,postSel,instSel,examYear,failReason:reason});
         setDraftList(list);
         setShowDraftList(true);
       }catch{}
@@ -1281,7 +1207,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     // 🐛 ফিক্স: সাবমিট শুরুর সাথে সাথেই ড্রাফট (debounce ছাড়া, তৎক্ষণাৎ) সেভ করে রাখা
     // হচ্ছে — নেটওয়ার্ক স্লো হয়ে সাবমিট আটকে থাকলে বা মাঝপথে ব্যর্থ হলেও পুরো
     // প্রশ্নপত্র (paper) ইতিমধ্যে localStorage-এ নিরাপদ থাকবে, অ্যাপ বন্ধ করে দিলেও হারাবে না।
-    saveDraft(LS_DRAFT_PAPER,{paper:workPaper,activeTab,postSel,instSel,examYear});
+    saveDraft(LS_DRAFT_PAPER,{paper,activeTab,postSel,instSel,examYear});
     try{
       // পদ/প্রতিষ্ঠান দেওয়া থাকলে সবার আগে resolve/create করা হচ্ছে — ঠিক Subject/Topic-এর
       // মতোই resolveOrCreateReference দিয়ে (ExamAppearancesTab/BulkUploaderPage-এ যেভাবে
@@ -1332,7 +1258,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       const selectedTagNames=selectedTagIds.map(id=>(tagOptions.find(tg=>tg.id===id)||{}).name).filter(Boolean);
       const allRows=[];
       for(const t of PAPER_TABS){
-        for(const card of (workPaper[t.key]||[])){
+        for(const card of (paper[t.key]||[])){
           if(t.grouped){
             // cloze (শব্দ-বক্স+অনুচ্ছেদ): প্রতিটা ফাঁকার উত্তর (i),(ii)... লেবেলে সেভ হয়
             const validItems=resolveTpl(card,t.key).key==="cloze"
@@ -1389,10 +1315,10 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               // ব্যাখ্যা/টেকনিক ছাড়া বাকি সব সাধারণ MCQ রো-এর মতো)।
               if(it.qtype==="mcq"){
                 const opts=[it.opt1,it.opt2,it.opt3,it.opt4].map(o=>o.trim());
-                if(opts.some(o=>!o))throw locatedError(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে ৪টা অপশনের কোনোটা ফাঁকা — 🤖 Generate চাপো অথবা নিজে পূরণ করো`,t.key,card.id,"options",it.id);
+                if(opts.some(o=>!o))throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে ৪টা অপশনের কোনোটা ফাঁকা — 🤖 Generate চাপো অথবা নিজে পূরণ করো`);
                 const ansTrim=it.answer.trim();
-                if(!ansTrim)throw locatedError(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে সঠিক উত্তর ফাঁকা`,t.key,card.id,"answer",it.id);
-                if(!opts.some(o=>norm(o)===norm(ansTrim)))throw locatedError(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে সঠিক উত্তর ৪টা অপশনের কোনোটার সাথেই মিলছে না`,t.key,card.id,"answer",it.id);
+                if(!ansTrim)throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে সঠিক উত্তর ফাঁকা`);
+                if(!opts.some(o=>norm(o)===norm(ansTrim)))throw new Error(`"${t.label}" ট্যাবে একটা MCQ প্রশ্নে সঠিক উত্তর ৪টা অপশনের কোনোটার সাথেই মিলছে না`);
                 allRows.push(buildSheetRow({
                   item:{q:it.question.trim(),correct:ansTrim,opt1:opts[0],opt2:opts[1],opt3:opts[2],opt4:opts[3],explanation:it.explanation,technique:it.technique},
                   subject:subjName,subtopic:topicName,qtype:"MCQ",
@@ -1404,8 +1330,12 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               }
               // 🆕 Fill in the blanks (বাক্য-ভিত্তিক): Bold+Underline করা অংশই Answer; প্রশ্নে _শব্দ_ (অ্যাপের fillblank নিয়ম)
               if(resolveTpl(card,t.key).lay==="fill"){
-                const fm=parseFillMarks(it.question);
-                if(!fm.answers.length)throw locatedError(`"${t.label}" ট্যাবে Fill in the blanks-এর একটা বাক্যে blank মার্ক করা হয়নি — যে শব্দ blank হবে সেটা সিলেক্ট করে Bold + Underline (BU) দাও`,t.key,card.id,"question",it.id);
+                let fm=parseFillMarks(it.question);
+                if(!fm.answers.length){   // 🪄 মার্ক না থাকলে "উত্তর" ঘর/ফাঁকা-দাগ থেকে অটো-মার্ক
+                  const fx=autoMarkBlank(it.question,it.answer,w=>`<b><u>${w}</u></b>`);
+                  if(fx) fm=parseFillMarks(fx);
+                }
+                if(!fm.answers.length)throw locatedError(blankMissMsg(t.label,it.question,idx),t.key,card.id,"item",it.id);
                 allRows.push(buildSheetRow({
                   item:{q:fm.question.trim(),correct:fm.answers.join(", "),explanation:it.explanation,technique:it.technique},
                   subject:subjName,subtopic:topicName,qtype:"Written",
@@ -1417,7 +1347,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               }
               // 🆕 Plain প্রশ্ন-উত্তর (পত্র/অনুচ্ছেদ…): প্রশ্ন ও উত্তর দুটোই বাধ্যতামূলক; মার্কআপ-অনুমান (* বা _) বন্ধ; format_style=plainqa
               if(resolveTpl(card,t.key).key==="plainqa"){
-                if(!it.answer.trim())throw locatedError(`"${t.label}" ট্যাবে Plain প্রশ্ন-উত্তরের একটা প্রশ্নে উত্তর ফাঁকা — প্রশ্ন ও উত্তর দুটোই লাগবে`,t.key,card.id,"answer",it.id);
+                if(!it.answer.trim())throw locatedError(`"${t.label}" ট্যাবে Plain প্রশ্ন-উত্তরের একটা প্রশ্নে উত্তর ফাঁকা — প্রশ্ন ও উত্তর দুটোই লাগবে`,t.key,card.id);
                 allRows.push(buildSheetRow({
                   item:{q:it.question.trim(),correct:it.answer.trim(),explanation:it.explanation,technique:it.technique},
                   subject:subjName,subtopic:topicName,qtype:"Written",
@@ -1429,6 +1359,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               }
               let ansText=it.answer.trim();
               let effFormat=card.formatStyle;
+              let qOut=it.question;
               const auto=detectAutoMarkup(it.question);
               if(auto.style==="fillblank"){
                 ansText=auto.answer;
@@ -1436,12 +1367,16 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               } else if(auto.style==="highlight"){
                 effFormat=effFormat==="table"?effFormat:"highlight";
               } else if(card.formatStyle==="fillblank"){
-                const m=/_([^_]+)_/.exec(it.question);
-                if(!m)throw locatedError(`"${t.label}" ট্যাবে Fill-blank ফরম্যাটে একটা প্রশ্নে 🖍 মার্ক করা হয়নি — যে শব্দ/অংশ blank হবে সেটা সিলেক্ট করো, অথবা সরাসরি _শব্দ_ লিখো`,t.key,card.id,"question",it.id);
+                let m=/_([^_]+)_/.exec(it.question);
+                if(!m){   // 🪄 মার্ক না থাকলে "উত্তর" ঘর/ফাঁকা-দাগ থেকে অটো-মার্ক
+                  const fx=autoMarkBlank(it.question,it.answer,w=>`_${w}_`);
+                  if(fx){ qOut=fx; m=/_([^_]+)_/.exec(fx); }
+                }
+                if(!m)throw locatedError(blankMissMsg(t.label,it.question,idx),t.key,card.id,"item",it.id);
                 ansText=m[1].trim();
               }
               allRows.push(buildSheetRow({
-                item:{q:it.question.trim(),correct:ansText,explanation:it.explanation,technique:it.technique},
+                item:{q:qOut.trim(),correct:ansText,explanation:it.explanation,technique:it.technique},
                 subject:subjName,subtopic:topicName,qtype:"Written",
                 audienceTags:selectedTagNames,tagIds:selectedTagIds,mainQpaper:"",subjectId:subjId,topicId,
                 groupId,subIndex:groupId?(idx+1):null,groupHeading:groupId?heading:"",
@@ -1531,11 +1466,10 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         recordFail(`প্রশ্ন সেভ হয়েছে কিন্তু ${missingEA}টার Exam Appearance যোগ হয়নি`);
       } else if(res.added>0 || res.skipped>0){
         // 🆕 নামসহ খসড়ায় একই হেডিং/প্রশ্ন (একই পদ+প্রতিষ্ঠান+সাল) থাকলে সেগুলো এখন ডাটাবেজে চলে গেছে — খসড়া থেকে নিজে সরাও
-        const pr=pruneNamedDrafts(workPaper,{postSel,instSel,examYear});
+        const pr=pruneNamedDrafts(paper,{postSel,instSel,examYear});
         if(pr.cards>0) push("info",`🧹 খসড়া থেকে ${toBn(pr.cards)}টা সাবমিট-হওয়া কার্ড সরানো হয়েছে`,pr.drafts>0?`${toBn(pr.drafts)}টা খসড়া সম্পূর্ণ ফাঁকা হয়ে বাদ গেছে`:"একই পদ/প্রতিষ্ঠান/সালের খসড়া থেকে");
         setPaper(makeInitialPaper());
         setActiveTab("bangla");
-        setShowProblems(false);
         clearDraft(LS_DRAFT_PAPER);
         // ✅ সফল → এই প্রশ্নপত্রের লাল (ব্যর্থ) খসড়া থাকলে সেটাও এখন মুছে যায়
         if(failedDraftIdRef.current){ setDraftList(removeDraftById(LS_DRAFT_PAPER_LIST,failedDraftIdRef.current)); failedDraftIdRef.current=null; }
@@ -1543,7 +1477,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     }catch(e){
       push("error","সাবমিট ব্যর্থ",e.message+" — খাতা খালি হয়নি, লাল চিহ্নসহ খসড়ায় রাখা হয়েছে");
       recordFail("সাবমিট ব্যর্থ: "+(e.message||""));
-      if(e.tabKey&&e.cardId){ setShowProblems(true); flyToCard(e.tabKey,e.cardId,e.field,e.itemId); }
+      if(e.tabKey&&e.cardId) flyToCard(e.tabKey,e.cardId,e.field,e.itemId);
     }
     setSaving(false);
     setSaveProgress(null);
@@ -1793,11 +1727,11 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     const title=card.heading||tpl.heading||(isEnTab?"(heading)":"(হেডিং লিখো)");
 
     const mkQ=(it,idx,isFill,cls)=>(
-      <PsTA cover className={(cls||"")+(isBad(it.id,"question")?" ps-bad":"")} taRef={el=>{textareaRefs.current[it.id]=el;}} value={it.question}
+      <PsTA cover className={cls} taRef={el=>{textareaRefs.current[it.id]=el;}} value={it.question}
         onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}/>
     );
     const mkA=(it,idx,cls)=>(
-      <PsTA cover className={(cls||"")+(isBad(it.id,"answer")?" ps-bad":"")} taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
+      <PsTA cover className={cls} taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
         onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}/>
     );
 
@@ -1856,7 +1790,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               <div className="ps-opts">
                 {["opt1","opt2","opt3","opt4"].map((k,oi)=>(
                   <label key={k}><span>{String.fromCharCode(97+oi)})</span>
-                    <input className={"ps-in"+(it[k].trim()&&norm(it[k])===norm(it.answer)?" ok":"")+(!it[k].trim()&&isBad(it.id,"options")?" ps-bad":"")} value={it[k]}
+                    <input className={"ps-in"+(it[k].trim()&&norm(it[k])===norm(it.answer)?" ok":"")} value={it[k]}
                       onChange={e=>updateItem(activeTab,card.id,it.id,{[k]:e.target.value})}/></label>
                 ))}
               </div>
@@ -1978,7 +1912,6 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             </button>
           </div>
         )}
-        {renderCardProblems(card)}
         {body}
         {lay!=="cloze"&&(
           <button type="button" className="ps-add" onClick={()=>addSubItem(activeTab,card.id)}>{isEnTab?"＋ Add":"＋ আরেকটা"}</button>
@@ -1988,7 +1921,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         )}
         <div className="ps-tp">
           <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:6,
-                  ...probOutline(card.id,"topic")}}>
+                  ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
                   <label style={{margin:0}}>📌 Topic (এই পুরো গ্রুপের জন্য একবারই)</label>
                   {/* 🆕 বাংলা/ইংরেজি ট্যাবে টপিক-লিস্ট ২টা আসল subject (ব্যাকরণ+সাহিত্য/
@@ -2039,7 +1972,6 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     const ex=expandedItems.has(card.id);
     return (
       <div key={card.id} className="ps-sheet">
-        {renderCardProblems(card)}
         <div className="ps-row st" style={{marginLeft:0}}>
           <span className="ps-lab">{psNo(tabOffset+ci+1)}</span>
           <PsTA cover math={isMath} className="q" taRef={el=>{flatQRefs.current[card.id]=el;}} value={card.question}
@@ -2056,7 +1988,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             </div>
           )}
           <div className="ps-l2"><span>উত্তর<b style={{color:"#c0392b"}}>*</b>:</span>
-            <PsTA cover math={isMath} className={(pIdx.byCard[card.id]||[]).some(q=>q.field==="answer")?"ps-bad":""} taRef={el=>{flatARefs.current[card.id]=el;}} value={card.answer}
+            <PsTA cover math={isMath} taRef={el=>{flatARefs.current[card.id]=el;}} value={card.answer}
               onChange={e=>updateCard(activeTab,card.id,{answer:e.target.value})}/>
             {mcq&&(
               <button type="button" tabIndex={-1} className="ps-mini" title="AI দিয়ে ৩টা ভুল অপশন বানাও" disabled={mcqGeneratingId===card.id}
@@ -2068,7 +2000,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               <div className="ps-opts">
                 {["opt1","opt2","opt3","opt4"].map((k,oi)=>(
                   <label key={k}><span>{String.fromCharCode(97+oi)})</span>
-                    <input className={"ps-in"+(card[k].trim()&&norm(card[k])===norm(card.answer)?" ok":"")+(!card[k].trim()&&(pIdx.byCard[card.id]||[]).some(q=>q.field==="options")?" ps-bad":"")} value={card[k]}
+                    <input className={"ps-in"+(card[k].trim()&&norm(card[k])===norm(card.answer)?" ok":"")} value={card[k]}
                       onChange={e=>updateCard(activeTab,card.id,{[k]:e.target.value})}/></label>
                 ))}
               </div>
@@ -2091,7 +2023,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             const many=tabDef.subjectChoices.length>3;
             return (
               <div ref={el=>{subjectFieldRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
-                  ...probOutline(card.id,"subject")}}>
+                  ...(highlightCardId===card.id&&highlightField==="subject"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                 <label>📚 Subject — আগে বেছে নাও, তারপর সেই অনুযায়ী Topic আসবে</label>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
                   {tabDef.subjectChoices.map((c,ci2)=>{
@@ -2126,7 +2058,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             );
           })()}
           <div ref={el=>{topicRefs.current[card.id]=el;}} className="fld" style={{marginBottom:8,
-                  ...probOutline(card.id,"topic")}}>
+                  ...(highlightCardId===card.id&&highlightField==="topic"?{outline:"3px solid #ef4444",outlineOffset:3,borderRadius:8,transition:"outline-color .3s"}:{})}}>
                 <label>📌 Topic{card.topicAuto&&<span style={{marginLeft:8,fontSize:10.5,fontWeight:800,color:"#8A6D1D",background:"#FFF3C4",borderRadius:10,padding:"1px 8px"}}>🤖 অটো — ভুল হলে বদলাও</span>}</label>
                 <TypeaheadCombo
                   options={topicOptionsForShown((tabDef.gkStyle||tabDef.mathStyle)?(((card.subjectSel&&card.subjectSel.id)||subjectOptions.find(s=>s.name===(card.subjectSel&&card.subjectSel.name))?.id)):subjectOptions.find(s=>s.name===tabDef.fixedSubject)?.id)}
@@ -2277,27 +2209,6 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         </div>
       </div>
 
-      {/* ── 🔴 সমস্যার সারাংশ বার: সব সমস্যা একসাথে, ট্যাপ করলেই ঠিক জায়গায় উড়ে যায় ── */}
-      {problems.length>0&&barHiddenFor!==problems.length&&(
-        <div style={{position:"sticky",top:0,zIndex:60,marginBottom:10,border:"2px solid #ef4444",background:"#fef2f2",borderRadius:10,boxShadow:"0 3px 10px #ef444440"}}>
-          <div style={{display:"flex",alignItems:"center",gap:6,padding:"7px 9px"}}>
-            <b style={{flex:1,fontSize:12,color:"#b91c1c"}}>🔴 {toBn(problems.length)}টা সমস্যা ঠিক করো</b>
-            <button type="button" onClick={()=>goProblem(probIdx-1)} style={{border:"1px solid #dc2626",background:"#fff",color:"#b91c1c",borderRadius:6,padding:"2px 9px",fontWeight:800,cursor:"pointer"}}>‹</button>
-            <span style={{fontSize:11,fontWeight:800,color:"#b91c1c"}}>{toBn(Math.min(probIdx,problems.length-1)+1)}/{toBn(problems.length)}</span>
-            <button type="button" onClick={()=>goProblem(probIdx+1)} style={{border:"1px solid #dc2626",background:"#fff",color:"#b91c1c",borderRadius:6,padding:"2px 9px",fontWeight:800,cursor:"pointer"}}>›</button>
-            <button type="button" onClick={()=>setBarHiddenFor(problems.length)} title="বার লুকাও (লাল চিহ্ন থাকবে)" style={{border:"none",background:"transparent",color:"#b91c1c",fontSize:15,cursor:"pointer"}}>✕</button>
-          </div>
-          <div style={{maxHeight:150,overflowY:"auto",borderTop:"1px dashed #fca5a5"}}>
-            {problems.map((q,i)=>(
-              <div key={q.key} onClick={()=>goProblem(i)}
-                style={{padding:"6px 10px",fontSize:11,lineHeight:1.45,cursor:"pointer",color:"#7f1d1d",borderBottom:"1px dotted #fecaca",background:i===Math.min(probIdx,problems.length-1)?"#fee2e2":"transparent"}}>
-                <b>{q.where}</b><br/>{q.message}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* ── সাবজেক্ট ট্যাব ── */}
       <div style={{display:"flex",gap:6,marginBottom:12}}>
         {PAPER_TABS.map(t=>(
@@ -2306,9 +2217,6 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               background:activeTab===t.key?PC.ink:PC.card,color:activeTab===t.key?"#fff":PC.muted,
               fontSize:12,fontWeight:700,cursor:"pointer",position:"relative"}}>
             {t.label}
-            {(pIdx.byTab[t.key]||[]).length>0&&(
-              <span style={{marginLeft:4,fontSize:9,background:"#ef4444",color:"#fff",padding:"1px 6px",borderRadius:10,fontWeight:800}}>🔴{(pIdx.byTab[t.key]||[]).length}</span>
-            )}
             {tabCount(t.key)>0&&(
               <span style={{marginLeft:5,fontSize:9,background:activeTab===t.key?"#ffffff33":PC.ink+"33",
                 color:activeTab===t.key?"#fff":PC.ink,padding:"1px 6px",borderRadius:10,fontWeight:800}}>{tabCount(t.key)}</span>
@@ -2417,7 +2325,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             বার সবসময় নড়তে থাকে + সেকেন্ড-কাউন্টও দেখায়, তাই hang মনে হয় না। ── */}
         <button className="btn" disabled={saving||refData===null||!!refDataError} onClick={submitPaper}
           style={{width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14.5,position:"relative",overflow:"hidden",
-            background:(saving||refData===null||refDataError)?PC.muted:(problems.length>0?"#dc2626":PC.ink),color:"#fff",border:"none"}}>
+            background:(saving||refData===null||refDataError)?PC.muted:PC.ink,color:"#fff",border:"none"}}>
           {saving&&(()=>{
             const hasReal=saveProgress&&saveProgress.total>0;
             const realPct=hasReal?Math.round((saveProgress.done/saveProgress.total)*100):0;
@@ -2434,7 +2342,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   ? `⏳ সেভ হচ্ছে... ${saveProgress.done}/${saveProgress.total} (${Math.round((saveProgress.done/saveProgress.total)*100)}%)`
                   : `⏳ সেভ হচ্ছে... (${Math.max(1,Math.floor(elapsedMs/1000))} সেকেন্ড)`)
               : refDataError?"❌ রেফারেন্স ডেটা লোড ব্যর্থ — উপরে রিট্রাই চাপো"
-              : refData===null?"⏳ রেফারেন্স ডেটা লোড হচ্ছে...":problems.length>0?`🔴 ${toBn(problems.length)}টা সমস্যা বাকি — চাপলে সেখানে নিয়ে যাবে`:`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
+              : refData===null?"⏳ রেফারেন্স ডেটা লোড হচ্ছে...":`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
           </span>
         </button>
         <div style={{textAlign:"center",fontSize:9.5,color:PC.muted,marginTop:6}}>
