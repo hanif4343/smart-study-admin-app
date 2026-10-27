@@ -8,7 +8,7 @@
    (OCR ইম্পোর্টের জন্য), না দিলে আগের মতোই খালি অবস্থা থেকে শুরু হয় (Single Entry-এর
    জন্য — কোনো behavior change নেই)। ══════════ */
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
-import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText, parseFillMarks, nzTopic, topicCandidatesFromHeading, topicRuleFromHeading, pickTopicOption } from "../../core/paperTemplates.js";
+import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText, parseFillMarks, nzTopic, topicCandidatesFromHeading, topicRuleFromHeading, pickTopicOption, BUILDER_TYPES, customTypeOf, loadUserTpls, saveUserTpls, buildUserTpl, pickerTplListFor, normTplHead } from "../../core/paperTemplates.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../../core/ocrProviders.js";
 import { buildSheetRow, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft, upsertFailedDraft, removeDraftById } from "../../core/uploaderUtils.js";
 import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
@@ -1463,6 +1463,11 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const isEnTab=activeTab==="english";
   const psLab=i=>isEnTab?String.fromCharCode(97+(i%26))+")":(SUBLABELS[i]||String(i+1))+")";
   const psNo=n=>isEnTab?n+".":(n<10?"০":"")+toBn(n)+"।";
+  // 🔢 সিরিয়াল সব ট্যাব জুড়ে চলে: বাংলা ১,২,৩ → ইংরেজি ৪,৫,৬ → গণিত ৭,৮,৯ → GK ১০,১১,১২।
+  // ফিক্স না — আগের ট্যাবগুলোতে এখন কয়টা কার্ড আছে সেটা গুনে অটো ঠিক হয় (কার্ড যোগ/মুছলে পরের ট্যাবের নম্বরও সরে)।
+  const tabOffset=PAPER_TABS.slice(0,Math.max(0,PAPER_TABS.findIndex(t=>t.key===activeTab))).reduce((n,t)=>n+((paper[t.key]||[]).length),0);
+  const[userTpls,setUserTpls]=useState(()=>loadUserTpls());   // ✍️ নিজের বানানো ফরম্যাট (সেভ থাকে)
+  const[delTplKey,setDelTplKey]=useState(null);               // 🗑️ মোছার ২য় ট্যাপের অপেক্ষা
   const[pickerOpen,setPickerOpen]=useState(()=>new Set());
   const[moreOpen,setMoreOpen]=useState(()=>new Set());     // GK: "More subject ›" খোলা কার্ডগুলো
   const toggleMore=id=>setMoreOpen(s=>{const n=new Set(s);if(n.has(id))n.delete(id);else n.add(id);return n;});
@@ -1538,7 +1543,35 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       if(tp) Object.assign(patch,tp);
       patch.topicAutoTried=true;
     }
+    if(tpl.userDefined){   // ✍️ নিজের সেভ করা ফরম্যাট → সেভ-করা Topic + Subject-ও বসে
+      const ts=tpl.topicSel;
+      if(ts&&String(ts.name||"").trim()){ patch.topicSel={id:ts.id||"",name:ts.name}; patch.topicAuto=false; }
+      if(tpl.subjectChoice) patch.subjectChoice=tpl.subjectChoice;
+      patch.topicAutoTried=true;
+    }
     updateCard(tab,card.id,patch);
+  };
+
+  // ── ✍️ নিজে লিখুন (Custom) → ধরন বদল / ফরম্যাট সেভ / মোছা ──
+  const setCustomType=(card,ct)=>{
+    const bt=BUILDER_TYPES[ct]||BUILDER_TYPES.qa, prev=resolveTpl(card,activeTab);
+    updateCard(activeTab,card.id,{cType:ct,formatStyle:bt.fmt,
+      items:card.items.map(it=>bt.mcq?{...it,qtype:"mcq"}:(prev.mcq&&it.qtype==="mcq"?{...it,qtype:"written"}:it))});
+  };
+  const saveCustomAsTemplate=(card)=>{
+    const heading=String(card.heading||"").trim();
+    if(!heading){ push("warn","ফরম্যাটের নাম লিখুন","উপরের হেডিং ঘরে যা লিখবেন (যেমন \"বাক্য পরিবর্তন করো\") সেটাই ফরম্যাটের নাম হবে"); return; }
+    const cur=loadUserTpls(), list=[...(cur[activeTab]||[])];
+    const ix=list.findIndex(x=>normTplHead(x.heading)===normTplHead(heading));
+    const tpl=buildUserTpl(card,activeTab,card.topicSel,ix>=0?list[ix].key:undefined);
+    if(ix>=0) list[ix]=tpl; else list.push(tpl);
+    const next={...cur,[activeTab]:list}; saveUserTpls(next); setUserTpls(next);
+    push("success",ix>=0?"✅ ফরম্যাট আপডেট হয়েছে":"✅ নতুন ফরম্যাট সেভ হয়েছে",`"${tpl.title}" এখন Expand ▾ তালিকায় আছে${tpl.topicSel?` · Topic: ${tpl.topicSel.name}`:""}`);
+  };
+  const deleteUserTpl=(key)=>{
+    const cur=loadUserTpls(), next={...cur,[activeTab]:(cur[activeTab]||[]).filter(x=>x.key!==key)};
+    saveUserTpls(next); setUserTpls(next); setDelTplKey(null);
+    push("success","🗑️ ফরম্যাট মোছা হয়েছে","যে কার্ডে এটা বসানো ছিল সেখানকার লেখা আগের মতোই আছে");
   };
 
   // Subject-পিল → ডাটাবেজের আসল Subject: aliases হুবহু মিললে সেটা; না মিললে kw (শুধু যদি ঠিক একটাই Subject মেলে); কিছুই না মিললে পিলের নামেই
@@ -1651,10 +1684,12 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     const custom=tpl.key==="custom";
     const editHead=custom||!!tpl.editableHeading;       // হেডিং নিজে লেখার টেমপ্লেট (Custom / Plain প্রশ্ন-উত্তর)
     const open=pickerOpen.has(card.id);
-    const list=tplListFor(activeTab);
-    const lay=custom?(card.formatStyle==="table"?"tbl":"stack"):tpl.lay;   // (plainqa → "qa")
-    const pre=custom?(isEnTab?"Answer:":"উত্তর:"):(tpl.pre||"");
-    const cols=custom?(isEnTab?["Word","Meaning"]:["শব্দ","ব্যাখ্যা"]):tpl.cols;
+    const builtinList=tplListFor(activeTab), userList=userTpls[activeTab]||[];
+    const curCType=customTypeOf(card);
+    // Custom কার্ডে ধরন (cType) বাছা থাকলে সেটাই; না থাকলে (পুরনো কার্ড) আগের মতো formatStyle থেকে
+    const lay=custom?(tpl.cType?tpl.lay:(card.formatStyle==="table"?"tbl":"stack")):tpl.lay;   // (plainqa → "qa")
+    const pre=custom?(tpl.cType?tpl.pre:(isEnTab?"Answer:":"উত্তর:")):(tpl.pre||"");
+    const cols=custom?(tpl.cType?tpl.cols:(isEnTab?["Word","Meaning"]:["শব্দ","ব্যাখ্যা"])):tpl.cols;
     const hl=(card.formatStyle==="highlight"||card.formatStyle==="fillblank")&&lay!=="fill";
     const title=card.heading||tpl.heading||(isEnTab?"(heading)":"(হেডিং লিখো)");
 
@@ -1781,15 +1816,32 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     return (
       <div key={card.id} className={"ps-sheet"+(isEnTab?" ps-en":"")}>
         <div className="ps-hd">
-          <div className="ps-h">{psNo(ci+1)} {title}</div>
+          <div className="ps-h">{psNo(tabOffset+ci+1)} {title}</div>
           <button type="button" className={"ps-ex"+(open?" on":"")} onClick={()=>togglePicker(card.id)}>{open?"Close ▴":"Expand ▾"}</button>
           <button type="button" tabIndex={-1} className="ps-x" title="এই প্রশ্নটা বাদ দাও" onClick={()=>removeCard(activeTab,card.id)}>❌</button>
         </div>
         {open&&(
           <div className="ps-pk">
-            {list.map((t,i)=>(
+            {builtinList.map((t,i)=>(
               <button type="button" key={t.key} className={t.key===tpl.key?"cur":""}
                 onClick={()=>{setTemplate(activeTab,card,t);togglePicker(card.id);}}>{psNo(i+1)} {t.title}</button>
+            ))}
+            {userList.map((t,i)=>(
+              <div key={t.key} style={{display:"flex",borderBottom:"1px solid #ddd",background:t.key===tpl.key?"#FFEB00":"#fff"}}>
+                <button type="button" className={t.key===tpl.key?"cur":""} style={{flex:1,borderBottom:0}}
+                  onClick={()=>{setTemplate(activeTab,card,t);togglePicker(card.id);}}>
+                  {psNo(builtinList.length+i+1)} {t.title}
+                  <span style={{fontSize:10,color:"#555",marginLeft:5}}>⭐ নিজের{t.topicSel?` · ${t.topicSel.name}`:""}</span>
+                </button>
+                {delTplKey===t.key?(
+                  <>
+                    <button type="button" style={{width:"auto",borderBottom:0,padding:"6px 8px",fontSize:11}} onClick={()=>setDelTplKey(null)}>না</button>
+                    <button type="button" style={{width:"auto",borderBottom:0,padding:"6px 8px",fontSize:11,background:"#dc2626",color:"#fff",fontWeight:800}} onClick={()=>deleteUserTpl(t.key)}>✅ মুছো</button>
+                  </>
+                ):(
+                  <button type="button" title="এই ফরম্যাট মুছে ফেলো" style={{width:"auto",borderBottom:0,padding:"6px 10px"}} onClick={()=>setDelTplKey(t.key)}>🗑️</button>
+                )}
+              </div>
             ))}
             <button type="button" className={custom?"cur":""} onClick={()=>{setTemplate(activeTab,card,CUSTOM_TPL);togglePicker(card.id);}}>{CUSTOM_TPL.title}</button>
           </div>
@@ -1801,10 +1853,30 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               onBlur={()=>{const tp=topicPatchForHeading(card,card.heading); if(tp)updateCard(activeTab,card.id,tp);}}
               />
             {custom&&(
-              <select className="inp" value={card.formatStyle} onChange={e=>updateCard(activeTab,card.id,{formatStyle:e.target.value})}>
-                {formatStylesFor(activeTab).map(f=><option key={f.v} value={f.v}>{f.label}</option>)}
+              <select className="inp" value={curCType} onChange={e=>setCustomType(card,e.target.value)}>
+                {Object.entries(BUILDER_TYPES).map(([k,b])=><option key={k} value={k}>{isEnTab?b.en:b.bn}</option>)}
               </select>
             )}
+          </div>
+        )}
+        {custom&&(
+          <div style={{margin:"0 0 6px 6px",display:"flex",flexWrap:"wrap",gap:6,alignItems:"center",fontSize:11}}>
+            {curCType==="table"&&[0,1].map(k=>(
+              <input key={k} className="inp" style={{flex:"1 1 90px",minWidth:80,fontSize:11}} placeholder={(k?(isEnTab?"Column 2 name":"২য় কলামের নাম"):(isEnTab?"Column 1 name":"১ম কলামের নাম"))}
+                value={(card.cCols&&card.cCols[k])||""} onChange={e=>{const c=[...(card.cCols||["",""])]; c[k]=e.target.value; updateCard(activeTab,card.id,{cCols:c});}}/>
+            ))}
+            {(curCType==="pair"||curCType==="highlight")&&(
+              <>
+                <input className="inp" style={{width:70,fontSize:11}} placeholder={isEnTab?"Separator":"বিভাজক"} value={card.cSep||""} onChange={e=>updateCard(activeTab,card.id,{cSep:e.target.value})}/>
+                <input className="inp" style={{flex:"1 1 110px",minWidth:90,fontSize:11}} placeholder={isEnTab?"3rd field name (optional)":"৩য় ঘরের নাম (ঐচ্ছিক)"} value={card.cThird||""} onChange={e=>updateCard(activeTab,card.id,{cThird:e.target.value})}/>
+              </>
+            )}
+            {(curCType==="qa"||curCType==="fillu")&&(
+              <input className="inp" style={{flex:"1 1 130px",minWidth:90,fontSize:11}} placeholder={isEnTab?"Text before answer (Ans:)":"উত্তরের আগে লেখা (উত্তর:)"} value={card.cPre||""} onChange={e=>updateCard(activeTab,card.id,{cPre:e.target.value})}/>
+            )}
+            <button type="button" className="ps-add" style={{margin:0,flex:"1 1 100%"}} onClick={()=>saveCustomAsTemplate(card)}>
+              {isEnTab?"💾 Save as my new format (with Topic)":"💾 নতুন ফরম্যাট হিসেবে সেভ করো (Topic সহ)"}
+            </button>
           </div>
         )}
         {body}
@@ -1868,7 +1940,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     return (
       <div key={card.id} className="ps-sheet">
         <div className="ps-row st" style={{marginLeft:0}}>
-          <span className="ps-lab">{psLab(ci)}</span>
+          <span className="ps-lab">{psNo(tabOffset+ci+1)}</span>
           <PsTA cover math={isMath} className="q" taRef={el=>{flatQRefs.current[card.id]=el;}} value={card.question}
             onChange={e=>updateCard(activeTab,card.id,{question:e.target.value})}/>
           <span className="ps-ac">

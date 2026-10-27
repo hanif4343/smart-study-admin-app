@@ -53,14 +53,77 @@ export const PAPER_TEMPLATES={
 export const CUSTOM_TPL={key:"custom",title:"✍️ নিজে হেডিং লিখব (Custom)",heading:"",fmt:"plain",lay:"stack",custom:true};
 export const tplListFor=tab=>PAPER_TEMPLATES[tab]||[];
 const nh=s=>String(s||"").replace(/[:：।\s]+$/g,"").replace(/\s+/g," ").trim().toLowerCase();
+
+/* ══ ✍️ নিজে লিখুন → নিজের নতুন ফরম্যাট বানানো ও সেভ রাখা ══
+   Custom কার্ডে ধরন (প্রশ্ন-উত্তর / জোড়া / টেবিল / হাইলাইট / শূন্যস্থান / MCQ) বেছে হেডিং লিখে "সেভ" করলে
+   সেটা এই ব্রাউজার/অ্যাপে থেকে যায় (localStorage) এবং Expand ▾ তালিকায় বাংলা/ইংরেজি ট্যাবে নিজে থেকে আসে —
+   Topic সহ। ধরনগুলো বিল্ট-ইন ফরম্যাটগুলোর একই লেআউট ব্যবহার করে, তাই সেভ-লজিক আলাদা করে বদলাতে হয় না। */
+export const LS_USER_TPLS="ss_user_paper_tpls_v1";
+export const BUILDER_TYPES={
+  qa:       {fmt:"plain",    lay:"stack", bn:"প্রশ্ন-উত্তর (দুই লাইন)",              en:"Question & answer (two lines)"},
+  pair:     {fmt:"plain",    lay:"pair",  sep:"=", bn:"জোড়া — ক = খ",                en:"Pair — A = B"},
+  table:    {fmt:"table",    lay:"tbl",   bn:"টেবিল — কলামের নাম দিন",               en:"Table — name the columns"},
+  highlight:{fmt:"highlight",lay:"pair",  sep:"-", bn:"হাইলাইট — বাক্যে শব্দ মার্ক + উত্তর", en:"Highlight — mark a word + answer"},
+  fill:     {fmt:"fillblank",lay:"fill",  bn:"শূন্যস্থান — বাক্যে ফাঁকা (B+U মার্ক)", en:"Fill-blank — blank in sentence (B+U mark)"},
+  fillu:    {fmt:"fillblank",lay:"stack", bn:"শূন্যস্থান — _শব্দ_ মার্ক",            en:"Fill-blank — _word_ mark"},
+  mcq:      {fmt:"plain",    lay:"mcq",   mcq:true, bn:"MCQ — অপশনসহ",              en:"MCQ — with options"},
+};
+// পুরনো Custom কার্ডে cType নেই — formatStyle থেকে ধরন অনুমান
+export const LEGACY_CTYPE={plain:"qa",table:"table",highlight:"highlight",fillblank:"fillu",plainqa:"qa"};
+export const customTypeOf=card=>(card&&card.cType&&BUILDER_TYPES[card.cType])?card.cType:(LEGACY_CTYPE[card&&card.formatStyle]||"qa");
+
+let USER_TPLS={bangla:[],english:[]};
+export function loadUserTpls(){
+  try{
+    const o=JSON.parse(localStorage.getItem(LS_USER_TPLS)||"{}");
+    USER_TPLS={bangla:Array.isArray(o.bangla)?o.bangla:[],english:Array.isArray(o.english)?o.english:[]};
+  }catch{ USER_TPLS={bangla:[],english:[]}; }
+  return USER_TPLS;
+}
+export function saveUserTpls(next){
+  USER_TPLS={bangla:next.bangla||[],english:next.english||[]};
+  try{ localStorage.setItem(LS_USER_TPLS,JSON.stringify(USER_TPLS)); }catch{}
+  return USER_TPLS;
+}
+export const userTplsFor=tab=>USER_TPLS[tab]||[];
+export const pickerTplListFor=tab=>[...tplListFor(tab),...userTplsFor(tab)];
+try{ loadUserTpls(); }catch{}
+
+// Custom কার্ডের বাছা ধরন + কলাম/বিভাজক/প্রিফিক্স থেকে "কার্যকর" টেমপ্লেট — resolveTpl এটাই ফেরত দেয়, তাই
+// রেন্ডার/সাবমিট (lay, mcq ...) সব জায়গা নিজে থেকে নতুন ধরন মেনে চলে।
+function customEffective(card,tab){
+  if(!card||!card.cType||!BUILDER_TYPES[card.cType]) return CUSTOM_TPL;
+  const bt=BUILDER_TYPES[card.cType], en=tab==="english";
+  const dc=en?["Word","Meaning"]:["শব্দ","ব্যাখ্যা"];
+  const cc=Array.isArray(card.cCols)?card.cCols:[];
+  return{...CUSTOM_TPL,cType:card.cType,fmt:bt.fmt,lay:bt.lay,mcq:!!bt.mcq,
+    sep:String(card.cSep||bt.sep||"=").trim()||"=",
+    pre:String(card.cPre||"").trim()||(en?"Ans:":"উত্তর:"),
+    cols:[String(cc[0]||"").trim()||dc[0],String(cc[1]||"").trim()||dc[1]],
+    third:String(card.cThird||"").trim()?{field:"explanation",pre:String(card.cThird).trim()}:undefined};
+}
+// ইউজারের সেভ করা টেমপ্লেট বানানো (key দিলে একই key-তে আপডেট)
+export function buildUserTpl(card,tab,topicSel,key){
+  const ct=customTypeOf(card), eff=customEffective({...card,cType:ct},tab), heading=String(card.heading||"").trim();
+  return{
+    key:key||("u_"+Date.now().toString(36)+Math.random().toString(36).slice(2,5)),
+    title:heading.replace(/[:：।\s]+$/g,""), heading,
+    fmt:eff.fmt, lay:eff.lay, mcq:eff.mcq, sep:eff.sep, pre:eff.pre,
+    cols:eff.lay==="tbl"?eff.cols:undefined, third:eff.third, cType:ct,
+    topicSel:(topicSel&&String(topicSel.name||"").trim())?{id:topicSel.id||"",name:String(topicSel.name).trim()}:null,
+    subjectChoice:card.subjectChoice||"grammar", userDefined:true, savedAt:Date.now(),
+  };
+}
+export const normTplHead=nh;
+
 // কার্ডের tplKey থাকলে সেটাই; না থাকলে (পুরোনো ড্রাফট/OCR ইম্পোর্ট) হেডিং মিলিয়ে বের করা; না মিললে Custom।
 export function resolveTpl(card,tab){
-  const list=tplListFor(tab);
-  if(card&&card.tplKey==="custom") return CUSTOM_TPL;
+  const list=[...tplListFor(tab),...userTplsFor(tab)];
+  if(card&&card.tplKey==="custom") return customEffective(card,tab);
   if(card&&card.tplKey){ const t=list.find(x=>x.key===card.tplKey); if(t) return t; }
   const h=nh(card&&card.heading);
   if(h){ const t=list.find(x=>nh(x.heading)===h); if(t) return t; }
-  return CUSTOM_TPL;
+  return customEffective(card,tab);
 }
 // সেভের সময় গ্রুপ-হেডিং: cloze হলে নির্দেশনা + শব্দ-বক্স + অনুচ্ছেদ একসাথে (ইউজার-অ্যাপে হেডিং-এর অংশ হিসেবে দেখায়)
 export function cardHeadingText(card,tab){
