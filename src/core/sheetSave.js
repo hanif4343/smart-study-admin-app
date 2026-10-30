@@ -18,7 +18,7 @@ function fetchWithTimeout(url,opts,timeoutMs){
   return fetch(url,{...opts,signal:ctrl.signal}).finally(()=>clearTimeout(timer));
 }
 
-async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSize,examAppearance,source}){
+async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,onEvent,chunkSize,examAppearance,source}){
   if(!rows.length)return{added:0,skipped:0,failedRows:[]};
   if(!GAS){ push?.("error","❌ GAS URL সেট করা নেই","VITE_GAS_URL env var বিল্ডে সেট করা আছে কিনা চেক করো"); return{added:0,skipped:0,failedRows:rows}; }
   if(!gasSecret){ push?.("error","❌ GAS Secret Key দাও","Save Location প্যানেলে Secret Key বসাও"); return{added:0,skipped:0,failedRows:rows}; }
@@ -48,6 +48,8 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
     if(source) body.source=source;
     let ok=false;
     for(let attempt=1;attempt<=2 && !ok;attempt++){
+      // 📡 ঘটনা-রিপোর্ট (ব্যাকগ্রাউন্ড আপলোড-বারের জন্য): চাংক শুরু / রিট্রাই
+      try{ onEvent?.({type:attempt===1?"chunk-start":"retry",index:Math.floor(i/CHUNK)+1,totalChunks,rows:chunk.length,attempt}); }catch{}
       // ⚡ বড় চাংক (১০০টা পর্যন্ত) এক অনুরোধে যায় — সার্ভারের কাজ প্রশ্ন-সংখ্যার সাথে বাড়ে, তাই টাইমআউটও সেই অনুযায়ী (রিট্রাই নিরাপদ: ডুপ্লিকেট আর হয় না)
       const baseMs=Math.min(120000,Math.max(25000,15000+chunk.length*700));
       const timeoutMs=attempt===1?baseMs:Math.min(170000,Math.round(baseMs*1.7));
@@ -71,6 +73,7 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
       }
     }
     onProgress?.({done:Math.min(i+CHUNK,rows.length),total:rows.length,chunkIndex:Math.floor(i/CHUNK)+1,totalChunks});
+    try{ onEvent?.({type:"chunk-done",index:Math.floor(i/CHUNK)+1,totalChunks,rows:chunk.length}); }catch{}
   }
   // ⚡ Sheet-এ সেভ ঠিকই হয়ে গেছে, কিন্তু GAS-এর Firebase mirror-sync ব্যর্থ হলে dedupe-এর
   // "Quiz-এ আছে" কাউন্ট আর existingQuizKeys পুরনো থেকে যাবে — সেটা এখন চুপচাপ না থেকে জানানো হয়।

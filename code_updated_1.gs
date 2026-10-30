@@ -2115,7 +2115,23 @@ function qBulkSave_(params, ss) {
     for (var nd = 0; nd < need.length; nd++) if (ix[need[nd]] === undefined) return { result: "error", error: "Questions শিটে কলাম নেই: " + need[nd] };
 
     var n = sh.getLastRow() - 1;
-    var data = n > 0 ? sh.getRange(2, 1, n, lc).getValues() : [];
+    // ⚡ Questions শিটের শুধু যে ৮টা কলাম এখানে লাগে সেগুলোই পড়া হয় (id, question, subtopic, subject, questiontype, in_quiz, in_qbank, topic_id)।
+    //    আগে সব কলাম (লম্বা explanation/অপশন/ট্যাগ সহ) পড়া হতো — শিট বড় হলে সেটাই সবচেয়ে ধীর অংশ। পাশাপাশি থাকা কলাম এক রেঞ্জে পড়া হয়।
+    //    বাকি ঘরগুলো ফাঁকা থাকে — নিচের কোড এই ৮টার বাইরে data[][] থেকে কিছু পড়ে না।
+    var data = [];
+    if (n > 0) {
+      var wantKeys = ["id", "question", "subtopic", "subject", "questiontype", "inquiz", "inqbank", "topicid"], wantCols = [];
+      wantKeys.forEach(function (wk) { if (ix[wk] !== undefined && wantCols.indexOf(ix[wk]) < 0) wantCols.push(ix[wk]); });
+      wantCols.sort(function (a, b) { return a - b; });
+      for (var dr = 0; dr < n; dr++) data.push(new Array(lc));
+      var wi = 0;
+      while (wi < wantCols.length) {
+        var wj = wi; while (wj + 1 < wantCols.length && wantCols[wj + 1] === wantCols[wj] + 1) wj++;
+        var wWidth = wantCols[wj] - wantCols[wi] + 1, wBlk = sh.getRange(2, wantCols[wi] + 1, n, wWidth).getValues();
+        for (var wr = 0; wr < n; wr++) for (var wc = 0; wc < wWidth; wc++) data[wr][wantCols[wi] + wc] = wBlk[wr][wc];
+        wi = wj + 1;
+      }
+    }
     var norm = function (s) { return (s || "").toString().toLowerCase().replace(/\s+/g, " ").trim().substring(0, 100); };
     var existing = {}, existingByQ = {}, maxQn = 0, idsSeen = {};
     var cQ = ix["question"], cSt = ix["subtopic"], cSu = ix["subject"], cId = ix["id"];

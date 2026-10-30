@@ -10,7 +10,8 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { PAPER_TEMPLATES, CUSTOM_TPL, RO, tplListFor, resolveTpl, cardHeadingText, parseFillMarks, nzTopic, topicCandidatesFromHeading, topicRuleFromHeading, pickTopicOption, BUILDER_TYPES, customTypeOf, loadUserTpls, saveUserTpls, buildUserTpl, pickerTplListFor, normTplHead } from "../../core/paperTemplates.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../../core/ocrProviders.js";
-import { buildSheetRow, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft, upsertFailedDraft, removeDraftById } from "../../core/uploaderUtils.js";
+import { buildSheetRow, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, loadDraft, saveDraft, clearDraft, upsertFailedDraft, removeDraftById, upsertPendingDraft, markStalePendingFailed } from "../../core/uploaderUtils.js";
+import { createJob, jobEvent, finishJob, isJobActive } from "../../core/uploadJobs.js";
 import { saveRowsToSheet, fetchReferenceData } from "../../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../../core/referenceHelpers.js";
 import { subjectsForTags, topicsOfSubject } from "../../core/refFilter.js";
@@ -889,12 +890,16 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   // LS_DRAFT_PAPER_LIST), প্রতিটা এন্ট্রি Post+Institution+সাল দিয়ে হেডলাইন করা,
   // সবচেয়ে নতুনটা সবার উপরে (savedAt অনুযায়ী descending sort)। ──
   const[draftList,setDraftList]=useState(()=>{
-    try{ const raw=localStorage.getItem(LS_DRAFT_PAPER_LIST); const arr=raw?JSON.parse(raw):[]; return Array.isArray(arr)?arr:[]; }catch{ return []; }
+    // ⏳ আপলোড-চলছে দাগ আছে কিন্তু কোনো জব আসলে চলছে না (অ্যাপ বন্ধ/রিলোড হয়েছিল) → লাল করে দেওয়া হয়, যাতে হারায় না
+    try{ return markStalePendingFailed(LS_DRAFT_PAPER_LIST,isJobActive); }catch{ return []; }
   });
   const[showDraftList,setShowDraftList]=useState(false);
   // 🔴 ব্যর্থ সাবমিটের খসড়ার id — একই প্রশ্নপত্র আবার ব্যর্থ হলে নতুন কপি না বানিয়ে এটাই আপডেট হয়, সফল হলে এটা মুছে যায়
   const failedDraftIdRef=useRef(null);
   const failedDraftCount=draftList.filter(d=>d&&d.failed).length;
+  const uploadingDraftCount=draftList.filter(d=>d&&d.uploading).length;
+  const[metaMissing,setMetaMissing]=useState(false);   // 🔴 পদ/প্রতিষ্ঠান/সাল বাকি — কার্ড লাল দেখায়
+  const metaCardRef=useRef(null);
   const persistDraftList=(list)=>{
     setDraftList(list);
     try{ localStorage.setItem(LS_DRAFT_PAPER_LIST,JSON.stringify(list)); }catch{}
@@ -1184,11 +1189,14 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     // গার্ড লাগবে, নাহলে দ্রুত Ctrl+S চাপলে refData লোড হওয়ার আগেই সাবমিট হয়ে ডুপ্লিকেট
     // Subject তৈরি হয়ে যেতে পারে (দেখো বাটনের ওপরের কমেন্ট)।
     if(refData===null){ push("warn","⏳ রেফারেন্স ডেটা এখনো লোড হচ্ছে","একটু অপেক্ষা করে আবার চেষ্টা করো"); return; }
-    // পদ/প্রতিষ্ঠান/সাল — একটাতেও কিছু টাইপ করা থাকলে তিনটাই লাগবে (নাহলে অসম্পূর্ণ
-    // Appearance তৈরি হয়ে যাবে), অথবা তিনটাই ফাঁকা রেখে Appearance ছাড়াই সাবমিট করা যাবে।
-    if(postSel.name.trim()||instSel.name.trim()||examYear.trim()){
-      if(!postSel.name.trim()||!instSel.name.trim()||!examYear.trim()){
-        push("warn","⚠️ পদ, প্রতিষ্ঠান ও সাল — একটা দিলে তিনটাই দিতে হবে (অথবা তিনটাই খালি রাখো)","");
+    // 🔒 পদ, প্রতিষ্ঠান ও সাল — তিনটাই বাধ্যতামূলক। QBank মানেই বিগত পরীক্ষার প্রশ্ন; এই তিনটা ছাড়া সেভ হলে
+    // প্রশ্নটা কোন পরীক্ষার তা জানা যায় না (Exam Appearance তৈরি হয় না)। তাই ফাঁকা থাকলে সাবমিটই হবে না।
+    {
+      const miss=[]; if(!postSel.name.trim())miss.push("পদ"); if(!instSel.name.trim())miss.push("প্রতিষ্ঠান"); if(!examYear.trim())miss.push("সাল");
+      if(miss.length){
+        push("error",`⚠️ ${miss.join(", ")} না দিলে সেভ হবে না`,`QBank-এ পদ, প্রতিষ্ঠান ও সাল তিনটাই দিতে হবে — উপরের "কোন প্রশ্নপত্র থেকে?" ঘরে দাও`);
+        setMetaMissing(true); setTimeout(()=>setMetaMissing(false),5000);
+        try{ metaCardRef.current?.scrollIntoView({behavior:"smooth",block:"center"}); }catch{}
         return;
       }
     }
@@ -1434,53 +1442,73 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       // সাবমিট বাটনে লাইভ "X/Y (NN%)" আর একটা ভিজুয়াল প্রোগ্রেস বার দেখানো হয় —
       // "সেভ হচ্ছে..." লেখা একনাগাড়ে দেখে ধৈর্য হারিয়ে অ্যাপ বন্ধ করে দেওয়ার সমস্যা
       // এখন থেকে কমবে (নিচে UI-তে দেখো)।
-      const tSave0=Date.now();
-      const res=await saveRowsToSheet({
-        rows:allRows,targetTab:"QBank",gasSecret,push,examAppearance,source:"Single_Text_Paper",
-        chunkSize:100,onProgress:p=>setSaveProgress(p),   // ⚡ ১৫ → ১০০: সাধারণ প্রশ্নপত্র ১টা অনুরোধেই যায় (সার্ভার প্রতি অনুরোধে পুরো শিট পড়ে, তাই অনুরোধ কমানোই সবচেয়ে বড় লাভ)
-      });
-      const secsTotal=((Date.now()-tStart)/1000).toFixed(1), secsSave=((Date.now()-tSave0)/1000).toFixed(1);
-      const failedCount=(res.failedRows||[]).length;
-      if(res.added>0){
-        push("success",`✅ ${failedCount>0?`আংশিক সাবমিট হয়েছে (${res.added}টা)`:"পুরো প্রশ্নপত্র সাবমিট হয়েছে!"} (${res.added}টা প্রশ্ন)`,`এই সেশনে মোট ${sessionCount+res.added}টি · ⏱ ${secsTotal} সেকেন্ড (সার্ভারে ${secsSave}s)`);
-        setSessionCount(c=>c+res.added);
-        fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
-      }
-      if(res.examAppearancesLinkedToExisting>0) push("success","🔗 কিছু প্রশ্ন আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
-      // 🔴 Exam Appearance যাচাই: প্রতিটা প্রক্রিয়া-হওয়া প্রশ্নের (নতুন + আগে-থেকে-থাকা) জন্য একটা করে Appearance যোগ হয়েছে
-      // বা (একই পদ+প্রতিষ্ঠান+সাল) আগে থেকেই ছিল — এই হিসাব না মিললে প্রশ্নপত্র সফল ধরা হয় না, লাল ড্রাফটে থাকে।
-      const processedQ=(res.added||0)+(res.skipped||0);
-      // GAS নিজেই গোনে কয়টা সারির Appearance না যোগ হয়েছে, না আগে থেকে (একই পদ+প্রতিষ্ঠান+সাল) ছিল — সেটাই আসল ব্যর্থতা
-      const missingEA=res.appearanceReported?(res.examAppearancesMissing||0):0;
-      const appearanceMissing=!!examAppearance && failedCount===0 && processedQ>0 && missingEA>0;
-      if(appearanceMissing) push("error","🔴 প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","প্রশ্নপত্র লাল চিহ্নসহ খসড়ায় রাখা হলো — আবার 🚀 সাবমিট দিলে শুধু Appearance জুড়বে, প্রশ্ন ডুপ্লিকেট হবে না");
-      if(res.added===0 && res.skipped>0 && failedCount===0){
-        if(examAppearance && !appearanceMissing && (res.examAppearancesAdded||0)>0) push("success","🔗 সব প্রশ্ন আগে থেকেই QBank-এ ছিল","শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance যোগ হয়েছে");
-        else if(!appearanceMissing) push("warn","⚠️ সবগুলোই ইতিমধ্যে Sheet-এ আছে (duplicate)","");
-      } else if(res.added===0 && res.skipped===0 && failedCount===0){
-        push("error","সেভ ব্যর্থ","নেটওয়ার্ক সমস্যা হতে পারে, একটু পর আবার চেষ্টা করো — প্রশ্নপত্র লাল চিহ্নসহ খসড়ায় রাখা হয়েছে");
-        recordFail("সার্ভারে সেভ হয়নি (নেটওয়ার্ক/সার্ভার সমস্যা)");
-      }
-      // 🐛 ফিক্স (নেটওয়ার্ক-ব্যর্থতায় নীরবে প্রশ্ন হারিয়ে যাওয়া): আগে failedRows চেক-ই
-      // হতো না — কোনো চাংক ব্যর্থ হলেও পুরো paper রিসেট (makeInitialPaper) হয়ে যেত, ফলে
-      // ব্যর্থ হওয়া প্রশ্নগুলো চিরতরে হারিয়ে যেত। এখন কিছু চাংক ব্যর্থ হলে paper রিসেট হয়
-      // না (ড্রাফটও থেকে যায়) — শুধু সফলভাবে সেভ হলেই (কোনো ব্যর্থ চাংক ছাড়া) খাতা খালি হয়। ──
-      if(failedCount>0){
-        push("error",`⚠️ ${failedCount}টা প্রশ্ন সেভ হয়নি (নেটওয়ার্ক সমস্যা)`,"খাতা খালি করা হয়নি, লাল চিহ্নসহ খসড়াতেও রাখা হয়েছে — আবার 🚀 সাবমিট চাপলে শুধু বাকিগুলোই যাবে (আগেরগুলো ডুপ্লিকেট হবে না)");
-        recordFail(`${failedCount}টা প্রশ্ন সার্ভারে যায়নি`);
-      } else if(appearanceMissing){
-        // প্রশ্ন গেছে, কিন্তু Exam Appearance যোগ হয়নি → খাতা খালি করা হবে না, লাল খসড়ায় থাকবে
-        recordFail(`প্রশ্ন সেভ হয়েছে কিন্তু ${missingEA}টার Exam Appearance যোগ হয়নি`);
-      } else if(res.added>0 || res.skipped>0){
-        // 🆕 নামসহ খসড়ায় একই হেডিং/প্রশ্ন (একই পদ+প্রতিষ্ঠান+সাল) থাকলে সেগুলো এখন ডাটাবেজে চলে গেছে — খসড়া থেকে নিজে সরাও
-        const pr=pruneNamedDrafts(paper,{postSel,instSel,examYear});
-        if(pr.cards>0) push("info",`🧹 খসড়া থেকে ${toBn(pr.cards)}টা সাবমিট-হওয়া কার্ড সরানো হয়েছে`,pr.drafts>0?`${toBn(pr.drafts)}টা খসড়া সম্পূর্ণ ফাঁকা হয়ে বাদ গেছে`:"একই পদ/প্রতিষ্ঠান/সালের খসড়া থেকে");
-        setPaper(makeInitialPaper());
-        setActiveTab("bangla");
-        clearDraft(LS_DRAFT_PAPER);
-        // ✅ সফল → এই প্রশ্নপত্রের লাল (ব্যর্থ) খসড়া থাকলে সেটাও এখন মুছে যায়
-        if(failedDraftIdRef.current){ setDraftList(removeDraftById(LS_DRAFT_PAPER_LIST,failedDraftIdRef.current)); failedDraftIdRef.current=null; }
-      }
+      // ══ 🚀 ব্যাকগ্রাউন্ড আপলোড ══
+      // ডেটা তৈরি শেষ (পদ/প্রতিষ্ঠান/Subject/Topic resolve + সব সারি বানানো)। এখন সার্ভারে পাঠানোর ভারী কাজ ব্যাকগ্রাউন্ডে যায়:
+      //  ১) প্রশ্নপত্রের কপি খসড়া-তালিকায় "⏳ আপলোড চলছে" দিয়ে নিরাপদে রাখা (অ্যাপ বন্ধ হলেও হারাবে না)
+      //  ২) ফর্ম সাথে সাথে খালি — পরের প্রশ্নপত্র টাইপ শুরু করা যায়
+      //  ৩) নিচের চলমান-বারে সত্যিকারের অগ্রগতি; ব্যর্থ হলে আগের কপিটাই 🔴 লাল খসড়া হয়ে যায়
+      const jobSnap={paper,activeTab,postSel,instSel,examYear};
+      const jobId=createJob({label:draftHeadline({postSel,instSel,examYear}),total:allRows.length});
+      const jobDraftId=jobId;   // খসড়ার id = জবের id, তাই পেজ ছেড়ে ফিরে এলেও "চলমান" আর "মাঝপথে থেমে যাওয়া" আলাদা চেনা যায়
+      setDraftList(upsertPendingDraft(LS_DRAFT_PAPER_LIST,{id:jobDraftId,...jobSnap}));
+      setPaper(makeInitialPaper());
+      setActiveTab("bangla");
+      clearDraft(LS_DRAFT_PAPER);
+      failedDraftIdRef.current=null;
+      push("info","🚀 আপলোড শুরু হয়েছে",`${allRows.length}টা প্রশ্ন ব্যাকগ্রাউন্ডে যাচ্ছে — নিচের বারে অগ্রগতি দেখো। ততক্ষণে পরের প্রশ্নপত্র টাইপ করতে পারো`);
+      setSaving(false);
+      setSaveProgress(null);
+
+      const failJob=(reason)=>{
+        try{ setDraftList(upsertFailedDraft(LS_DRAFT_PAPER_LIST,{id:jobDraftId,...jobSnap,failReason:reason})); setShowDraftList(true); }catch{}
+        finishJob(jobId,{ok:false,message:"লাল খসড়ায় আছে — লোড করে আবার পাঠাও"});
+      };
+      (async()=>{
+        const tSave0=Date.now();
+        try{
+          const res=await saveRowsToSheet({
+            rows:allRows,targetTab:"QBank",gasSecret,push,examAppearance,source:"Single_Text_Paper",
+            chunkSize:100,   // ⚡ সাধারণ প্রশ্নপত্র ১টা অনুরোধেই যায় (সার্ভার প্রতি অনুরোধে পুরো শিট পড়ে, তাই অনুরোধ কমানোই সবচেয়ে বড় লাভ)
+            onEvent:ev=>jobEvent(jobId,ev),
+          });
+          const secsSave=((Date.now()-tSave0)/1000).toFixed(1);
+          const failedCount=(res.failedRows||[]).length;
+          if(res.added>0){
+            push("success",`✅ ${failedCount>0?`আংশিক সাবমিট হয়েছে (${res.added}টা)`:"পুরো প্রশ্নপত্র সাবমিট হয়েছে!"} (${res.added}টা প্রশ্ন)`,`সার্ভারে ⏱ ${secsSave} সেকেন্ড লেগেছে`);
+            setSessionCount(c=>c+res.added);
+            fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
+          }
+          if(res.examAppearancesLinkedToExisting>0) push("success","🔗 কিছু প্রশ্ন আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
+          // 🔴 Exam Appearance যাচাই: GAS নিজেই গোনে কয়টা সারির Appearance না যোগ হয়েছে, না আগে থেকে (একই পদ+প্রতিষ্ঠান+সাল) ছিল — সেটাই আসল ব্যর্থতা
+          const processedQ=(res.added||0)+(res.skipped||0);
+          const missingEA=res.appearanceReported?(res.examAppearancesMissing||0):0;
+          const appearanceMissing=!!examAppearance && failedCount===0 && processedQ>0 && missingEA>0;
+          if(failedCount>0){
+            push("error",`⚠️ ${failedCount}টা প্রশ্ন সেভ হয়নি (নেটওয়ার্ক সমস্যা)`,"লাল খসড়ায় রাখা হয়েছে — 📂 খসড়া তালিকা থেকে \"লোড করে আবার পাঠাও\" চাপো, আগেরগুলো ডুপ্লিকেট হবে না");
+            failJob(`${failedCount}টা প্রশ্ন সার্ভারে যায়নি`);
+          } else if(appearanceMissing){
+            push("error","🔴 প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","লাল খসড়ায় রাখা হয়েছে — আবার পাঠালে শুধু Appearance জুড়বে, প্রশ্ন ডুপ্লিকেট হবে না");
+            failJob(`প্রশ্ন সেভ হয়েছে কিন্তু ${missingEA}টার Exam Appearance যোগ হয়নি`);
+          } else if(res.added>0 || res.skipped>0){
+            if(res.added===0){
+              if(examAppearance&&(res.examAppearancesAdded||0)>0) push("success","🔗 সব প্রশ্ন আগে থেকেই QBank-এ ছিল","শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance যোগ হয়েছে");
+              else push("warn","⚠️ সবগুলোই ইতিমধ্যে Sheet-এ আছে (duplicate)","");
+            }
+            // সফল → আপলোডের সময় রাখা কপিটা আগে সরাই (নইলে নিচের prune সেটাকেও গুনে ভুল সংখ্যা দেখাত), তারপর নামসহ খসড়ায় একই কার্ড থাকলে সেগুলোও সরাই
+            setDraftList(removeDraftById(LS_DRAFT_PAPER_LIST,jobDraftId));
+            const pr=pruneNamedDrafts(jobSnap.paper,{postSel,instSel,examYear});
+            if(pr.cards>0) push("info",`🧹 খসড়া থেকে ${toBn(pr.cards)}টা সাবমিট-হওয়া কার্ড সরানো হয়েছে`,pr.drafts>0?`${toBn(pr.drafts)}টা খসড়া সম্পূর্ণ ফাঁকা হয়ে বাদ গেছে`:"একই পদ/প্রতিষ্ঠান/সালের খসড়া থেকে");
+            finishJob(jobId,{ok:true,message:`${res.added}টা নতুন${res.skipped>0?` · ${res.skipped}টা আগে থেকেই ছিল`:""}`});
+          } else {
+            push("error","সেভ ব্যর্থ","নেটওয়ার্ক সমস্যা হতে পারে — প্রশ্নপত্র লাল খসড়ায় রাখা হয়েছে, একটু পর আবার পাঠাও");
+            failJob("সার্ভারে সেভ হয়নি (নেটওয়ার্ক/সার্ভার সমস্যা)");
+          }
+        }catch(e){
+          push("error","আপলোড ব্যর্থ",(e.message||"")+" — প্রশ্নপত্র লাল খসড়ায় রাখা হয়েছে");
+          failJob("আপলোড ব্যর্থ: "+(e.message||""));
+        }
+      })();
+      return;
     }catch(e){
       push("error","সাবমিট ব্যর্থ",e.message+" — খাতা খালি হয়নি, লাল চিহ্নসহ খসড়ায় রাখা হয়েছে");
       recordFail("সাবমিট ব্যর্থ: "+(e.message||""));
@@ -2143,7 +2171,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             </div>
             <div style={{display:"flex",gap:8,padding:"10px 14px",borderTop:`1px solid ${PC.border}`}}>
               <button type="button" onClick={()=>setPreviewDraft(null)} style={{flex:1,padding:"10px 0",borderRadius:9,border:`1px solid ${PC.border}`,background:"transparent",color:PC.ink,fontWeight:700,fontSize:12,cursor:"pointer"}}>✕ বন্ধ</button>
-              <button type="button" onClick={()=>{loadNamedDraft(d);setPreviewDraft(null);}} style={{flex:2,padding:"10px 0",borderRadius:9,border:"none",background:PC.ink,color:"#fff",fontWeight:800,fontSize:12,cursor:"pointer"}}>▶️ এই খসড়া লোড করো</button>
+              {!d.uploading&&<button type="button" onClick={()=>{loadNamedDraft(d);setPreviewDraft(null);}} style={{flex:2,padding:"10px 0",borderRadius:9,border:"none",background:PC.ink,color:"#fff",fontWeight:800,fontSize:12,cursor:"pointer"}}>▶️ এই খসড়া লোড করো</button>}
             </div>
           </div>
         </div>
@@ -2165,9 +2193,9 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       {/* ── পদ/প্রতিষ্ঠান/সাল — একদম শুরুতে, ৪টা ট্যাবের সবার উপরে (session-wide,
           একবার দিলে বাংলা/English/Math/GK — এই সেশনের সব প্রশ্নেই একই Exam Appearance
           যাবে, কারণ QBank মানেই বিগত পরীক্ষা, এই ৩টা ছাড়া entry অসম্পূর্ণ) ── */}
-      <div style={{background:PC.card,border:`1px solid ${PC.border}`,borderRadius:12,padding:12,marginBottom:12}}>
-        <div style={{fontSize:12,fontWeight:800,color:PC.ink,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? (ঐচ্ছিক)</div>
-        <div style={{fontSize:10.5,color:PC.muted,marginBottom:8}}>দিলে এই সেশনের ৪টা ট্যাবের সব প্রশ্নই এই Exam Appearance পাবে — প্রশ্নের রো ডুপ্লিকেট হয় না, একই প্রশ্ন আগে থেকে থাকলে শুধু Appearance জুড়ে যায়।</div>
+      <div ref={metaCardRef} style={{background:metaMissing?"#fef2f2":PC.card,border:metaMissing?"2px solid #ef4444":`1px solid ${PC.border}`,borderRadius:12,padding:12,marginBottom:12,transition:"background .3s"}}>
+        <div style={{fontSize:12,fontWeight:800,color:metaMissing?"#b91c1c":PC.ink,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? <span style={{color:"#dc2626"}}>* বাধ্যতামূলক</span></div>
+        <div style={{fontSize:10.5,color:PC.muted,marginBottom:8}}>পদ, প্রতিষ্ঠান ও সাল — তিনটাই না দিলে সাবমিট হবে না। এই সেশনের ৪টা ট্যাবের সব প্রশ্নই এই Exam Appearance পাবে — প্রশ্নের রো ডুপ্লিকেট হয় না, একই প্রশ্ন আগে থেকে থাকলে শুধু Appearance জুড়ে যায় (সাল আলাদা হলে নতুন Appearance)।</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
           <div className="fld" style={{marginBottom:0}}>
             <label>পদ (Post)</label>
@@ -2266,6 +2294,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
               background:failedDraftCount>0?"#fef2f2":"transparent",border:failedDraftCount>0?"1.5px solid #ef4444":`1px solid ${PC.border}`,color:failedDraftCount>0?"#b91c1c":PC.ink,cursor:"pointer"}}>
             📂 সেভ করা খসড়া ({draftList.length}) {showDraftList?"▲":"▼"}
             {failedDraftCount>0&&<span style={{display:"block",fontSize:10,color:"#dc2626",fontWeight:800}}>🔴 {toBn(failedDraftCount)}টা ব্যর্থ</span>}
+            {uploadingDraftCount>0&&<span style={{display:"block",fontSize:10,color:"#2563eb",fontWeight:800}}>⏳ {toBn(uploadingDraftCount)}টা আপলোড চলছে</span>}
           </button>
           <button type="button" onClick={askNewPaper}
             style={{flex:1,justifyContent:"center",padding:"9px 0",borderRadius:9,fontSize:11.5,fontWeight:700,
@@ -2278,10 +2307,12 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             {draftList.length===0?(
               <div style={{padding:14,fontSize:11,color:PC.muted,textAlign:"center"}}>এখনো কোনো খসড়া সেভ করা হয়নি</div>
             ):(
-              [...draftList].sort((a,b)=>(b.failed?1:0)-(a.failed?1:0)||b.savedAt-a.savedAt).map(d=>(
+              [...draftList].sort((a,b)=>((b.failed||b.uploading)?1:0)-((a.failed||a.uploading)?1:0)||b.savedAt-a.savedAt).map(d=>(
                 <div key={d.id} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",borderBottom:`1px dashed ${PC.border}`,
-                  ...(d.failed?{background:"#fef2f2",borderLeft:"4px solid #ef4444"}:{})}}>
+                  ...(d.failed?{background:"#fef2f2",borderLeft:"4px solid #ef4444"}:{}),
+                  ...(d.uploading?{background:"#eff6ff",borderLeft:"4px solid #2563eb"}:{})}}>
                   <div style={{flex:1,minWidth:0}}>
+                    {d.uploading&&<div style={{fontSize:10,fontWeight:800,color:"#2563eb",marginBottom:2,lineHeight:1.4}}>⏳ আপলোড চলছে — শেষ হলে নিজে মুছে যাবে (ব্যর্থ হলে লাল হবে)</div>}
                     {d.failed&&<div style={{fontSize:10,fontWeight:800,color:"#dc2626",marginBottom:2,lineHeight:1.4}}>🔴 ডাটাবেজে যায়নি — {d.failReason||"সাবমিট ব্যর্থ"}</div>}
                     <div style={{fontSize:11.5,fontWeight:800,color:PC.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>🧑‍💼 {(d.postSel&&d.postSel.name||"").trim()||<span style={{color:PC.danger}}>পদ নেই</span>}</div>
                     <div style={{fontSize:11,fontWeight:700,color:PC.ink,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",marginTop:1}}>🏛 {(d.instSel&&d.instSel.name||"").trim()||<span style={{color:PC.danger}}>প্রতিষ্ঠান নেই</span>}{(d.examYear||"").toString().trim()?` · ${d.examYear}`:""}</div>
@@ -2290,11 +2321,11 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                   <button type="button" onClick={()=>setPreviewDraft(d)}
                     style={{flexShrink:0,padding:"6px 8px",borderRadius:7,fontSize:10.5,fontWeight:700,
                       background:"transparent",color:PC.ink,border:`1px solid ${PC.border}`,cursor:"pointer"}}>👁 প্রিভিউ</button>
-                  <button type="button" onClick={()=>loadNamedDraft(d)}
+                  {!d.uploading&&<button type="button" onClick={()=>loadNamedDraft(d)}
                     style={{flexShrink:0,padding:"6px 10px",borderRadius:7,fontSize:10.5,fontWeight:700,
-                      background:d.failed?"#dc2626":PC.ink,color:"#fff",border:"none",cursor:"pointer"}}>{d.failed?"লোড করে আবার পাঠাও":"লোড করো"}</button>
-                  <button type="button" onClick={()=>deleteNamedDraft(d.id)}
-                    style={{flexShrink:0,background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>🗑</button>
+                      background:d.failed?"#dc2626":PC.ink,color:"#fff",border:"none",cursor:"pointer"}}>{d.failed?"লোড করে আবার পাঠাও":"লোড করো"}</button>}
+                  {!d.uploading&&<button type="button" onClick={()=>deleteNamedDraft(d.id)}
+                    style={{flexShrink:0,background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>🗑</button>}
                 </div>
               ))
             )}
@@ -2330,6 +2361,11 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             তাই এখন real progress না থাকলে elapsedMs (গত কয়েক সেকেন্ড) থেকে একটা
             "estimate" শতকরা বানানো হয় (সময়ের সাথে বাড়ে, কখনো ৯২%-এর বেশি ওঠে না) —
             বার সবসময় নড়তে থাকে + সেকেন্ড-কাউন্টও দেখায়, তাই hang মনে হয় না। ── */}
+        {(!postSel.name.trim()||!instSel.name.trim()||!examYear.trim())&&(
+          <div style={{textAlign:"center",fontSize:11,fontWeight:800,color:"#dc2626",marginBottom:6}}>
+            ⚠️ সাবমিটের আগে দাও: {[!postSel.name.trim()&&"পদ",!instSel.name.trim()&&"প্রতিষ্ঠান",!examYear.trim()&&"সাল"].filter(Boolean).join(", ")}
+          </div>
+        )}
         <button className="btn" disabled={saving||refData===null||!!refDataError} onClick={submitPaper}
           style={{width:"100%",justifyContent:"center",padding:"13px 0",fontSize:14.5,position:"relative",overflow:"hidden",
             background:(saving||refData===null||refDataError)?PC.muted:PC.ink,color:"#fff",border:"none"}}>
@@ -2347,15 +2383,15 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             {saving
               ? (saveProgress&&saveProgress.total>1
                   ? `⏳ সেভ হচ্ছে... ${saveProgress.done}/${saveProgress.total} (${Math.round((saveProgress.done/saveProgress.total)*100)}%)`
-                  : `⏳ সেভ হচ্ছে... (${Math.max(1,Math.floor(elapsedMs/1000))} সেকেন্ড)`)
+                  : `⏳ প্রস্তুত হচ্ছে... (${Math.max(1,Math.floor(elapsedMs/1000))} সেকেন্ড)`)
               : refDataError?"❌ রেফারেন্স ডেটা লোড ব্যর্থ — উপরে রিট্রাই চাপো"
               : refData===null?"⏳ রেফারেন্স ডেটা লোড হচ্ছে...":`🚀 সব সাবমিট করো — ${totalCount}টা প্রশ্ন (Ctrl+S)`}
           </span>
         </button>
         <div style={{textAlign:"center",fontSize:9.5,color:PC.muted,marginTop:6}}>
           {saving
-            ? "চলছে... মাঝপথে অ্যাপ বন্ধ হয়ে গেলেও কাজ ড্রাফটে সেভ আছে, আবার খুললে ফিরে পাবে"
-            : "৪টা ট্যাবেই যত প্রশ্ন জমা আছে (এখনো ডাটাবেজে যায়নি), সবগুলো একসাথে একবারে সাবমিট হবে · প্রতি কয়েক সেকেন্ডে অটো-ড্রাফট সেভ হয়"}
+            ? "প্রস্তুত হচ্ছে... একটু পরেই আপলোড ব্যাকগ্রাউন্ডে চলে যাবে — তখন নিচের বারে অগ্রগতি দেখাবে, আর ফর্ম খালি হয়ে যাবে"
+            : "৪টা ট্যাবেই যত প্রশ্ন জমা আছে সবগুলো একসাথে সাবমিট হবে — সাবমিটের পর আপলোড ব্যাকগ্রাউন্ডে চলে, ততক্ষণে পরের প্রশ্নপত্র টাইপ করতে পারো · প্রতি কয়েক সেকেন্ডে অটো-ড্রাফট সেভ হয়"}
         </div>
       </div>
     </div>

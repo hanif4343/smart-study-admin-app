@@ -349,11 +349,29 @@ function clearDraft(key){ try{ localStorage.removeItem(key); }catch{} }
 function _readDraftList(listKey){ try{ const raw=localStorage.getItem(listKey); const a=raw?JSON.parse(raw):[]; return Array.isArray(a)?a:[]; }catch{ return []; } }
 function upsertFailedDraft(listKey,entry,max=15){
   const list=_readDraftList(listKey);
-  const e={...entry,failed:true,failedAt:Date.now(),savedAt:Date.now()};
+  const e={...entry,failed:true,uploading:false,failedAt:Date.now(),savedAt:Date.now()};
   const i=list.findIndex(d=>d&&d.id===e.id);
   if(i>=0) list[i]={...list[i],...e}; else list.unshift(e);
   while(list.length>max){ let idx=-1; for(let k=list.length-1;k>=0;k--){ if(!list[k]||!list[k].failed){ idx=k; break; } } if(idx<0)break; list.splice(idx,1); }
   try{ localStorage.setItem(listKey,JSON.stringify(list)); }catch{}
+  return list;
+}
+/* ⏳ আপলোড চলছে — ব্যাকগ্রাউন্ডে পাঠানোর শুরুতেই প্রশ্নপত্রের কপি খসড়া-তালিকায় uploading:true দিয়ে রাখা হয়:
+   অ্যাপ বন্ধ/রিলোড হলেও কিছু হারায় না। সফল হলে মুছে যায়, ব্যর্থ হলে লাল (failed:true) হয়। */
+function upsertPendingDraft(listKey,entry,max=15){
+  const list=_readDraftList(listKey);
+  const e={...entry,uploading:true,failed:false,savedAt:Date.now()};
+  const i=list.findIndex(d=>d&&d.id===e.id);
+  if(i>=0) list[i]={...list[i],...e}; else list.unshift(e);
+  while(list.length>max){ let idx=-1; for(let k=list.length-1;k>=0;k--){ if(!list[k]||(!list[k].failed&&!list[k].uploading)){ idx=k; break; } } if(idx<0)break; list.splice(idx,1); }
+  try{ localStorage.setItem(listKey,JSON.stringify(list)); }catch{}
+  return list;
+}
+// অ্যাপ নতুন করে খুললে: "আপলোড চলছে" দাগ আছে কিন্তু আসলে কোনো জব চলছে না (isActive(id) মিথ্যা) → মাঝপথে থেমে গেছে, লাল করে দাও
+function markStalePendingFailed(listKey,isActive){
+  const list=_readDraftList(listKey); let changed=false;
+  list.forEach(d=>{ if(d&&d.uploading&&!(isActive&&isActive(d.id))){ d.uploading=false; d.failed=true; d.failedAt=Date.now(); d.failReason="আপলোড মাঝপথে থেমে গেছে (অ্যাপ বন্ধ বা রিলোড) — আবার পাঠাও, ডুপ্লিকেট হবে না"; changed=true; } });
+  if(changed){ try{ localStorage.setItem(listKey,JSON.stringify(list)); }catch{} }
   return list;
 }
 function removeDraftById(listKey,id){
@@ -420,4 +438,4 @@ function applyRichTextShortcut(e, setValue){
   return true;
 }
 
-export { getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow, LS_SAVE_LOCATION, LS_FAILED_QUEUE, LS_OCR_CACHE, OCR_CACHE_MAX, loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, loadFailedQueue, saveFailedQueueList, pushFailedItems, removeFailedItems, LS_DRAFT_BULK, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, LS_DRAFT_SINGLE_LIST, loadDraft, upsertFailedDraft, removeDraftById, saveDraft, clearDraft, applyRichTextShortcut };
+export { getBulkEntries, parseBulkEntry, getBulkEffectiveType, buildBulkRecord, buildSheetRow, LS_SAVE_LOCATION, LS_FAILED_QUEUE, LS_OCR_CACHE, OCR_CACHE_MAX, loadSaveLocPref, saveSaveLocPref, loadSharedGasSecret, saveSharedGasSecret, loadFailedQueue, saveFailedQueueList, pushFailedItems, removeFailedItems, LS_DRAFT_BULK, LS_DRAFT_SINGLE, LS_DRAFT_PAPER, LS_DRAFT_PAPER_LIST, LS_DRAFT_SINGLE_LIST, loadDraft, upsertFailedDraft, removeDraftById, upsertPendingDraft, markStalePendingFailed, saveDraft, clearDraft, applyRichTextShortcut };

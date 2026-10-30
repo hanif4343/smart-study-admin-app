@@ -48,6 +48,7 @@ import { MultiSubjectImportPage } from "./pages/MultiSubjectImportPage.jsx";
 import { TypingUploaderPage } from "./pages/TypingUploaderPage.jsx";
 import { SingleQuestionEntryPage } from "./pages/SingleQuestionEntryPage.jsx";
 import { GasSecretModal } from "./components/shared/GasSecretModal.jsx";
+import { UploadProgressChip } from "./components/shared/UploadProgressChip.jsx";
 import { EVT_OPEN } from "./core/gasSecret.js";
 import { loadSharedGasSecret } from "./core/utils.js";
 
@@ -460,6 +461,7 @@ export default function App(){
       <>
       <style>{css}</style>
       {showGasKey&&<GasSecretModal onClose={()=>setShowGasKey(false)} push={push}/>}
+      <UploadProgressChip/>
       <div className="topbar">
         <div style={{display:"flex",alignItems:"center",gap:8}}>
           {inUploaderLeaf&&(
