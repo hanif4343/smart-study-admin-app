@@ -48,7 +48,9 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,chunkSi
     if(source) body.source=source;
     let ok=false;
     for(let attempt=1;attempt<=2 && !ok;attempt++){
-      const timeoutMs=attempt===1?25000:45000;
+      // ⚡ বড় চাংক (১০০টা পর্যন্ত) এক অনুরোধে যায় — সার্ভারের কাজ প্রশ্ন-সংখ্যার সাথে বাড়ে, তাই টাইমআউটও সেই অনুযায়ী (রিট্রাই নিরাপদ: ডুপ্লিকেট আর হয় না)
+      const baseMs=Math.min(120000,Math.max(25000,15000+chunk.length*700));
+      const timeoutMs=attempt===1?baseMs:Math.min(170000,Math.round(baseMs*1.7));
       try{
         if(attempt===2) push?.("warn","⏳ ধীর নেটওয়ার্ক, আবার চেষ্টা করা হচ্ছে...",`চাংক ${Math.floor(i/CHUNK)+1}/${totalChunks}`);
         const resp=await fetchWithTimeout(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)},timeoutMs);

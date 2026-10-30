@@ -71,7 +71,7 @@ function autoMarkBlank(question,answer,wrap){
 }
 const blankMissMsg=(label,question,idx)=>{
   const pv=String(question||"").replace(/<[^>]*>/g,"").replace(/\s+/g," ").trim().slice(0,45);
-  return `"${label}" ট্যাবে ${idx+1} নং বাক্যে blank মার্ক নেই: "${pv}${pv.length>=45?"…":""}" — blank হবে এমন শব্দ সিলেক্ট করে 🖍 চাপো, অথবা "উত্তর" ঘরে ওই শব্দটা লিখে দাও (অ্যাপ নিজেই মার্ক করে নেবে)`;
+  return `"${label}" ট্যাবে ${idx+1} নং বাক্যে blank মার্ক নেই: "${pv}${pv.length>=45?"…":""}" — blank হবে এমন শব্দ সিলেক্ট করে আন্ডারলাইন (U) দাও — অথবা "উত্তর" ঘরে ওই শব্দটা লিখে দিলে অ্যাপ নিজেই মার্ক করে নেবে`;
 };
 function shuffle4(arr){
   const a=[...arr];
@@ -1202,6 +1202,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         setShowDraftList(true);
       }catch{}
     };
+    const tStart=Date.now();   // ⏱ কতক্ষণে সেভ হলো — সফল বার্তায় দেখানো হয় (উন্নতি মাপার জন্য)
     setSaving(true);
     setSaveProgress(null);
     // 🐛 ফিক্স: সাবমিট শুরুর সাথে সাথেই ড্রাফট (debounce ছাড়া, তৎক্ষণাৎ) সেভ করে রাখা
@@ -1214,9 +1215,12 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       // হয় সেই একই pattern), যাতে নিচের লুপে ঢোকার আগেই Appearance নিশ্চিত হয়ে যায়।
       let examAppearance=null;
       if(postSel.name.trim()&&instSel.name.trim()&&examYear.trim()){
-        const postRes=await resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push});
+        // ⚡ পদ আর প্রতিষ্ঠান একসাথে (সমান্তরালে) resolve — আগে একটার পর একটা হতো
+        const[postRes,instRes]=await Promise.all([
+          resolveOrCreateReference({sel:postSel,refType:"posts",options:postOptions,gasSecret,push}),
+          resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push}),
+        ]);
         if(!postRes.ok)throw new Error("পদ resolve/তৈরি ব্যর্থ");
-        const instRes=await resolveOrCreateReference({sel:instSel,refType:"institutions",options:instOptions,gasSecret,push});
         if(!instRes.ok)throw new Error("প্রতিষ্ঠান resolve/তৈরি ব্যর্থ");
         examAppearance={postId:postRes.id,institutionId:instRes.id,year:examYear.trim()};
         if(postRes.created||instRes.created) fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
@@ -1329,7 +1333,8 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
                 return;
               }
               // 🆕 Fill in the blanks (বাক্য-ভিত্তিক): Bold+Underline করা অংশই Answer; প্রশ্নে _শব্দ_ (অ্যাপের fillblank নিয়ম)
-              if(resolveTpl(card,t.key).lay==="fill"){
+              // (Fill-blank ফরম্যাটের যেকোনো কার্ডে — টেমপ্লেট যেটাই হোক — সিলেক্ট করে আন্ডারলাইন/BU দিলেই সেই অংশ blank + উত্তর ধরা হয়)
+              if(resolveTpl(card,t.key).lay==="fill"||(card.formatStyle==="fillblank"&&parseFillMarks(it.question).answers.length>0)){
                 let fm=parseFillMarks(it.question);
                 if(!fm.answers.length){   // 🪄 মার্ক না থাকলে "উত্তর" ঘর/ফাঁকা-দাগ থেকে অটো-মার্ক
                   const fx=autoMarkBlank(it.question,it.answer,w=>`<b><u>${w}</u></b>`);
@@ -1429,13 +1434,15 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       // সাবমিট বাটনে লাইভ "X/Y (NN%)" আর একটা ভিজুয়াল প্রোগ্রেস বার দেখানো হয় —
       // "সেভ হচ্ছে..." লেখা একনাগাড়ে দেখে ধৈর্য হারিয়ে অ্যাপ বন্ধ করে দেওয়ার সমস্যা
       // এখন থেকে কমবে (নিচে UI-তে দেখো)।
+      const tSave0=Date.now();
       const res=await saveRowsToSheet({
         rows:allRows,targetTab:"QBank",gasSecret,push,examAppearance,source:"Single_Text_Paper",
-        chunkSize:15,onProgress:p=>setSaveProgress(p),
+        chunkSize:100,onProgress:p=>setSaveProgress(p),   // ⚡ ১৫ → ১০০: সাধারণ প্রশ্নপত্র ১টা অনুরোধেই যায় (সার্ভার প্রতি অনুরোধে পুরো শিট পড়ে, তাই অনুরোধ কমানোই সবচেয়ে বড় লাভ)
       });
+      const secsTotal=((Date.now()-tStart)/1000).toFixed(1), secsSave=((Date.now()-tSave0)/1000).toFixed(1);
       const failedCount=(res.failedRows||[]).length;
       if(res.added>0){
-        push("success",`✅ ${failedCount>0?`আংশিক সাবমিট হয়েছে (${res.added}টা)`:"পুরো প্রশ্নপত্র সাবমিট হয়েছে!"} (${res.added}টা প্রশ্ন)`,`এই সেশনে মোট ${sessionCount+res.added}টি`);
+        push("success",`✅ ${failedCount>0?`আংশিক সাবমিট হয়েছে (${res.added}টা)`:"পুরো প্রশ্নপত্র সাবমিট হয়েছে!"} (${res.added}টা প্রশ্ন)`,`এই সেশনে মোট ${sessionCount+res.added}টি · ⏱ ${secsTotal} সেকেন্ড (সার্ভারে ${secsSave}s)`);
         setSessionCount(c=>c+res.added);
         fetchReferenceData({gasSecret}).then(setRefData).catch(()=>{});
       }
