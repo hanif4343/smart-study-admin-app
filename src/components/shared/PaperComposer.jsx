@@ -19,6 +19,7 @@ import { TypeaheadCombo } from "./TypeaheadCombo.jsx";
 import { RichText } from "./RichText.jsx";
 import { useTypingCover, CoverOverlay, CoverToggle } from "./TypingCover.jsx";
 import { useTypingTrack } from "../../hooks/useTypingTrack.js";
+import { typingSession } from "../../core/typingStats.js";
 import { autoTopicFor, loadRules } from "../../core/autoTopic.js";
 
 /* ── AI দিয়ে MCQ-এর ৩টা ভুল অপশন + ব্যাখ্যা বানানোর প্রম্পট (SingleQuestionEntryPage-এর
@@ -409,6 +410,20 @@ function psSetCaret(host,a,b){
   const r=document.createRange(); r.setStart(p.node,p.offset); r.setEnd(q.node,q.offset);
   const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
 }
+// ⚠️ "অতএব → ∴" এখন DOM-এর টেক্সট-নোডের ভেতরেই কাজ করে। আগে পুরো লেখার (ট্যাগসহ) সূচক দিয়ে অংশ বাছা হতো — ভগ্নাংশ/ঘাত থাকলে
+// সূচক ১ ঘর সরে যেত, ফলে "অ" থেকে যেত আর বাকিটা ∴ হয়ে যেত।
+const PS_ATOEB_PRE=/(^|[\s(,;:।\u00a0])$/;
+function psAtoebAt(h,extraCh){        // কার্সর ফাঁকা (collapsed) ও টেক্সট-নোডে হলে {node,off,n} — n = কার্সরের আগের কতটা অক্ষর বদলাবে
+  const sel=window.getSelection(); if(!sel||!sel.rangeCount||!sel.isCollapsed) return null;
+  const r=sel.getRangeAt(0); if(!h.contains(r.startContainer)||r.startContainer.nodeType!==3) return null;
+  const node=r.startContainer, off=r.startOffset, txt=node.data.slice(0,off)+(extraCh||"");
+  if(!/অতএব$/.test(txt)) return null;
+  const pre=txt.slice(0,txt.length-4);
+  if(pre!==""&&!PS_ATOEB_PRE.test(pre)) return null;               // শব্দের মাঝখানে (যেমন "xঅতএব") হলে নয়
+  const n=4-(extraCh?extraCh.length:0);
+  return n>0&&off>=n?{node,off,n}:null;
+}
+function psSelectBefore(h,t){ const rg=document.createRange(); rg.setStart(t.node,t.off-t.n); rg.setEnd(t.node,t.off); const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(rg); }
 function psFracBefore(host){                      // কার্সরের ঠিক আগে ভগ্নাংশ-এলিমেন্ট থাকলে সেটা
   const sel=window.getSelection(); if(!sel||!sel.rangeCount||!sel.isCollapsed) return null;
   const r=sel.getRangeAt(0); let n=null;
@@ -528,11 +543,11 @@ function psExitAuto(h,el,ch){
 }
 
 // ── রিচ-টেক্সট ঘর ──
-function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
+function PsTA({value,onChange,onKeyDown,taRef,className,math,cover,track=true,tlabel}){
   // 🆕 cover=true (শুধু প্রশ্ন ও উত্তর ঘর): টাইপ শুরুতে কালো আবরণ, ৩ সেকেন্ড থামলে সরে, সংশোধনে ফেরে না
   const tc=useTypingCover(value);
-  const tk=useTypingTrack(value);   // 🆕 টাইপিং ট্র্যাকার — শুধু cover=true (প্রশ্ন/উত্তর) ঘরে সক্রিয়
-  const hostRef=useRef(null), lastAuto=useRef(null), skipN=useRef(0), onChangeRef=useRef(onChange), mathRef=useRef(!!math);
+  const tk=useTypingTrack(value,tlabel);   // 🆕 টাইপিং ট্র্যাকার — শুধু cover=true (প্রশ্ন/উত্তর) ঘরে সক্রিয়
+  const hostRef=useRef(null), lastAuto=useRef(null), skipN=useRef(0), pasteUntil=useRef(0), onChangeRef=useRef(onChange), mathRef=useRef(!!math);
   onChangeRef.current=onChange; mathRef.current=!!math;
   const[hasSel,setHasSel]=useState(false);
   const[focused,setFocused]=useState(false);
@@ -602,12 +617,16 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
         if(it==="insertText"&&ev.data&&ev.data!==" "&&ev.data!=="*"&&ev.data!=="/"&&c&&c.s===c.e){
           const ch=ev.data, v0=psSerialize(h), before=v0.slice(0,c.s)+ch;
           const rs=Math.max(before.lastIndexOf(" "),before.lastIndexOf("\n"))+1, run=before.slice(rs);
-          if(ch==="ব"&&/(^|[\s(,;:।])অতএব$/.test(before)){
-            ev.preventDefault();
-            const start=before.length-"অতএব".length;
-            psSetCaret(h,start,c.s);
-            lastAuto.current={start,repl:"∴",original:"অতএব",tail:"",caret:start+1}; skipN.current=1;
-            document.execCommand("insertText",false,"∴"); return;
+          if(ch==="ব"){
+            const at=psAtoebAt(h,"ব");
+            if(at){
+              ev.preventDefault();
+              psSelectBefore(h,at);
+              skipN.current=1;
+              document.execCommand("insertText",false,"∴");
+              const c2=psCaret(h); if(c2) lastAuto.current={start:c2.s-1,repl:"∴",original:"অতএব",tail:"",caret:c2.s};
+              return;
+            }
           }
           const t=psInstantTail(run);
           if(t){
@@ -632,12 +651,14 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
         if(((it==="insertText"&&ev.data===" ")||isNL)&&c&&c.s===c.e){
           const v=psSerialize(h), before=v.slice(0,c.s), tail=isNL?"\n":" ";
           const put=()=>{ if(isNL) document.execCommand("insertLineBreak"); else document.execCommand("insertText",false," "); };
-          if(/(^|[\s(,;:।])অতএব$/.test(before)){
+          const at2=psAtoebAt(h,"");
+          if(at2){
             ev.preventDefault();
-            const start=before.length-"অতএব".length;
-            psSetCaret(h,start,c.s);
-            lastAuto.current={start,repl:"∴",original:"অতএব",tail,caret:start+2}; skipN.current=2;
-            document.execCommand("insertText",false,"∴"); put(); return;
+            psSelectBefore(h,at2);
+            skipN.current=2;
+            document.execCommand("insertText",false,"∴"); put();
+            const c2=psCaret(h); if(c2) lastAuto.current={start:c2.s-2,repl:"∴",original:"অতএব",tail,caret:c2.s};
+            return;
           }
           const runStart=Math.max(before.lastIndexOf(" "),before.lastIndexOf("\n"))+1, run=before.slice(runStart);
           if(PS_MATH_TRIGGER.test(run)){
@@ -681,7 +702,47 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
       if(isNL){ ev.preventDefault(); document.execCommand("insertLineBreak"); }
     };
     h.addEventListener("beforeinput",handler);
-    return()=>h.removeEventListener("beforeinput",handler);
+
+    // 🆕 বাংলা/ফোন কীবোর্ড কম্পোজিশন মোডে লেখে (isComposing) — তখন উপরের "এলিমেন্টের বাইরে বেরোও" কোড চলে না,
+    // ফলে x² এর পরের পুরো লেখা ঘাতের ভেতরে (ছোট, ওপরে) ঢুকে যেত। এখন:
+    //  (ক) কম্পোজিশন শুরুর আগেই কার্সর এলিমেন্টের বাইরে নেওয়া হয়
+    //  (খ) তবুও কিছু ঢুকে গেলে (কম্পোজিশন শেষে বা সাধারণ ইনপুটে) সংখ্যার বাইরের অংশ বাইরে সরিয়ে দেওয়া হয়
+    const onCompStart=()=>{ if(!mathRef.current) return; const ao=psAutoOpen(h); if(ao) psExitAuto(h,ao.el,""); };
+    const fixOpenAuto=()=>{
+      if(!mathRef.current) return;
+      let changed=false;
+      h.querySelectorAll('[data-auto="num"]').forEach(el=>{
+        const t=el.textContent||"", m=/^[-+]?[০-৯0-9]*/.exec(t), keep=m?m[0].length:0;
+        if(keep>=t.length) return;
+        // keep-তম অক্ষরের DOM-বিন্দু খুঁজি
+        const w=document.createTreeWalker(el,NodeFilter.SHOW_TEXT); let rem=keep, pt=null;
+        for(let nd=w.nextNode(); nd; nd=w.nextNode()){ if(rem<=nd.data.length){ pt={node:nd,off:rem}; break; } rem-=nd.data.length; }
+        if(!pt) return;
+        const sel=window.getSelection(), hadCaret=sel&&sel.rangeCount&&el.contains(sel.getRangeAt(0).startContainer);
+        const rg=document.createRange(); rg.setStart(pt.node,pt.off); rg.setEnd(el,el.childNodes.length);
+        const frag=rg.extractContents(), last=frag.lastChild;
+        el.removeAttribute("data-auto");
+        el.parentNode.insertBefore(frag,el.nextSibling);
+        if(hadCaret&&last){
+          const r2=document.createRange();
+          if(last.nodeType===3) r2.setStart(last,last.data.length); else r2.setStartAfter(last);
+          r2.collapse(true); sel.removeAllRanges(); sel.addRange(r2);
+        }
+        changed=true;
+      });
+      if(changed) h.dispatchEvent(new Event("input",{bubbles:true}));
+    };
+    const onCompEnd=()=>{ setTimeout(fixOpenAuto,0); };
+    const onInputFix=ev=>{ if(!ev.isComposing) fixOpenAuto(); };
+    h.addEventListener("compositionstart",onCompStart);
+    h.addEventListener("compositionend",onCompEnd);
+    h.addEventListener("input",onInputFix);
+    return()=>{
+      h.removeEventListener("beforeinput",handler);
+      h.removeEventListener("compositionstart",onCompStart);
+      h.removeEventListener("compositionend",onCompEnd);
+      h.removeEventListener("input",onInputFix);
+    };
   },[]);
 
   // ভাসমান টুলবার: ঘরে ফোকাস থাকলে সিলেকশন বদলালে দেখাও/লুকাও
@@ -707,23 +768,30 @@ function PsTA({value,onChange,onKeyDown,taRef,className,math,cover}){
     }catch{}
     window.open(url,"_blank","noopener,noreferrer");
   };
-  const handleInput=()=>{
+  const handleInput=(e)=>{
     const h=hostRef.current; if(!h)return;
     const wasAuto=skipN.current>0;                    // এই input অটো-রূপান্তরের ফল কিনা (ট্র্যাকারে টাইপ ধরা হয় না)
     if(skipN.current>0) skipN.current--; else lastAuto.current=null;
     const nv=psSerialize(h);
-    if(cover){ tc.onTyped(nv); tk.input(nv,{auto:wasAuto}); }
+    const ne=e&&e.nativeEvent;
+    // ⌨️ টাইপ-ট্র্যাকিং এখন সব ঘরে (আগে শুধু cover-ওয়ালা প্রশ্ন/উত্তরে ছিল); cover শুধু কালো আবরণের জন্য
+    if(cover) tc.onTyped(nv);
+    if(track!==false){
+      const synthetic=!!ne&&ne.isTrusted===false;     // কোড থেকে পাঠানো input (বন্ধনী-থেকে-বেরোনো/ঘাত সরানো) টাইপ নয়
+      tk.input(nv,{auto:wasAuto||synthetic||Date.now()<pasteUntil.current,inputType:ne&&ne.inputType,composing:!!(ne&&ne.isComposing)});
+    }
     if(nv!==String(value||"")) emit(nv);
   };
   const handleBlur=()=>{
     setFocused(false); setHasSel(false);
-    if(cover) tk.blur();
+    if(track!==false) tk.blur();
     const h=hostRef.current; psClearAuto(h); if(!h||!mathRef.current)return;
     const cur=psSerialize(h), nv=psMathConvertText(cur);
     if(nv!==cur){ h.innerHTML=psToHTML(nv); emit(nv); }
   };
   const handlePaste=e=>{
     e.preventDefault();
+    pasteUntil.current=Date.now()+700;   // পেস্ট টাইপিং নয়
     const text=((e.clipboardData||window.clipboardData).getData("text/plain")||"").replace(/\r\n?/g,"\n");
     text.split("\n").forEach((line,i)=>{ if(i>0)document.execCommand("insertLineBreak"); if(line)document.execCommand("insertText",false,line); });
   };
@@ -1210,6 +1278,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
         setShowDraftList(true);
       }catch{}
     };
+    try{ typingSession.flush(); }catch{}   // ⌨️ সাবমিটের মুহূর্তে চলমান টাইপিং-রান শেষ — সারসংক্ষেপ আসে, দৈনিক হিসাবে জমা হয়
     const tStart=Date.now();   // ⏱ কতক্ষণে সেভ হলো — সফল বার্তায় দেখানো হয় (উন্নতি মাপার জন্য)
     setSaving(true);
     setSaveProgress(null);
@@ -1701,9 +1770,16 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
 
   /* ── Tab / Shift+Tab নেভিগেশন (সব লেআউটে একই নিয়ম) ──
      যেকোনো লেখার ঘরে Tab চাপলে স্ক্রিনের ক্রমে পরের ঘরে যায়: প্রশ্ন → (বাক্য/অপশন) → উত্তর → পরের প্রশ্ন;
-     টেবিলে বাঁ-ঘর → ডান-ঘর → পরের সারি; গণিতে প্রশ্ন → সমাধান → উত্তর → পরের প্রশ্ন। Shift+Tab উল্টো দিকে।
+     টেবিলে বাঁ-ঘর → ডান-ঘর → পরের সারি; গণিতে প্রশ্ন → উত্তর → পরের প্রশ্ন (সমাধান ঘর ডিফল্টে লুকানো — খুললে উত্তরের পরে আসে)। Shift+Tab উল্টো দিকে।
      ছোট বাটনগুলো (ℹ️ 🖍 ❌) ও Topic বক্স Tab-ক্রমে আসে না। একদম শেষ ঘরে Tab চাপলে নতুন সারি/প্রশ্ন যোগ হয়ে
      সেখানেই কার্সর যায়। */
+  const[solOpen,setSolOpen]=useState(()=>new Set());     // 🆕 গণিতে যে কার্ডগুলোর "সমাধান" ঘর খোলা
+  const solRefs=useRef({});
+  const toggleSol=(id)=>{
+    const willOpen=!solOpen.has(id);
+    setSolOpen(prev=>{ const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
+    if(willOpen) setTimeout(()=>{ try{ solRefs.current[id]&&solRefs.current[id].focus(); }catch{} },60);   // খুলেই সমাধানের ঘরে কার্সর
+  };
   const psTabNav=e=>{
     if(e.key!=="Tab"||e.ctrlKey||e.altKey||e.metaKey||e.defaultPrevented)return;
     const el=e.target;
@@ -1740,10 +1816,10 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     <>
       {!(tpl.third&&tpl.third.field==="explanation")&&(
         <div className="ps-l2"><span>{isEnTab?"Explanation:":"ব্যাখ্যা:"}</span>
-          <PsTA value={it.explanation} onChange={e=>updateItem(activeTab,card.id,it.id,{explanation:e.target.value})}/></div>
+          <PsTA tlabel="ব্যাখ্যা" value={it.explanation} onChange={e=>updateItem(activeTab,card.id,it.id,{explanation:e.target.value})}/></div>
       )}
       <div className="ps-l2"><span>{isEnTab?"Technique:":"টেকনিক:"}</span>
-        <PsTA value={it.technique} onChange={e=>updateItem(activeTab,card.id,it.id,{technique:e.target.value})}/></div>
+        <PsTA tlabel="টেকনিক" value={it.technique} onChange={e=>updateItem(activeTab,card.id,it.id,{technique:e.target.value})}/></div>
     </>
   );
 
@@ -1762,11 +1838,11 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     const title=card.heading||tpl.heading||(isEnTab?"(heading)":"(হেডিং লিখো)");
 
     const mkQ=(it,idx,isFill,cls)=>(
-      <PsTA cover className={cls} taRef={el=>{textareaRefs.current[it.id]=el;}} value={it.question}
+      <PsTA cover tlabel="প্রশ্ন/বাক্য" className={cls} taRef={el=>{textareaRefs.current[it.id]=el;}} value={it.question}
         onChange={e=>updateItem(activeTab,card.id,it.id,{question:e.target.value})}/>
     );
     const mkA=(it,idx,cls)=>(
-      <PsTA cover className={cls} taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
+      <PsTA cover tlabel="উত্তর" className={cls} taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
         onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value})}/>
     );
 
@@ -1784,13 +1860,13 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             ))}
           </div>
           <button type="button" className="ps-add" style={{marginLeft:0}} onClick={()=>updateCard(activeTab,card.id,{wordBox:[...wb,""]})}>＋ শব্দ</button>
-          <PsTA className="ps-box" value={card.passage||""} onChange={e=>updateCard(activeTab,card.id,{passage:e.target.value})}/>
+          <PsTA tlabel="অনুচ্ছেদ" className="ps-box" value={card.passage||""} onChange={e=>updateCard(activeTab,card.id,{passage:e.target.value})}/>
           <div className="ps-h2" style={{marginLeft:0}}>Answer:</div>
           <div className="ps-an" style={{marginLeft:0}}>
             {card.items.map((it,idx)=>(
               <div className="ps-ch" key={it.id}>
                 <b>({RO[idx]||idx+1})</b>
-                <PsTA cover taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
+                <PsTA cover tlabel="উত্তর" taRef={el=>{answerRefs.current[it.id]=el;}} value={it.answer}
                   onChange={e=>updateItem(activeTab,card.id,it.id,{answer:e.target.value,question:e.target.value.trim()?"("+(RO[idx]||idx+1)+")":""})}/>
                 {card.items.length>1&&<button type="button" tabIndex={-1} className="ps-x" onClick={()=>removeSubItem(activeTab,card.id,it.id)}>❌</button>}
               </div>
@@ -1863,7 +1939,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
             <span className="ps-lab">{psLab(idx)}</span>{mkQ(it,idx,isFill)}<span className="ps-sep">{tpl.sep}</span>{mkA(it,idx)}{ctl}
             {tpl.third&&(
               <div className="ps-l2"><span>{tpl.third.pre}</span>
-                <PsTA value={it[tpl.third.field]} onChange={e=>updateItem(activeTab,card.id,it.id,{[tpl.third.field]:e.target.value})}/>
+                <PsTA tlabel={String(tpl.third.pre||tpl.third.field||"৩য় ঘর").replace(/[:：\s]+$/,"")} value={it[tpl.third.field]} onChange={e=>updateItem(activeTab,card.id,it.id,{[tpl.third.field]:e.target.value})}/>
                 {tpl.third.suf&&<span>{tpl.third.suf}</span>}</div>
             )}
             {psExtras(card,it,tpl)}
@@ -2005,31 +2081,44 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
     const isMath=activeTab==="math";
     const mcq=card.qtype==="mcq";
     const ex=expandedItems.has(card.id);
+    const solHasText=!!String(card.explanation||"").trim();          // সমাধান লেখা থাকলে সবসময় দেখায় (লুকিয়ে ডেটা হারানো যাবে না)
+    const solShown=isMath&&(solOpen.has(card.id)||solHasText);
     return (
       <div key={card.id} className="ps-sheet">
         <div className="ps-row st" style={{marginLeft:0}}>
           <span className="ps-lab">{psNo(tabOffset+ci+1)}</span>
-          <PsTA cover math={isMath} className="q" taRef={el=>{flatQRefs.current[card.id]=el;}} value={card.question}
+          <PsTA cover tlabel="প্রশ্ন" math={isMath} className="q" taRef={el=>{flatQRefs.current[card.id]=el;}} value={card.question}
             onChange={e=>updateCard(activeTab,card.id,{question:e.target.value})}/>
           <span className="ps-ac">
             <button type="button" tabIndex={-1} className="ps-mini" title="Written ⇄ MCQ" onClick={()=>updateCard(activeTab,card.id,{qtype:mcq?"written":"mcq"})}>{mcq?"❓":"✍️"}</button>
             <button type="button" tabIndex={-1} className="ps-mini" title="ব্যাখ্যা / টেকনিক" onClick={()=>toggleExpand(card.id)}>{ex?"▲":"ℹ️"}</button>
             <button type="button" tabIndex={-1} className="ps-x" title="এই প্রশ্নটা বাদ দাও" onClick={()=>removeCard(activeTab,card.id)}>❌</button>
           </span>
-          {(isMath||ex)&&(
+          {(!isMath&&ex)&&(
             <div className="ps-l2">
-              {isMath?<><span className="ps-bdg">সমাধান</span><span className="ps-opt">ঐচ্ছিক</span></>:<span>ব্যাখ্যা:</span>}
-              <PsTA math={isMath} value={card.explanation} onChange={e=>updateCard(activeTab,card.id,{explanation:e.target.value})}/>
+              <span>ব্যাখ্যা:</span>
+              <PsTA tlabel="ব্যাখ্যা" math={isMath} value={card.explanation} onChange={e=>updateCard(activeTab,card.id,{explanation:e.target.value})}/>
             </div>
           )}
           <div className="ps-l2"><span>উত্তর<b style={{color:"#c0392b"}}>*</b>:</span>
-            <PsTA cover math={isMath} taRef={el=>{flatARefs.current[card.id]=el;}} value={card.answer}
+            <PsTA cover tlabel="উত্তর" math={isMath} taRef={el=>{flatARefs.current[card.id]=el;}} value={card.answer}
               onChange={e=>updateCard(activeTab,card.id,{answer:e.target.value})}/>
             {mcq&&(
               <button type="button" tabIndex={-1} className="ps-mini" title="AI দিয়ে ৩টা ভুল অপশন বানাও" disabled={mcqGeneratingId===card.id}
                 onClick={()=>generateMcqOptions(activeTab,card.id,card.id,card.question,card.answer,true)}>{mcqGeneratingId===card.id?"⏳":"🤖"}</button>
             )}
+            {/* 🆕 গণিতে "সমাধান" ডিফল্টে লুকানো (Tab-ক্রমেও আসে না) — দরকার হলে এই ছোট বাটনে ক্লিক করে খোলো */}
+            {isMath&&!solHasText&&(
+              <button type="button" tabIndex={-1} className="ps-mini" title="সমাধান যোগ করো / লুকাও (ঐচ্ছিক)"
+                style={{whiteSpace:"nowrap",fontSize:10.5,fontWeight:700,padding:"3px 7px"}} onClick={()=>toggleSol(card.id)}>{solShown?"▲ সমাধান":"➕ সমাধান"}</button>
+            )}
           </div>
+          {isMath&&solShown&&(
+            <div className="ps-l2">
+              <span className="ps-bdg">সমাধান</span><span className="ps-opt">ঐচ্ছিক</span>
+              <PsTA tlabel="সমাধান" math taRef={el=>{solRefs.current[card.id]=el;}} value={card.explanation} onChange={e=>updateCard(activeTab,card.id,{explanation:e.target.value})}/>
+            </div>
+          )}
           {mcq&&(
             <div className="ps-l2"><span>Options:</span>
               <div className="ps-opts">
@@ -2043,7 +2132,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
           )}
           {ex&&(
             <div className="ps-l2"><span>টেকনিক:</span>
-              <PsTA math={isMath} value={card.technique} onChange={e=>updateCard(activeTab,card.id,{technique:e.target.value})}/></div>
+              <PsTA tlabel="টেকনিক" math={isMath} value={card.technique} onChange={e=>updateCard(activeTab,card.id,{technique:e.target.value})}/></div>
           )}
         </div>
         <div className="ps-tp">

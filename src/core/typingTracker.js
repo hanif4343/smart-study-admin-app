@@ -1,12 +1,17 @@
 /* ══════════ টাইপিং ট্র্যাকার — লজিক (React-মুক্ত, টেস্টযোগ্য) ══════════
    ধারণা: ডিকশনারি ছাড়াই ভুল ধরা। একটা ঘরে টাইপ থামার ৩ সেকেন্ড পর (আর ঘর ছাড়ার সময়) সেই ঘরের লেখার "ছবি" তোলা হয়।
    পরের ছবির সাথে আগেরটা শব্দ ধরে ধরে মেলানো হয়: আগের ছবির যে শব্দ বদলে গেছে/মুছে গেছে = ভুল; শেষে নতুন যোগ হওয়া শব্দ = নতুন টাইপ।
-   সাথে: অক্ষর-সংখ্যা + সক্রিয় সময় (WPM-এর জন্য), আর মুছে ফেলা অক্ষর (তাৎক্ষণিক সংশোধন)।
+   সাথে: কী-স্ট্রোক (টাইপ/মোছা — typingSession-এ যায়, সেখানে একটাই ঘড়ি) আর নিট শব্দ-সংখ্যা।
+   🆕 মাঝ-শব্দে থামার মিথ্যা-ভুল: ৩ সেকেন্ড থামলে শুধু সম্পূর্ণ শব্দগুলোর (শেষে স্পেস/চিহ্ন আছে এমন) "ছবি" তোলা হয় — যে শব্দ এখনো লেখা চলছে সেটা
+   ঘর ছাড়ার সময় ধরা হয়। (বই দেখতে গিয়ে "boo…" থেমে পরে "book" হলে আগে ভুল গোনা হতো।)
    ভাষা: বাংলা (Unicode U+0980–09FF) / ইংরেজি (A–Z) — প্রতিটা শব্দ ও অক্ষর নিজ লিপি দিয়ে। */
 
 export const IDLE_MS = 3000;          // এই সময় টাইপ না করলে "ছবি"
-export const ACTIVE_GAP_MS = 5000;    // দুই কী-স্ট্রোকের ফাঁক এর বেশি হলে সেই সময় গণনায় ধরা হয় না
 export const PASTE_MIN = 21;          // এক ইভেন্টে এর বেশি অক্ষর ঢুকলে সেটা পেস্ট — টাইপিং হিসাবে নয়
+export const SUGGEST_MIN = 5;         // এক ইভেন্টে এতগুলো বা বেশি অক্ষর একসাথে ঢুকলে = কীবোর্ডের সাজেশন/অটোকারেক্ট — টাইপ ধরা হয় না
+// সময়ের হিসাব এখন typingSession.js-এ (একটাই "রান"-ঘড়ি, থামাসহ) — এই ফাইল শুধু অক্ষর/শব্দ ধরা ও ভুল গোনা।
+const REPLACE_TYPES = /^(insertFromPaste|insertFromPasteAsQuotation|insertFromDrop|insertFromYank|insertReplacementText|insertTranspose|insertLink)$/;
+const DELETE_TYPE = /^delete/;
 
 export const stripRich = (s) => String(s == null ? "" : s).replace(/<br\s*\/?>/gi, " ").replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").replace(/[\n\r]+/g, " ");
 const EDGE = /^[\s.,;:!?'"“”‘’()[\]{}<>।|\-–—_*/\\]+|[\s.,;:!?'"“”‘’()[\]{}<>।|\-–—_*/\\]+$/g;
@@ -59,33 +64,67 @@ export function compareWords(prevText, nextText) {
   return res;
 }
 
+/* সম্পূর্ণ শব্দগুলো (শেষে স্পেস/চিহ্ন থাকলে সবই; না থাকলে শেষ অসম্পূর্ণ শব্দ বাদে) */
+export function completedText(s) {
+  s = stripRich(s); if (!s) return "";
+  if (/[\s.,;:!?।)\]"'”’]$/.test(s)) return s;
+  const i = Math.max(s.lastIndexOf(" "), s.lastIndexOf("\u00a0"));
+  return i < 0 ? "" : s.slice(0, i + 1);
+}
+const countByLang = (text) => { const o = { bn: 0, en: 0 }; wordsOf(text).forEach((w) => { o[scriptOf(w) || "en"]++; }); return o; };
+let boxSeq = 0;
+
 /* ── একটা ঘরের ট্র্যাকার ──
-   sink = {typeEvt({lang,chars,ms}), delEvt({lang,chars}), words({lang,typed,wrong}), mistake({lang,wrong,right})} */
-export function createBoxTracker({ sink, now = () => Date.now(), idleMs = IDLE_MS, setT = setTimeout, clearT = clearTimeout }) {
-  let prev = "", snap = "", lastT = 0, timer = null, lastLang = "en";   // স্পেস/সংখ্যা/চিহ্নের নিজস্ব লিপি নেই → ঘরের সাম্প্রতিক ভাষায় ধরা হয়
+   sink = {words({lang,typed,wrong}), mistake({lang,wrong,right})}  — শব্দ-সংশোধনের হার (দৈনিক জমা)
+   session = typingSession (একটাই ঘড়ি, সব ঘর জুড়ে) — key()/addWords()/setSpell()
+   input(নতুনমান, {auto, excluded, inputType, composing}): auto/excluded = এই বদল টাইপ নয় (অটো-রূপান্তর, বানান-সাজেশন, পেস্ট...) */
+export function createBoxTracker({ sink, session, label = "ঘর", spellCount, now = () => Date.now(), idleMs = IDLE_MS, setT = setTimeout, clearT = clearTimeout }) {
+  const box = "b" + (++boxSeq);
+  let prev = "", snap = "", timer = null, lastLang = "en";   // স্পেস/সংখ্যা/চিহ্নের নিজস্ব লিপি নেই → ঘরের সাম্প্রতিক ভাষায় ধরা হয়
+  let typedSince = 0, erasedSince = 0;                       // sync-এর পর এই ঘরে নিজে কত অক্ষর টাইপ/মুছেছি (লোড-করা লেখা মুছলে "ভুল" গোনা হবে না)
+  const ex = { bn: 0, en: 0 };                               // বাদ-দেওয়া (সাজেশন/পেস্ট) ঢোকানো শব্দ — পরে মুছলে টাইপ-করা শব্দ থেকে কমানো হয় না
   const clear = () => { if (timer) { clearT(timer); timer = null; } };
-  const compare = () => {
-    if (snap === prev) return;
-    const r = compareWords(snap, prev);
+  const compare = (full) => {
+    const cur = full ? stripRich(prev) : completedText(prev);
+    if (snap === cur) return;
+    const r = compareWords(snap, cur);
     ["bn", "en"].forEach((l) => { if (r.typed[l] || r.wrong[l]) sink.words({ lang: l, typed: r.typed[l], wrong: r.wrong[l] }); });
     r.mistakes.forEach((m) => sink.mistake(m));
-    snap = prev;
+    snap = cur;
+    if (session && spellCount) { try { session.setSpell(box, spellCount(cur)); } catch {} }
   };
   return {
+    id: box,
     // বাইরে থেকে মান বদলালে (ড্রাফট লোড, সেভের পর খালি করা): আগের ঘরের বাকি হিসাব মিটিয়ে নতুন করে শুরু
-    sync(val) { val = String(val == null ? "" : val); if (val === prev) return; clear(); compare(); prev = snap = val; lastT = 0; },
+    sync(val) { val = String(val == null ? "" : val); if (val === prev) return; clear(); compare(true); prev = val; snap = stripRich(val); typedSince = erasedSince = 0; ex.bn = ex.en = 0; },
     input(val, opts = {}) {
       val = String(val == null ? "" : val);
-      const t = now(), seg = segmentDiff(stripRich(prev), stripRich(val));
-      if (!opts.auto) {                                               // অটো-রূপান্তর (root7 → √7) টাইপ/ডিলিট হিসাবে ধরা হয় না
-        const gap = lastT && t - lastT <= ACTIVE_GAP_MS ? t - lastT : 0;
-        if (seg.ins.length > 0 && seg.ins.length < PASTE_MIN) { const lang = scriptOf(seg.ins) || lastLang; lastLang = lang; sink.typeEvt({ lang, chars: seg.ins.length, ms: gap }); }
-        if (seg.del.length > 0) { const lang = scriptOf(seg.del) || lastLang; sink.delEvt({ lang, chars: seg.del.length }); if (!seg.ins.length && gap) sink.typeEvt({ lang, chars: 0, ms: gap }); }
+      const t = now(), pv = stripRich(prev), nv = stripRich(val), seg = segmentDiff(pv, nv), it = opts.inputType || "";
+      const isDel = DELETE_TYPE.test(it) || (!it && seg.ins.length === 0 && seg.del.length > 0);
+      const gx = (typeof globalThis !== "undefined" && globalThis.__ssTypingExcludeUntil) || 0;      // বানান-সাজেশনে ক্লিক করে শুধরানো (spellDom সেট করে)
+      const excluded = !!(opts.auto || opts.excluded || REPLACE_TYPES.test(it) || gx > t || seg.ins.length >= PASTE_MIN || seg.ins.length >= SUGGEST_MIN);
+      // শব্দ-সংখ্যার নিট বদল (ভাষা অনুযায়ী)
+      const a = countByLang(pv), b = countByLang(nv), dW = { bn: b.bn - a.bn, en: b.en - a.en };
+      if (!excluded) {
+        const lang = scriptOf(seg.ins || seg.del) || lastLang;
+        const typedN = seg.ins.length;
+        const erasedN = isDel ? Math.max(0, Math.min(seg.del.length, typedSince - erasedSince)) : 0;
+        if (typedN > 0 || erasedN > 0) {
+          lastLang = lang; typedSince += typedN; erasedSince += erasedN;
+          session && session.key({ box, label, lang, typed: typedN, erased: erasedN, t });
+          ["bn", "en"].forEach((l) => {
+            let d = dW[l];
+            if (d < 0 && ex[l] > 0) { const use = Math.min(ex[l], -d); ex[l] -= use; d += use; }
+            if (d) session && session.addWords({ box, label, lang: l, d });
+          });
+        }
+      } else {
+        ["bn", "en"].forEach((l) => { if (dW[l] > 0) ex[l] += dW[l]; });
       }
-      lastT = t; prev = val;
-      clear(); timer = setT(() => { timer = null; compare(); }, idleMs);
+      prev = val;
+      clear(); timer = setT(() => { timer = null; compare(false); }, idleMs);
     },
-    blur() { clear(); compare(); },
-    dispose() { clear(); compare(); },
+    blur() { clear(); compare(true); },
+    dispose() { clear(); compare(true); },
   };
 }

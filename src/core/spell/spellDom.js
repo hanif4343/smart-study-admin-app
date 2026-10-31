@@ -156,6 +156,8 @@ function btn(label, onTap, style = {}) {
 }
 function replaceWith(st, hit, text) {
   const el = st.el;
+  // ⌨️ টাইপিং-ট্র্যাকার: ভুল শব্দে ক্লিক করে সাজেশন দিয়ে শুধরানো টাইপ নয় — এই ছোট সময়ের ইনপুট গতি/কী-স্ট্রোকে ধরা হয় না
+  try { globalThis.__ssTypingExcludeUntil = Date.now() + 800; } catch {}
   if (st.kind === "ta") {
     el.focus(); el.setSelectionRange(hit.start, hit.end);
     if (!document.execCommand("insertText", false, text)) { el.setRangeText(text, hit.start, hit.end, "end"); el.dispatchEvent(new Event("input", { bubbles: true })); }
