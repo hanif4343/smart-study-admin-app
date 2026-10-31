@@ -966,13 +966,44 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
   const failedDraftIdRef=useRef(null);
   const failedDraftCount=draftList.filter(d=>d&&d.failed).length;
   const uploadingDraftCount=draftList.filter(d=>d&&d.uploading).length;
+  // ⌨️ পেজ বদল/বন্ধ হলে চলমান টাইপিং-টাইমার পজ হয়, এ পর্যন্ত হিসাব দৈনিক খাতায় জমা হয়
+  useEffect(()=>()=>{ try{ typingSession.flush(); }catch{} },[]);
   const[metaMissing,setMetaMissing]=useState(false);   // 🔴 পদ/প্রতিষ্ঠান/সাল বাকি — কার্ড লাল দেখায়
   const metaCardRef=useRef(null);
+  // ❄️ পদ, প্রতিষ্ঠান ও সাল দেওয়া হয়ে গেলে নিচে স্ক্রল করলেও সাবজেক্ট-ট্যাব (বাংলা/ইংরেজি/গণিত/GK) স্ক্রিনের উপরে ফ্রিজ হয়ে থাকে;
+  // সাথে পদ·প্রতিষ্ঠান·সাল-এর সারাংশ আর "⬆ উপরে" বাটন — টিপলে উপরের পদ/প্রতিষ্ঠান/সাল/Audience অংশে ফেরা যায়।
+  const tabsRowRef=useRef(null);
+  const[frozen,setFrozen]=useState(false);   // মূল ট্যাব-সারি স্ক্রলে উপরে ঢাকা পড়েছে
+  const[topOff,setTopOff]=useState(0);       // অ্যাপের উপরের বারের (sticky topbar) নিচ থেকে শুরু করার দূরত্ব
+  const metaComplete=!!(postSel.name.trim()&&instSel.name.trim()&&examYear.trim());
+  useEffect(()=>{
+    let raf=0;
+    const check=()=>{
+      raf=0;
+      const el=tabsRowRef.current; if(!el) return;
+      const tb=document.querySelector(".topbar");
+      const h=tb&&tb.offsetHeight?Math.max(0,tb.getBoundingClientRect().bottom):0;
+      setTopOff(o=>o===h?o:h);
+      const r=el.getBoundingClientRect();
+      setFrozen(r.bottom<=h+2);
+    };
+    const on=()=>{ if(!raf) raf=requestAnimationFrame(check); };
+    check();
+    window.addEventListener("scroll",on,{passive:true,capture:true});   // capture: ভেতরের স্ক্রল-কন্টেইনারেও ধরে
+    window.addEventListener("resize",on);
+    return()=>{ window.removeEventListener("scroll",on,true); window.removeEventListener("resize",on); if(raf) cancelAnimationFrame(raf); };
+  },[]);
+  const goTop=()=>{ try{ metaCardRef.current&&metaCardRef.current.scrollIntoView({behavior:"smooth",block:"start"}); }catch{} };
+  const pickTabFrozen=(k)=>{   // ফ্রিজ-বার থেকে ট্যাব বদলালে ওই ট্যাবের শুরুতে (মূল ট্যাব-সারির নিচে) নিয়ে যায়
+    setActiveTab(k);
+    setTimeout(()=>{ try{ tabsRowRef.current&&tabsRowRef.current.scrollIntoView({behavior:"smooth",block:"start"}); }catch{} },60);
+  };
   const persistDraftList=(list)=>{
     setDraftList(list);
     try{ localStorage.setItem(LS_DRAFT_PAPER_LIST,JSON.stringify(list)); }catch{}
   };
   const saveNamedDraft=()=>{
+    try{ typingSession.flush(); }catch{}   // ⌨️ খসড়া হিসেবে সেভ — টাইমার পজ, এ পর্যন্ত হিসাব জমা
     if(!paperHasContent(paper)){ push("warn","এখনো কিছু টাইপ করা হয়নি","আগে কিছু প্রশ্ন টাইপ করো, তারপর খসড়া সেভ করো"); return; }
     // 🆕 খসড়া সেভ করতে পদ (Post) আর প্রতিষ্ঠান (Institution) দুটোই লাগবে — নইলে তালিকায় চেনা যায় না
     if(!postSel.name.trim()||!instSel.name.trim()){
@@ -2282,7 +2313,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       {/* ── পদ/প্রতিষ্ঠান/সাল — একদম শুরুতে, ৪টা ট্যাবের সবার উপরে (session-wide,
           একবার দিলে বাংলা/English/Math/GK — এই সেশনের সব প্রশ্নেই একই Exam Appearance
           যাবে, কারণ QBank মানেই বিগত পরীক্ষা, এই ৩টা ছাড়া entry অসম্পূর্ণ) ── */}
-      <div ref={metaCardRef} style={{background:metaMissing?"#fef2f2":PC.card,border:metaMissing?"2px solid #ef4444":`1px solid ${PC.border}`,borderRadius:12,padding:12,marginBottom:12,transition:"background .3s"}}>
+      <div ref={metaCardRef} style={{scrollMarginTop:topOff+8,background:metaMissing?"#fef2f2":PC.card,border:metaMissing?"2px solid #ef4444":`1px solid ${PC.border}`,borderRadius:12,padding:12,marginBottom:12,transition:"background .3s"}}>
         <div style={{fontSize:12,fontWeight:800,color:metaMissing?"#b91c1c":PC.ink,marginBottom:2}}>🧾 কোন প্রশ্নপত্র থেকে? <span style={{color:"#dc2626"}}>* বাধ্যতামূলক</span></div>
         <div style={{fontSize:10.5,color:PC.muted,marginBottom:8}}>পদ, প্রতিষ্ঠান ও সাল — তিনটাই না দিলে সাবমিট হবে না। এই সেশনের ৪টা ট্যাবের সব প্রশ্নই এই Exam Appearance পাবে — প্রশ্নের রো ডুপ্লিকেট হয় না, একই প্রশ্ন আগে থেকে থাকলে শুধু Appearance জুড়ে যায় (সাল আলাদা হলে নতুন Appearance)।</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
@@ -2334,7 +2365,7 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
       </div>
 
       {/* ── সাবজেক্ট ট্যাব ── */}
-      <div style={{display:"flex",gap:6,marginBottom:12}}>
+      <div ref={tabsRowRef} style={{display:"flex",gap:6,marginBottom:12,scrollMarginTop:topOff+6}}>
         {PAPER_TABS.map(t=>(
           <button key={t.key} onClick={()=>setActiveTab(t.key)}
             style={{flex:1,padding:"9px 4px",borderRadius:9,border:`1.5px solid ${activeTab===t.key?PC.ink:PC.border}`,
@@ -2348,6 +2379,28 @@ function PaperComposer({gasSecret,refData,setRefData,refDataError,refDataLoading
           </button>
         ))}
       </div>
+      {/* ❄️ ফ্রিজ-বার: মূল ট্যাব-সারি স্ক্রলে উপরে চলে গেলে (এবং পদ·প্রতিষ্ঠান·সাল দেওয়া থাকলে) স্ক্রিনের উপরে স্থির থাকে */}
+      {metaComplete&&frozen&&(
+        <div style={{position:"fixed",top:topOff,left:"50%",transform:"translateX(-50%)",width:"100%",maxWidth:480,zIndex:60,
+          background:PC.card,borderBottom:`1px solid ${PC.border}`,boxShadow:"0 3px 10px rgba(0,0,0,.2)",padding:"6px 10px 8px",boxSizing:"border-box"}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+            <div onClick={goTop} style={{flex:1,minWidth:0,fontSize:10.5,fontWeight:700,color:PC.ink,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",cursor:"pointer"}}
+              title="উপরে গিয়ে পদ/প্রতিষ্ঠান/সাল বদলাও">🧑‍💼 {postSel.name.trim()} · 🏛 {instSel.name.trim()} · {examYear.trim()}</div>
+            <button type="button" onClick={goTop}
+              style={{flexShrink:0,padding:"4px 10px",borderRadius:14,border:`1px solid ${PC.ink}`,background:"transparent",color:PC.ink,fontSize:11,fontWeight:800,cursor:"pointer"}}>⬆ উপরে</button>
+          </div>
+          <div style={{display:"flex",gap:6}}>
+            {PAPER_TABS.map(t=>(
+              <button key={t.key} type="button" onClick={()=>pickTabFrozen(t.key)}
+                style={{flex:1,padding:"7px 2px",borderRadius:9,border:`1.5px solid ${activeTab===t.key?PC.ink:PC.border}`,
+                  background:activeTab===t.key?PC.ink:PC.card,color:activeTab===t.key?"#fff":PC.muted,fontSize:11.5,fontWeight:700,cursor:"pointer"}}>
+                {t.label}
+                {tabCount(t.key)>0&&<span style={{marginLeft:4,fontSize:9,background:activeTab===t.key?"#ffffff33":PC.ink+"33",color:activeTab===t.key?"#fff":PC.ink,padding:"1px 5px",borderRadius:10,fontWeight:800}}>{tabCount(t.key)}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       <style>{PS_CSS}</style>
       {(instSel.name.trim()||postSel.name.trim()||examYear.trim())&&(
