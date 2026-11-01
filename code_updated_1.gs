@@ -2105,9 +2105,9 @@ function qBulkSave_(params, ss) {
   if (!sh) return { result: "error", error: "Questions sheet নেই" };
   var rows = params.rows || [];
   if (!rows.length) return { result: "success", added: 0, skipped: 0 };
-  try { ensureRefTagsFromRows_(rows); } catch (tagErr) { logError_("ensureRefTagsFromRows_", String(tagErr)); }
+  if (!params.dryRun) { try { ensureRefTagsFromRows_(rows); } catch (tagErr) { logError_("ensureRefTagsFromRows_", String(tagErr)); } }   // যাচাই (dryRun)-এ কিছু তৈরি/লেখা হয় না
 
-  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  var lock = LockService.getScriptLock(); lock.waitLock(params.dryRun ? 60000 : 100000);   // ⏳ ব্যাকগ্রাউন্ডে একাধিক আপলোড লাইনে থাকলে আগেরটা শেষ হওয়া পর্যন্ত অপেক্ষা (আগে ৩০s-এ লক না পেয়ে ভুল "ব্যর্থ" আসত)
   try {
     var H = qHeader_(sh), ix = H.idx, lc = H.lc;
     if (ix["inqbank"] === undefined) return { result: "error", error: "Questions শিটে in_qbank কলাম নেই — আগে Migration.gs-এর mig5_addInQbank চালান" };
@@ -2191,6 +2191,7 @@ function qBulkSave_(params, ss) {
     var unclassified = 0;   // নতুন QBank সারি যেগুলো এখনো Subject/Topic পায়নি (রুল মেলেনি)
     var added = 0, skipped = 0, linked = 0, eaRows = [], eaLinked = 0, dirty = {}, newRows = [], resultIds = new Array(rows.length).fill("");
     var toggles = []; // [rowIndexInData, colIndex, "Y"]
+    var rowStatus = new Array(rows.length);   // 🔍 dryRun (যাচাই): প্রতিটা সারি শিটে আছে কিনা — {state:"exists"|"new"|"error", appearance:bool}
     var nowMs = Date.now();
     var setCell = function (arr, key, val) { var c = ix[qNormKey_(key)]; if (c !== undefined) arr[c] = val; };
     // Topic Tags: QBank আপলোডে Subject/Topic ফাঁকা MCQ-কে রুল দিয়ে আপনা-আপনি বসানো (AutoClassify.gs + সেটিং চালু থাকলে)
@@ -2212,6 +2213,7 @@ function qBulkSave_(params, ss) {
         } else exHit = cands[0] || null;
         if (row.question && exHit) {
           var ex = exHit; skipped++; resultIds[bi] = ex.id;
+          rowStatus[bi] = { state: "exists", appearance: (!paperKey || !params.examAppearance || tab !== "QBank") ? true : !!(eaSet[ex.id] && eaSet[ex.id][paperKey]) };
           var exRow = (ex.row >= 0) ? data[ex.row] : null;
           if (exRow) {
             var exWritten = ix["questiontype"] !== undefined && String(exRow[ix["questiontype"]] || "").trim().toLowerCase() === "written";
@@ -2273,10 +2275,14 @@ function qBulkSave_(params, ss) {
         (existing[key] = existing[key] || []).push({ id: bId, row: -1 });
         if (norm(row.question)) { var qkN = norm(row.question) + "|" + tk; (existingByQ[qkN] = existingByQ[qkN] || []).push({ id: bId, row: -1 }); }
         if (paperKey) (eaSet[bId] = eaSet[bId] || {})[paperKey] = 1;
-        added++;
+        added++; rowStatus[bi] = { state: "new", appearance: false };
         if (params.examAppearance && tab === "QBank") { if (eaSh) addEa(bId); else eaMissing++; }
-      } catch (rowErr) { skipped++; if (params.examAppearance && tab === "QBank") eaMissing++; }
+      } catch (rowErr) { skipped++; rowStatus[bi] = { state: "error", appearance: false }; if (params.examAppearance && tab === "QBank") eaMissing++; }
     }
+
+    // 🔍 শুধু যাচাই (dryRun): কিছু লেখা হয় না — প্রতিটা সারি শিটে আছে কিনা (আর এই পেপারের Exam Appearance আছে কিনা) জানায়।
+    // অ্যাপ "ব্যর্থ" ধরার আগে এটা দিয়ে সত্যটা জেনে নেয় (নেটওয়ার্ক টাইমআউট হলেও সার্ভারে সেভ হয়ে যেতে পারে)।
+    if (params.dryRun) return { result: "success", dryRun: true, rowStatus: rowStatus, total: rows.length, wouldAdd: added };
 
     if (newRows.length) {
       var esc = newRows.map(function (rw) { return rw.map(function (v) { return (typeof v === "string" && v.charAt(0) === "'") ? "'" + v : v; }); });

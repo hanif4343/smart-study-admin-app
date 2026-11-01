@@ -370,7 +370,7 @@ function upsertPendingDraft(listKey,entry,max=15){
 // অ্যাপ নতুন করে খুললে: "আপলোড চলছে" দাগ আছে কিন্তু আসলে কোনো জব চলছে না (isActive(id) মিথ্যা) → মাঝপথে থেমে গেছে, লাল করে দাও
 function markStalePendingFailed(listKey,isActive){
   const list=_readDraftList(listKey); let changed=false;
-  list.forEach(d=>{ if(d&&d.uploading&&!(isActive&&isActive(d.id))){ d.uploading=false; d.failed=true; d.failedAt=Date.now(); d.failReason="আপলোড মাঝপথে থেমে গেছে (অ্যাপ বন্ধ বা রিলোড) — আবার পাঠাও, ডুপ্লিকেট হবে না"; changed=true; } });
+  list.forEach(d=>{ if(d&&d.uploading&&!(isActive&&isActive(d.jobId||d.id))){ d.uploading=false; d.failed=true; d.failedAt=Date.now(); d.failReason="আপলোড মাঝপথে থেমে গেছে (অ্যাপ বন্ধ বা রিলোড) — আবার পাঠাও, ডুপ্লিকেট হবে না"; changed=true; } });
   if(changed){ try{ localStorage.setItem(listKey,JSON.stringify(list)); }catch{} }
   return list;
 }

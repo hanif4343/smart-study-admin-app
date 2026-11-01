@@ -21,7 +21,7 @@ import { typingSession } from "../core/typingStats.js";
 import { C } from "../core/config.js";
 import { callAiProviderRotatingRaw, buildKeyPool } from "../core/ocrProviders.js";
 import { buildSheetRow, loadSharedGasSecret, saveSharedGasSecret, LS_DRAFT_SINGLE, LS_DRAFT_SINGLE_LIST, loadDraft, saveDraft, clearDraft, applyRichTextShortcut, upsertFailedDraft, removeDraftById } from "../core/uploaderUtils.js";
-import { saveRowsToSheet, fetchReferenceData, fetchReferenceDataVerbose } from "../core/sheetSave.js";
+import { saveRowsToSheet, fetchReferenceData, fetchReferenceDataVerbose, verifyRowsOnSheet } from "../core/sheetSave.js";
 import { resolveOrCreateReference, norm } from "../core/referenceHelpers.js";
 import { SaveLocationPicker } from "../components/shared/SaveLocationPicker.jsx";
 import { GeometryDrawing } from "../components/shared/GeometryDrawing.jsx";
@@ -92,6 +92,7 @@ function SingleQuestionEntryPage({push}){
   const[correct,setCorrect]=useState("");
   // 🆕 প্রশ্ন/উত্তর ঘরে টাইপ শুরু হলে কালো আবরণ, শেষ টাইপের ৩ সেকেন্ড পর সরে যায় (সংশোধনে ফেরে না) — TypingCover.jsx
   const qCover=useTypingCover(question), aCover=useTypingCover(correct);
+  useEffect(()=>()=>{ try{ typingSession.flush(); }catch{} },[]);   // ⌨️ পেজ ছাড়লে টাইপিং-টাইমার পজ + হিসাব জমা
   const qTrack=useTypingTrack(question,"প্রশ্ন"), aTrack=useTypingTrack(correct,"উত্তর");   // টাইপিং ট্র্যাকার (WPM/ভুল) — TypingStatsBubble
   const[opt1,setOpt1]=useState(""); const[opt2,setOpt2]=useState("");
   const[opt3,setOpt3]=useState(""); const[opt4,setOpt4]=useState("");
@@ -537,19 +538,32 @@ function SingleQuestionEntryPage({push}){
       const appearanceMissing=!!examAppearance&&failedCount===0&&processedQ>0&&missingEA>0;
       // সব প্রশ্ন আগে থেকেই ছিল (সাল আলাদা বলে) — শুধু নতুন Appearance যোগ হয়েছে: এটা ডুপ্লিকেট-ব্যর্থতা নয়, সফল
       const appearanceOnlyOk=!!examAppearance&&res.added===0&&res.skipped>0&&failedCount===0&&!appearanceMissing&&(res.examAppearancesAdded||0)>0;
-      if(failedCount>0){
+      // 🔍 "ব্যর্থ" ঘোষণার আগে শিটকেই জিজ্ঞেস করা (কিছু লেখা হয় না): নেটওয়ার্ক টাইমআউট/লক-অপেক্ষা হলেও সার্ভারে সেভ হয়ে যেতে পারে।
+      // সত্যিই সব প্রশ্ন (আর এই পেপারের Exam Appearance) শিটে থাকলে সেটা সফল — মিথ্যা "ব্যর্থ"-সংকেত/লাল খসড়া আর হবে না।
+      let verified=false, verifyFail="";
+      if(failedCount>0||appearanceMissing||(res.added===0&&res.skipped===0)){
+        push("info","🔍 শিটে সত্যিই আছে কিনা যাচাই করা হচ্ছে…","একটু অপেক্ষা করো");
+        try{
+          const v=await verifyRowsOnSheet({rows,targetTab:targetMode,gasSecret,examAppearance});
+          if(v.ok&&v.missing.length===0&&v.appMissing.length===0){ verified=true; push("success","✅ যাচাইয়ে দেখা গেছে — সব শিটে আছে",`${rows.length}টা প্রশ্ন ঠিকঠাক আছে (আগের "ব্যর্থ" সংকেত ভুল ছিল)`); }
+          else if(v.ok) verifyFail=`যাচাইয়ে ${v.total}টার মধ্যে ${v.saved}টা শিটে আছে${v.missing.length?` · ${v.missing.length}টা নেই`:""}${v.appMissing.length?` · ${v.appMissing.length}টার Exam Appearance নেই`:""}`;
+          else verifyFail=`শিটে আছে কিনা যাচাইও করা যায়নি (${v.error||"সার্ভার সাড়া দেয়নি"})`;
+        }catch(e){ verifyFail="যাচাইও করা যায়নি: "+(e.message||""); }
+      }
+      if(!verified&&failedCount>0){
         setLastSubmitFailed(true);
-        push("error",`⚠️ ${failedCount}টা প্রশ্ন সেভ হয়নি`,"ফর্ম খালি করা হয়নি, লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে — আবার Submit দিলে আগেরগুলো ডুপ্লিকেট হবে না");
+        push("error",`⚠️ ${failedCount}টা প্রশ্ন সেভ হয়নি`,`${verifyFail?verifyFail+" — ":""}ফর্ম খালি করা হয়নি, লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে — আবার Submit দিলে আগেরগুলো ডুপ্লিকেট হবে না`);
         recordFail(`${failedCount}টা প্রশ্ন সার্ভারে যায়নি`);
       }
-      else if(appearanceMissing){
+      else if(!verified&&appearanceMissing){
         setLastSubmitFailed(false);
-        push("error","🔴 প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি","লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে — আবার Submit দিলে শুধু Appearance জুড়বে, প্রশ্ন ডুপ্লিকেট হবে না");
+        push("error","🔴 প্রশ্ন সেভ হয়েছে কিন্তু Exam Appearance যোগ হয়নি",`${verifyFail?verifyFail+" — ":""}লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে — আবার Submit দিলে শুধু Appearance জুড়বে, প্রশ্ন ডুপ্লিকেট হবে না`);
         recordFail(`প্রশ্ন সেভ হয়েছে কিন্তু ${missingEA}টার Exam Appearance যোগ হয়নি`);
       }
-      else if(res.added>0||appearanceOnlyOk){
+      else if(res.added>0||appearanceOnlyOk||verified){
         setLastSubmitFailed(false);
-        if(res.added>0) push("success",`✅ ${rows.length>1?rows.length+"টা প্রশ্ন একসাথে":""} যোগ হয়েছে!`,`এই সেশনে মোট ${sessionCount+rows.length}টি`);
+        if(verified&&res.added===0&&!appearanceOnlyOk){ /* যাচাইয়ের ✅ বার্তা উপরেই দেখানো হয়েছে */ }
+        else if(res.added>0) push("success",`✅ ${rows.length>1?rows.length+"টা প্রশ্ন একসাথে":""} যোগ হয়েছে!`,`এই সেশনে মোট ${sessionCount+rows.length}টি`);
         else push("success","🔗 প্রশ্নগুলো আগে থেকেই QBank-এ ছিল","শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance যোগ হয়েছে");
         if(res.examAppearancesLinkedToExisting>0) push("success","🔗 কিছু প্রশ্ন আগে থেকেই QBank-এ ছিল","নতুন করে যোগ হয়নি — শুধু এই পদ/প্রতিষ্ঠান/সালের Appearance জুড়ে দেওয়া হয়েছে");
         // 🆕 MCQ + উত্তর ভরা + অপশন ফাঁকা হলে option-generator, আর ব্যাখ্যা ফাঁকা হলে
@@ -581,7 +595,7 @@ function SingleQuestionEntryPage({push}){
         // auto-retry effect নেট ফিরলে (বা প্রতি ৪৫ সেকেন্ডে) নিজে থেকেই আবার
         // submit() ট্রাই করে — ম্যানুয়ালি মনে রেখে আবার চাপতে হবে না।
         setLastSubmitFailed(true);
-        push("error","📵 নেট সমস্যায় সেভ হয়নি","প্রশ্নগুলো অপেক্ষায় আছে (হারায়নি), লাল চিহ্নসহ ড্রাফটেও রাখা হয়েছে — নেট ফিরলেই অটোমেটিক আবার সাবমিট হবে, চাইলে ম্যানুয়ালি আবার Submit-ও চাপতে পারো");
+        push("error","📵 সেভ হয়েছে কিনা নিশ্চিত নয়",`${verifyFail?verifyFail+" — ":""}প্রশ্নগুলো অপেক্ষায় আছে (হারায়নি), লাল চিহ্নসহ ড্রাফটেও রাখা হয়েছে — নেট ফিরলেই অটোমেটিক আবার সাবমিট হবে (শিটে যা আছে তা ডুপ্লিকেট হবে না)`);
         recordFail("সার্ভারে সেভ হয়নি (নেটওয়ার্ক/সার্ভার সমস্যা)");
       }
     }catch(e){ setLastSubmitFailed(true); push("error","📵 নেট সমস্যায় সেভ হয়নি",e.message+" — লাল চিহ্নসহ ড্রাফটে রাখা হয়েছে, নেট ফিরলেই অটোমেটিক আবার সাবমিট হবে"); recordFail("সাবমিট ব্যর্থ: "+(e.message||"")); }

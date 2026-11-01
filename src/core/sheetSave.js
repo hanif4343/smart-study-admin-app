@@ -51,8 +51,8 @@ async function saveRowsToSheet({rows,targetTab,gasSecret,push,onProgress,onEvent
       // 📡 ঘটনা-রিপোর্ট (ব্যাকগ্রাউন্ড আপলোড-বারের জন্য): চাংক শুরু / রিট্রাই
       try{ onEvent?.({type:attempt===1?"chunk-start":"retry",index:Math.floor(i/CHUNK)+1,totalChunks,rows:chunk.length,attempt}); }catch{}
       // ⚡ বড় চাংক (১০০টা পর্যন্ত) এক অনুরোধে যায় — সার্ভারের কাজ প্রশ্ন-সংখ্যার সাথে বাড়ে, তাই টাইমআউটও সেই অনুযায়ী (রিট্রাই নিরাপদ: ডুপ্লিকেট আর হয় না)
-      const baseMs=Math.min(120000,Math.max(25000,15000+chunk.length*700));
-      const timeoutMs=attempt===1?baseMs:Math.min(170000,Math.round(baseMs*1.7));
+      const baseMs=Math.min(150000,Math.max(40000,25000+chunk.length*1200));
+      const timeoutMs=attempt===1?baseMs:Math.min(180000,Math.round(baseMs*1.5));
       try{
         if(attempt===2) push?.("warn","⏳ ধীর নেটওয়ার্ক, আবার চেষ্টা করা হচ্ছে...",`চাংক ${Math.floor(i/CHUNK)+1}/${totalChunks}`);
         const resp=await fetchWithTimeout(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)},timeoutMs);
@@ -603,4 +603,37 @@ async function forceReindexNow({gasSecret,push}){
   }catch(e){ push?.("error","❌ Reindex ব্যর্থ (নেটওয়ার্ক)",e.message); return{ok:false}; }
 }
 
-export { saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, updateFieldsInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, fetchReferenceDataVerbose, warmReferenceCache, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest, forceReindexNow };
+/* 🔍 শিটে সত্যিই আছে কিনা যাচাই (GAS bulk_save_rows + dryRun — কিছু লেখা হয় না)।
+   "ব্যর্থ" ধরার আগে এটা চালানো হয়: নেটওয়ার্ক টাইমআউট/লক-অপেক্ষা হলেও সার্ভারে সেভ হয়ে যেতে পারে।
+   ফেরত: {ok, total, saved, missing:[সারি-সূচক], appMissing:[সূচক], error}
+     saved = শিটে প্রশ্ন আছে (+ examAppearance দিলে এই পদ/প্রতিষ্ঠান/সালের Appearance-ও আছে)
+     missing = শিটে প্রশ্নই নেই;  appMissing = প্রশ্ন আছে কিন্তু এই পেপারের Appearance নেই */
+async function verifyRowsOnSheet({rows,targetTab="QBank",gasSecret,examAppearance}){
+  if(!GAS) return{ok:false,error:"GAS URL সেট করা নেই",total:(rows||[]).length};
+  const missing=[],appMissing=[]; let saved=0;
+  if(!rows||!rows.length) return{ok:true,total:0,saved:0,missing,appMissing};
+  const CH=100;
+  for(let i=0;i<rows.length;i+=CH){
+    const chunk=rows.slice(i,i+CH); let data=null,err="";
+    for(let attempt=1;attempt<=2&&!data;attempt++){
+      try{
+        const body={secret:gasSecret,type:"bulk_save_rows",targetTab,rows:chunk,dryRun:true,sync:false};
+        if(examAppearance) body.examAppearance=examAppearance;
+        const resp=await fetchWithTimeout(GAS,{method:"POST",headers:{"Content-Type":"text/plain"},body:JSON.stringify(body)},attempt===1?70000:100000);
+        data=await resp.json().catch(()=>null);
+        if(data&&data.result==="error"){ err=data.error||"সার্ভার error"; data=null; break; }
+        if(data&&!data.dryRun){ err="GAS-এ যাচাই-সুবিধা নেই (নতুন code_updated_1.gs Deploy করুন)"; data=null; break; }   // পুরনো GAS dryRun বোঝে না
+      }catch(e){ err=e.message||"নেটওয়ার্ক"; data=null; }
+    }
+    if(!data||!Array.isArray(data.rowStatus)) return{ok:false,error:err||"সার্ভার সাড়া দেয়নি",total:rows.length};
+    data.rowStatus.forEach((st,k)=>{
+      const idx=i+k;
+      if(!st||st.state!=="exists"){ missing.push(idx); }
+      else if(examAppearance&&!st.appearance){ appMissing.push(idx); }
+      else saved++;
+    });
+  }
+  return{ok:true,total:rows.length,saved,missing,appMissing};
+}
+
+export { verifyRowsOnSheet, saveRowsToSheet, saveRowsToFirebaseBulk, fetchSheetRows, renameFieldInSheet, updateFieldInSheet, updateFieldsInSheet, syncFieldsToSheet, deleteIdsInSheet, fetchReferenceData, fetchReferenceDataVerbose, warmReferenceCache, renameReferenceItem, addReferenceItem, deleteReferenceItem, deleteByReferenceId, getExamAppearances, addExamAppearance, fetchAllExamAppearances, deleteExamAppearance, fetchDirtyTopicsCount, publishNow, fetchPublishStats, markAllTopicsDirty, fetchOrphanStats, deleteOrphanQuestions, fetchManifestHistory, rollbackManifest, forceReindexNow };
