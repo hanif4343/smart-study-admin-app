@@ -47,7 +47,7 @@ function AIImportPage({push,onSendToBulk}){
   const[subjectList,setSubjectList]=useState([]);
   const[directRunning,setDirectRunning]=useState(false);
   const[directProgress,setDirectProgress]=useState({done:0,total:0,sent:0,failed:0});
-  const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1"];
+  const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1","Nursing Admission"];
   const[saveLoc,setSaveLoc]=useState(loadSaveLocPref); // "sheet" | "firebase"
   const setSaveLocP=(v)=>{ setSaveLoc(v); saveSaveLocPref(v); };
   const[gasSecret,setGasSecret]=useSharedGasSecret();

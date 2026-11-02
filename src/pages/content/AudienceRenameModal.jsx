@@ -47,7 +47,7 @@ function AudienceRenameModal({target,newName,setNewName,onCancel,onRename,renami
 
         {/* Hint */}
         <div style={{background:`${tint(C.accent,"10")}`,border:`1px solid ${tint(C.accent,"25")}`,borderRadius:8,padding:"7px 10px",marginBottom:12,fontSize:10,color:C.muted}}>
-          💡 <b style={{color:C.text}}>classLevel মানগুলো:</b> Masters 1, Masters 2, Honours 1, Honours 2, Honours 3, Honours 4, Class 12, Job
+          💡 <b style={{color:C.text}}>classLevel মানগুলো:</b> Masters 1, Masters 2, Honours 1, Honours 2, Honours 3, Honours 4, Class 12, Nursing Admission, Job
         </div>
 
         <div style={{display:"flex",gap:7}}>

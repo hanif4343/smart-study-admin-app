@@ -23,7 +23,7 @@ function UserEditModal({user,onClose,onSaved,push}){
   const[saving,setSaving]=useState(false);
 
   // মূল অ্যাপের AuthScreen.kt / ProfilePage.kt তে ব্যবহৃত আসল ভ্যালুগুলোর সাথে হুবহু মিল রাখা হয়েছে
-  const CLASS_LEVELS=["Class 1","Class 2","Class 3","Class 4","Class 5","Class 6","Class 7","Class 8","Class 9","Class 10","Class 11","Class 12","Honours 1","Honours 2","Honours 3","Honours 4","Masters 1","Masters 2","Masters Final"];
+  const CLASS_LEVELS=["Class 1","Class 2","Class 3","Class 4","Class 5","Class 6","Class 7","Class 8","Class 9","Class 10","Class 11","Class 12","Honours 1","Honours 2","Honours 3","Honours 4","Masters 1","Masters 2","Masters Final","Nursing Admission"];
   const TYPES=[{v:"Student",l:"Student (শিক্ষার্থী)"},{v:"Job",l:"Job (চাকরিজীবী)"}];
   const ROLES=["User","Admin"];
   const STATUSES=["Active","Inactive","Pending","Banned"];

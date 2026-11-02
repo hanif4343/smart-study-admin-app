@@ -33,7 +33,7 @@ function QuestionGenTab({push,tick}){
     setTagInput("");
   };
   const removeTag=t=>setAudienceTags(p=>p.filter(x=>x!==t));
-  const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1"];
+  const QUICK_TAGS=["Job","Class 7","Computer Operator","Masters 1","Nursing Admission"];
 
   const[cfg,setCfg]=useState(loadGhCfg);
   const[editingToken,setEditingToken]=useState(()=>!loadGhCfg().token);
