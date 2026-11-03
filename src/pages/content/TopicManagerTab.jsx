@@ -321,11 +321,16 @@ function TopicManagerTab({ push }) {
         })}
         {shown.length > visible.length && <div ref={sentRef} style={{ textAlign: "center", padding: 10 }}>
           <button className="btn" onClick={() => setLim((l) => l + 200)}>⬇️ আরও দেখাও ({bn(shown.length - visible.length)}টা বাকি)</button></div>}
-        {selCount > 0 && <div style={{ position: "sticky", bottom: 8, marginTop: 10, padding: 10, borderRadius: 12, background: C.card, border: `1.5px solid ${plan ? C.success : C.warning}`, boxShadow: "0 3px 14px #0004" }}>
+        {selCount > 0 && <div style={{ height: qs.running ? 330 : 230 }} aria-hidden="true" />}
+        {/* ❄️ ফ্রিজ-বার: স্ক্রিনের সাথে স্থির, নিচের নেভিগেশনের ঠিক উপরে — তালিকা যতই স্ক্রল করো সবসময় চোখের সামনে।
+            (আগে sticky ছিল: নেভিগেশনের পেছনে ঢুকে যেত বা শুধু তালিকার একদম শেষে দেখা যেত।) নিচে ফাঁকা জায়গা রাখা, যাতে শেষ সারি ঢাকা না পড়ে। */}
+        {selCount > 0 && <div style={{ position: "fixed", left: "50%", transform: "translateX(-50%)", width: "calc(100% - 20px)", maxWidth: 460, boxSizing: "border-box",
+          bottom: `calc(${qs.running ? 178 : 78}px + env(safe-area-inset-bottom, 0px))`, zIndex: 55,
+          padding: 10, borderRadius: 12, background: C.card, border: `1.5px solid ${plan ? C.success : C.warning}`, boxShadow: "0 4px 18px #0006" }}>
           {plan ? (
             <>
               <div style={{ fontSize: 12.5, fontWeight: 800, marginBottom: 2 }}>⭐ {plan.tgt.name} ← {bn(plan.srcs.length)}টা টপিক</div>
-              <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 6, lineHeight: 1.5 }}>+{bn(plan.moved)}টা প্রশ্ন মাস্টারে আসবে (এখন {bn(plan.tgt.c.total)} → {bn(plan.tgt.c.total + plan.moved)}){plan.auto ? " · মাস্টার নিজে বাছোনি, তাই সবচেয়ে বেশি প্রশ্নেরটা ধরা হয়েছে (বদলাতে অন্য টপিকের ⭐ চাপো)" : ""}</div>
+              <div style={{ fontSize: 10.5, color: C.muted, marginBottom: 6, lineHeight: 1.5 }}>+{bn(plan.moved)}টা প্রশ্ন আসবে (এখন {bn(plan.tgt.c.total)} → {bn(plan.tgt.c.total + plan.moved)}){plan.auto ? " · মাস্টার = সবচেয়ে বেশি প্রশ্নেরটা (বদলাতে অন্য ⭐ চাপো)" : ""}</div>
               <input className="inp" value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={`চূড়ান্ত নাম (ফাঁকা রাখলে “${plan.tgt.name}”)`} style={{ marginBottom: 6, fontSize: 12 }} />
             </>
           ) : <div style={{ fontSize: 12, color: C.warning, fontWeight: 700, marginBottom: 6 }}>⚠️ {planErr}</div>}
