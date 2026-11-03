@@ -49,6 +49,7 @@ import { TypingUploaderPage } from "./pages/TypingUploaderPage.jsx";
 import { SingleQuestionEntryPage } from "./pages/SingleQuestionEntryPage.jsx";
 import { GasSecretModal } from "./components/shared/GasSecretModal.jsx";
 import { UploadProgressChip } from "./components/shared/UploadProgressChip.jsx";
+import { subscribeUnread as subscribeTmUnread, recoverInflight as recoverTmInflight } from "./core/topicMergeQueue.js";
 import { EVT_OPEN } from "./core/gasSecret.js";
 import { loadSharedGasSecret } from "./core/utils.js";
 
@@ -159,6 +160,15 @@ export default function App(){
   },[]);
   // লগইনের পর Secret না থাকলে নিজে থেকেই বক্স খুলে দেয়
   useEffect(()=>{ if(loggedIn && !loadSharedGasSecret()) setShowGasKey(true); },[loggedIn]);
+  // 🔀 Topic মার্জ (ব্যাকগ্রাউন্ড): শেষ হলে যে পেজেই থাকি টোস্ট আসে; "ম্যানেজ করুন" ট্যাবে না-পড়া সংখ্যা; অ্যাপ রিলোডের পর আগের চলমান ব্যাচের ফল জানা
+  const[tmUnread,setTmUnread]=useState(0);
+  useEffect(()=>subscribeTmUnread(setTmUnread),[]);
+  useEffect(()=>{
+    const h=e=>{ const d=e&&e.detail; if(d) push(d.type||"info",d.title||"",d.msg||""); };
+    window.addEventListener("ss-app-notify",h);
+    return()=>window.removeEventListener("ss-app-notify",h);
+  },[push]);
+  useEffect(()=>{ if(loggedIn){ const k=loadSharedGasSecret(); if(k) recoverTmInflight({gasSecret:k}).catch(()=>{}); } },[loggedIn]);
   const[bulkPrefill,setBulkPrefill]=useState(null);
   const[searchDetail,setSearchDetail]=useState(null);
   const backStack=useRef(["dashboard"]);
@@ -433,7 +443,7 @@ export default function App(){
     return arr.filter(t=>!t.approved&&!t.Approved).length;
   },[techRawBadge]);
 
-  const badgeMap={students:signupBadge,reports:reportBadge,techniques:techBadge,approval:reportBadge+techBadge};
+  const badgeMap={students:signupBadge,reports:reportBadge,techniques:techBadge,approval:reportBadge+techBadge,content:tmUnread};
   const pageLabel=NAV.find(n=>n.id===page||n.landingId===page) ||
     NAV.flatMap(n=>n.children||[]).find(c=>c.id===page);
   const inUploaderLeaf=UPLOADER_LEAF_PAGES.includes(page);

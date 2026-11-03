@@ -9,6 +9,9 @@
      tm_getTopics    → সব টপিক + প্রশ্নসংখ্যা (total/QBank/Quiz/Study/রুল) + হেলথ (খালি/অচেনা topic_id)। কিছু বদলায় না।
      tm_mergePreview → মার্জের আগের হিসাব (কোনটা কোথায় যাবে, কয়টা প্রশ্ন)। কিছু বদলায় না।
      tm_merge        → sourceIds[] → targetId-এ মার্জ (newName ঐচ্ছিক)। একই সাবজেক্টের টপিক ছাড়া মার্জ হয় না।
+     tm_mergeBatch   → 🆕 অনেকগুলো মার্জ একসাথে (merges:[{targetId,sourceIds[],newName}], batchId)। শিট স্ক্যান মাত্র ১–২ বার, Topics সারি-মোছা এক লেখায়,
+                       একটাই লগ (পুরো ব্যাচ Undo)। কোনো মার্জ অবৈধ হলে শুধু সেটা বাদ, বাকিগুলো হয়। একই batchId আবার এলে আবার করে না (রিট্রাই নিরাপদ)।
+     tm_batchStatus  → 🆕 batchId দিয়ে জানা যায় ব্যাচটা সত্যিই হয়েছে কিনা (অ্যাপ বন্ধ/টাইমআউটের পর যাচাই)।
      tm_deleteEmpty  → শুধু যেসব টপিকে Questions+Study-তে ০টা প্রশ্ন, সেগুলো মোছে (সার্ভারে আবার যাচাই করে)।
      tm_getLog       → শেষ কয়েকটা মার্জ/ডিলিটের তালিকা।
      tm_undo         → সর্বশেষ (এখনো-Undo-না-হওয়া) মার্জ/ডিলিট ফেরত।
@@ -368,6 +371,192 @@ function tm_deleteEmpty_(ss, p) {
   return { status: "success", deleted: ok, skipped: skipped, log_id: logId, rulesRemoved: ruleIdx.length };
 }
 
+
+/* ══════════ 🆕 ব্যাচ-মার্জ (একসাথে অনেক মার্জ — দ্রুত) ══════════
+   আগে: প্রতি মার্জে ছয়–সাতবার পুরো শিট পড়া + টপিক-সারি একটা একটা মোছা।
+   এখন: Questions ১ বার পড়ে (পরিকল্পনা মেমোরিতে), লগ লিখে, তারপর সরাসরি লেখা (আবার পড়া নেই); Study একই; Topics সারি এক লেখায়; শেষে ১ বার যাচাই-গণনা। */
+function tm_planQuestions_(ss, fn) {
+  var q = ss.getSheetByName(Q_UNIFIED_SHEET_); if (!q || q.getLastRow() < 2) return { changed: 0, commit: function () {} };
+  var H = qHeader_(q), ix = H.idx, n = q.getLastRow() - 1;
+  var cId = ix["id"], cT = ix["topicid"], cS = ix["subtopic"], cU = ix["updatedat"];
+  if (cId === undefined || cT === undefined) throw new Error("Questions শিটে id/topic_id কলাম নেই");
+  var ids = q.getRange(2, cId + 1, n, 1).getValues(), tv = q.getRange(2, cT + 1, n, 1).getValues();
+  var sv = cS !== undefined ? q.getRange(2, cS + 1, n, 1).getValues() : null;
+  var uv = cU !== undefined ? q.getRange(2, cU + 1, n, 1).getValues() : null;
+  var now = Date.now(), changed = 0;
+  for (var r = 0; r < n; r++) {
+    var id = tm_s_(ids[r][0]); if (!id) continue;
+    var res = fn(id, tm_s_(tv[r][0]), sv ? tm_s_(sv[r][0]) : "");
+    if (!res) continue;
+    tv[r][0] = res.topic_id; if (sv && res.sub_topic != null) sv[r][0] = res.sub_topic; if (uv) uv[r][0] = now;
+    changed++;
+  }
+  return { changed: changed, commit: function () {
+    if (!changed) return;
+    q.getRange(2, cT + 1, n, 1).setValues(tv);
+    if (sv) q.getRange(2, cS + 1, n, 1).setValues(sv);
+    if (uv) q.getRange(2, cU + 1, n, 1).setValues(uv);
+  } };
+}
+function tm_planStudy_(ss, fn) {
+  var st = ss.getSheetByName("Study"); if (!st || st.getLastRow() < 2) return { changed: 0, commit: function () {} };
+  var hdr = st.getRange(1, 1, 1, st.getLastColumn()).getValues()[0].map(tm_s_), n = st.getLastRow() - 1;
+  var cT = hdr.indexOf("topic_id"), cN = hdr.indexOf("topic"), cK = tm_studyKeyCol_(hdr), cU = hdr.indexOf("updatedAt");
+  if (cT < 0 || cK < 0) return { changed: 0, commit: function () {} };
+  var tv = st.getRange(2, cT + 1, n, 1).getValues(), kv = st.getRange(2, cK + 1, n, 1).getValues();
+  var nv = cN >= 0 ? st.getRange(2, cN + 1, n, 1).getValues() : null, uv = cU >= 0 ? st.getRange(2, cU + 1, n, 1).getValues() : null;
+  var now = Date.now(), changed = 0;
+  for (var r = 0; r < n; r++) {
+    var key = tm_s_(kv[r][0]); if (!key) continue;
+    var res = fn(key, tm_s_(tv[r][0]), nv ? tm_s_(nv[r][0]) : "");
+    if (!res) continue;
+    tv[r][0] = res.topic_id; if (nv && res.sub_topic != null) nv[r][0] = res.sub_topic; if (uv) uv[r][0] = now;
+    changed++;
+  }
+  return { changed: changed, commit: function () {
+    if (!changed) return;
+    st.getRange(2, cT + 1, n, 1).setValues(tv);
+    if (nv) st.getRange(2, cN + 1, n, 1).setValues(nv);
+    if (uv) st.getRange(2, cU + 1, n, 1).setValues(uv);
+  } };
+}
+// Topics শিট থেকে অনেক সারি একসাথে মোছা: ফর্মুলা না থাকলে ও ৮টার বেশি হলে এক লেখায় নতুন করে বসাই, নইলে নিচ থেকে একটা একটা
+function tm_deleteTopicRows_(sh, rowNums) {
+  if (!rowNums.length) return;
+  var nums = rowNums.slice().sort(function (a, b) { return b - a; });
+  if (nums.length > 8) {
+    var lr = sh.getLastRow(), lc = sh.getLastColumn();
+    if (lr > 1) {
+      var rng = sh.getRange(2, 1, lr - 1, lc), formulas = rng.getFormulas(), hasF = false;
+      for (var i = 0; i < formulas.length && !hasF; i++) for (var j = 0; j < formulas[i].length; j++) if (formulas[i][j]) { hasF = true; break; }
+      if (!hasF) {
+        var vals = rng.getValues(), del = {}; nums.forEach(function (rn) { del[rn] = true; });
+        var kept = []; for (var k = 0; k < vals.length; k++) if (!del[k + 2]) kept.push(vals[k]);
+        if (kept.length) sh.getRange(2, 1, kept.length, lc).setValues(kept);
+        sh.deleteRows(2 + kept.length, vals.length - kept.length);
+        return;
+      }
+    }
+  }
+  nums.forEach(function (rn) { sh.deleteRow(rn); });
+}
+
+function tm_findBatch_(ss, batchId) {
+  var sh = ss.getSheetByName(TM_LOG_SHEET_); if (!sh || sh.getLastRow() < 2) return null;
+  var v = sh.getRange(2, 1, sh.getLastRow() - 1, 6).getValues(), tag = "[batch:" + batchId + "]";
+  for (var i = v.length - 1; i >= 0; i--) {
+    if (Number(v[i][1]) === 1 && String(v[i][5]).indexOf(tag) === 0) return { log_id: tm_s_(v[i][0]), time: tm_s_(v[i][2]), kind: tm_s_(v[i][3]), undone: tm_s_(v[i][4]) === "Y", summary: tm_s_(v[i][5]) };
+  }
+  return null;
+}
+function tm_batchStatus_(ss, p) {
+  var id = tm_s_(p.batchId); if (!id) return { status: "error", message: "batchId দাও" };
+  var f = tm_findBatch_(ss, id);
+  return f ? { status: "success", found: true, undone: f.undone, time: f.time, summary: f.summary, log_id: f.log_id } : { status: "success", found: false };
+}
+
+function tm_mergeBatch_(ss, p) {
+  var t0 = Date.now(), batchId = tm_s_(p.batchId) || ("B" + t0);
+  var prior = tm_findBatch_(ss, batchId);       // টাইমআউটের পর রিট্রাই — আগেই হয়ে থাকলে আবার করা নয়
+  if (prior) return { status: "success", already: true, batchId: batchId, log_id: prior.log_id, undone: prior.undone, summary: prior.summary, results: [], rejected: [] };
+  var list = Array.isArray(p.merges) ? p.merges : [];
+  if (!list.length) return { status: "error", message: "কোনো মার্জ দেওয়া হয়নি (merges খালি)" };
+
+  var TI = tm_topicsInfo_(ss), c = TI.c, rows = TI.T.rows, rejected = [], used = {}, merges = [];
+  list.forEach(function (m, mi) {
+    var target = tm_s_(m.targetId), newName = tm_s_(m.newName), sources = [];
+    tm_arr_(m.sourceIds).forEach(function (s) { if (s !== target && sources.indexOf(s) < 0) sources.push(s); });
+    var bad = function (why) { rejected.push({ index: mi, targetId: target, reason: why }); };
+    if (!target) return bad("টার্গেট (মাস্টার) টপিক দেওয়া হয়নি");
+    if (!sources.length) return bad("সোর্স টপিক নেই");
+    if (TI.byId[target] === undefined) return bad("টার্গেট টপিক পাওয়া যায়নি: " + target);
+    if (used[target]) return bad("টার্গেট অন্য মার্জে ইতিমধ্যে ব্যবহৃত: " + target);
+    var subj = tm_s_(rows[TI.byId[target]][c.sub]);
+    for (var i = 0; i < sources.length; i++) {
+      if (TI.byId[sources[i]] === undefined) return bad("সোর্স টপিক পাওয়া যায়নি: " + sources[i]);
+      if (tm_s_(rows[TI.byId[sources[i]]][c.sub]) !== subj) return bad("অন্য সাবজেক্টের টপিক মার্জ করা যায় না: " + sources[i]);
+      if (used[sources[i]]) return bad("সোর্স অন্য মার্জে ইতিমধ্যে ব্যবহৃত: " + sources[i]);
+    }
+    used[target] = true; sources.forEach(function (s) { used[s] = true; });
+    merges.push({ target: target, sources: sources, subj: subj, finalName: newName || tm_s_(rows[TI.byId[target]][c.name]), newName: newName });
+  });
+  if (!merges.length) return { status: "error", message: "কোনো মার্জই বৈধ নয়: " + rejected.map(function (r) { return r.reason; }).join(" | "), rejected: rejected };
+
+  /* ── ১) সব মার্জের পরিকল্পনা মেমোরিতে (Questions ১ বার পড়া) ── */
+  var srcMap = {}, tgtMap = {};
+  merges.forEach(function (m, mi) { m.qMoved = {}; m.qOldSub = {}; m.stMoved = {}; m.tTotal = 0; m.tStudy = 0; m.movedQ = 0; m.movedS = 0;
+    tgtMap[m.target] = mi; m.sources.forEach(function (s) { srcMap[s] = mi; m.qMoved[s] = []; m.stMoved[s] = []; }); });
+  var qFn = function (id, topic, sub) {
+    if (tgtMap[topic] !== undefined) { merges[tgtMap[topic]].tTotal++; return null; }
+    var mi = srcMap[topic]; if (mi === undefined) return null;
+    var m = merges[mi]; m.qMoved[topic].push(id); m.movedQ++;
+    var srcName = tm_s_(rows[TI.byId[topic]][c.name]); if (sub !== srcName) m.qOldSub[id] = sub;
+    return { topic_id: m.target, sub_topic: m.finalName };
+  };
+  var sFn = function (key, topic, nm) {
+    if (tgtMap[topic] !== undefined) { merges[tgtMap[topic]].tStudy++; return null; }
+    var mi = srcMap[topic]; if (mi === undefined) return null;
+    var m = merges[mi]; m.stMoved[topic].push(key); m.movedS++;
+    return { topic_id: m.target, sub_topic: m.finalName };
+  };
+  var planQ = tm_planQuestions_(ss, qFn), planS = tm_planStudy_(ss, sFn);
+
+  /* ── ২) লগ আগে (মাঝপথে থামলেও Undo চলবে) ── */
+  var RI0 = tm_rulesInfo_(ss);
+  var payload = { kind: "mergeBatch", batchId: batchId, topicsHdr: TI.T.hdr, rulesHdr: RI0.T.hdr, merges: merges.map(function (m) {
+    var rp = tm_rulePlan_(RI0, m.target, m.sources);
+    return { target: m.target, finalName: m.finalName, subject_id: m.subj, targetRow: tm_pad_(rows[TI.byId[m.target]], TI.T.lc),
+      sources: m.sources.map(function (id) { return { id: id, name: tm_s_(rows[TI.byId[id]][c.name]), row: tm_pad_(rows[TI.byId[id]], TI.T.lc) }; }),
+      qMoved: m.qMoved, qOldSub: m.qOldSub, stMoved: m.stMoved, rulesBefore: rp.before };
+  }) };
+  var totalQ = 0; merges.forEach(function (m) { totalQ += m.movedQ; });
+  var summary = "[batch:" + batchId + "] " + merges.length + "টা মার্জ · " + totalQ + "টা প্রশ্ন সরানো: " + merges.slice(0, 4).map(function (m) { return tm_s_(rows[TI.byId[m.sources[0]]][c.name]) + (m.sources.length > 1 ? "+" + (m.sources.length - 1) : "") + " → " + m.finalName; }).join("; ") + (merges.length > 4 ? " …" : "");
+  var logId = tm_logWrite_(ss, "mergeBatch", summary, payload);
+  if (!tm_logRead_(ss, logId)) throw new Error("লগ লেখা যাচাই ব্যর্থ — কিছুই বদলানো হয়নি");
+
+  /* ── ৩) আসল লেখা (আর পড়া নেই) ── */
+  planQ.commit(); planS.commit();
+
+  /* ── ৪) Topics শিট: টার্গেটের নাম/ট্যাগ + সব সোর্স-সারি এক লেখায় মোছা ── */
+  var tsh = TI.sh, delRows = [];
+  merges.forEach(function (m) {
+    var tRow = rows[TI.byId[m.target]], tr = TI.byId[m.target] + 2;
+    if (m.newName && c.name >= 0) tsh.getRange(tr, c.name + 1).setValue(m.newName);
+    [c.tag, c.tags].forEach(function (col) {
+      if (col < 0) return;
+      var lists = [tm_list_(tRow[col])]; m.sources.forEach(function (s) { lists.push(tm_list_(rows[TI.byId[s]][col])); });
+      var merged = tm_union_(lists).join(", "); if (merged !== tm_s_(tRow[col])) tsh.getRange(tr, col + 1).setValue(merged);
+    });
+    m.sources.forEach(function (s) { delRows.push(TI.byId[s] + 2); });
+  });
+  tm_deleteTopicRows_(tsh, delRows);
+
+  /* ── ৫) TopicRules (প্রতি মার্জের আগে রুল-তথ্য নতুন করে পড়া — সারির সূচক বদলে যায়) ── */
+  merges.forEach(function (m) {
+    var RI = tm_rulesInfo_(ss), rp = tm_rulePlan_(RI, m.target, m.sources);
+    tm_applyRulePlan_(RI, rp, m.target, m.finalName); m.ruleNote = rp.note;
+  });
+
+  /* ── ৬) পরিষ্কার-পরিচ্ছন্নতা (একবারই) ── */
+  var dirty = {}; merges.forEach(function (m) { dirty[m.target] = 1; m.sources.forEach(function (s) { dirty[s] = 1; }); }); markTopicsDirty(dirty);
+  qRefreshTopicCounts_(ss);
+  try { markReindexNeeded_(); } catch (e1) {}
+
+  /* ── ৭) যাচাই (একবার গণনা): প্রতিটা টার্গেটে আগের + সরানো = এখন? সোর্সে কিছু বাকি নেই? ── */
+  var TI2 = tm_topicsInfo_(ss), cnt2 = tm_counts_(ss, TI2.byId), results = [], allOk = true;
+  merges.forEach(function (m) {
+    var after = cnt2.q[m.target] ? cnt2.q[m.target].total : 0, expected = m.tTotal + m.movedQ, srcLeft = 0;
+    m.sources.forEach(function (s) { srcLeft += (cnt2.q[s] ? cnt2.q[s].total : 0); });
+    var ok = after === expected && srcLeft === 0;
+    if (!ok) allOk = false;
+    results.push({ target: m.target, finalName: m.finalName, sources: m.sources.map(function (id) { return tm_s_(rows[TI.byId[id]][c.name]); }),
+      movedQuestions: m.movedQ, movedStudy: m.movedS, afterTotal: after, ok: ok, ruleNote: m.ruleNote });
+  });
+  var out = { status: "success", batchId: batchId, log_id: logId, results: results, rejected: rejected, movedQuestions: totalQ, verify: { ok: allOk }, ms: Date.now() - t0 };
+  if (!allOk) out.warning = "কিছু মার্জের হিসাব মিলেনি — Undo চেপে ব্যাচটা ফেরত নাও, তারপর জানাও";
+  return out;
+}
+
 /* ───────────── Undo (সর্বশেষটা) ───────────── */
 function tm_markUndone_(ss, rows) {
   var sh = ss.getSheetByName(TM_LOG_SHEET_); rows.forEach(function (rn) { sh.getRange(rn, 5).setValue("Y"); });
@@ -421,6 +610,32 @@ function tm_undo_(ss) {
       var src = stSets[key]; return { topic_id: src, sub_topic: srcName[src] };
     });
     res.rules = tm_restoreRules_(RI, P.rulesHdr, P.rulesBefore); res.topicsRestored = restored;
+  } else if (L.kind === "mergeBatch") {
+    // ব্যাচ-Undo: শেষ মার্জ থেকে উল্টো ক্রমে সব ফেরত
+    var restoredB = 0, qTotal = 0, sTotal = 0;
+    for (var mi = P.merges.length - 1; mi >= 0; mi--) {
+      var M = P.merges[mi];
+      M.sources.forEach(function (s) { if (tm_restoreTopicRow_(TI, P.topicsHdr, s.row)) restoredB++; TI = tm_topicsInfo_(ss); dirty[s.id] = 1; });
+      dirty[M.target] = 1;
+      if (TI.byId[M.target] !== undefined) {
+        var rnB = TI.byId[M.target] + 2, oldB = M.targetRow, hB = P.topicsHdr;
+        ["topic_name", "tag_ids", "topic_tags"].forEach(function (col) {
+          var a = TI.T.hdr.indexOf(col), b = hB.indexOf(col); if (a >= 0 && b >= 0) TI.sh.getRange(rnB, a + 1).setValue(oldB[b]);
+        });
+      }
+      var qSetsB = {}, stSetsB = {}, srcNameB = {};
+      M.sources.forEach(function (s) { srcNameB[s.id] = s.name; (M.qMoved[s.id] || []).forEach(function (id) { qSetsB[id] = s.id; }); (M.stMoved[s.id] || []).forEach(function (k) { stSetsB[k] = s.id; }); });
+      qTotal += tm_applyToQuestions_(ss, function (id, topic) {
+        if (topic !== M.target || !qSetsB[id]) return null;
+        var src = qSetsB[id]; return { topic_id: src, sub_topic: M.qOldSub[id] !== undefined ? M.qOldSub[id] : srcNameB[src] };
+      });
+      sTotal += tm_applyToStudy_(ss, function (key, topic) {
+        if (topic !== M.target || !stSetsB[key]) return null;
+        var src = stSetsB[key]; return { topic_id: src, sub_topic: srcNameB[src] };
+      });
+      tm_restoreRules_(RI, P.rulesHdr, M.rulesBefore);
+    }
+    res.questions = qTotal; res.study = sTotal; res.topicsRestored = restoredB; res.merges = P.merges.length;
   } else if (L.kind === "delete") {
     var back = 0; P.topics.forEach(function (t) { if (tm_restoreTopicRow_(TI, P.topicsHdr, t.row)) back++; TI = tm_topicsInfo_(ss); dirty[t.id] = 1; });
     res.rules = tm_restoreRules_(RI, P.rulesHdr, P.rules); res.topicsRestored = back;
@@ -441,6 +656,8 @@ function tm_handleAction_(name, p) {
     if (name === "tm_merge") return withWriteLock(function () { return tm_merge_(ss, p, false); });
     if (name === "tm_deleteEmpty") return withWriteLock(function () { return tm_deleteEmpty_(ss, p); });
     if (name === "tm_undo") return withWriteLock(function () { return tm_undo_(ss); });
+    if (name === "tm_mergeBatch") return withWriteLock(function () { return tm_mergeBatch_(ss, p); });
+    if (name === "tm_batchStatus") return tm_batchStatus_(ss, p);
     return { status: "error", message: "অজানা tm action: " + name };
   } catch (err) { try { logError_("tm_handleAction_:" + name, String(err && err.stack || err)); } catch (e2) {} return { status: "error", message: String(err && err.message || err) }; }
 }

@@ -18,7 +18,9 @@ function UploadProgressChip() {
           <div key={j.id} style={{ pointerEvents: "auto", background: "var(--card, #fff)", color: "var(--text, #111)", border: `1.5px solid ${col}`, borderRadius: 12, padding: "9px 11px", boxShadow: "0 4px 18px rgba(0,0,0,.28)" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, fontWeight: 800 }}>
               <span style={{ color: col, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {done ? (ok ? "✅ আপলোড সম্পন্ন" : "🔴 আপলোড ব্যর্থ") : "⏳ প্রশ্নপত্র আপলোড হচ্ছে"} · {j.total}টা প্রশ্ন
+                {j.kind === "merge"
+                  ? `${done ? (ok ? "✅ Topic মার্জ সম্পন্ন" : "🔴 Topic মার্জ ব্যর্থ") : "⏳ Topic মার্জ চলছে"} · ${j.total}টা মার্জ`
+                  : `${done ? (ok ? "✅ আপলোড সম্পন্ন" : "🔴 আপলোড ব্যর্থ") : "⏳ প্রশ্নপত্র আপলোড হচ্ছে"} · ${j.total}টা প্রশ্ন`}
               </span>
               <span style={{ fontSize: 11, fontWeight: 700, color: col, whiteSpace: "nowrap" }}>⏱ {fmtSec(j.elapsedMs)}</span>
             </div>
@@ -33,7 +35,7 @@ function UploadProgressChip() {
               <span style={{ color: j.slow && !done ? "#d97706" : undefined }}>
                 {done ? (j.message || j.stageText) : (j.slow ? "সার্ভার একটু ধীর — অপেক্ষা করছি, অ্যাপ বন্ধ কোরো না…" : j.stageText)}
               </span>
-              <span>{done ? (ok ? "১০০%" : "লাল খসড়ায় আছে") : `প্রায় ${j.pct}%`}</span>
+              <span>{done ? (ok ? "১০০%" : (j.kind === "merge" ? "কিউতে ফেরত" : "লাল খসড়ায় আছে")) : `প্রায় ${j.pct}%`}</span>
             </div>
           </div>
         );
